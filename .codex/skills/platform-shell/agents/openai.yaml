@@ -1,0 +1,4 @@
+interface:
+  display_name: "Platform Shell"
+  short_description: "Run commands in Linux Bash or MSYS2 UCRT64"
+  default_prompt: "Use $platform-shell to run the required build command in the correct platform shell."

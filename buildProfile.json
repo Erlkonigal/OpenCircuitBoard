@@ -1,0 +1,4 @@
+{
+  "enabledClasses": ["Object", "RefCounted"],
+  "enabledBuiltinClasses": ["String", "Dictionary", "PackedByteArray", "PackedInt32Array"]
+}

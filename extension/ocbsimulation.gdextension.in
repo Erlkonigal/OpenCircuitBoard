@@ -1,0 +1,11 @@
+[configuration]
+
+entry_symbol = "ocbLibraryInit"
+compatibility_minimum = "4.7"
+
+[libraries]
+
+linux.debug.x86_64 = "res://build/linux/ocbsimulation.so"
+linux.release.x86_64 = "res://build/linux/ocbsimulation.so"
+windows.debug.x86_64 = "res://build/windows/ocbsimulation.dll"
+windows.release.x86_64 = "res://build/windows/ocbsimulation.dll"

@@ -1,0 +1,11 @@
+.godot/
+.vscode/
+.agents
+build/
+*.so
+*.ocb
+*.dblite
+ocbsimulation.gdextension
+ocbsimulation.gdextension.uid
+thirdparty/godotcpp/bin/
+thirdparty/godotcpp/gen/
