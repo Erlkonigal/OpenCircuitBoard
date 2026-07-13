@@ -2,7 +2,9 @@
 
 OpenCircuitBoard is a Godot 4.7 circuit-board editor with a native simulation backend shell.
 
-The editor provides a pan-and-zoom grid, component placement and removal, and a compact component library. Use the left mouse button to place a selected component, the right mouse button to remove it, the middle mouse button to pan, and the mouse wheel to zoom.
+The editor uses a compact, flat workbench with a two-row command bar, a component library on the left, a live inspector on the right, and a hex-pattern circuit canvas in the center. Components use soft projected shadows to remain legible over the board.
+
+Choose Wire, OR Gate, or Processor from the component library. Use the left mouse button to place the selected component, the right mouse button to remove it, the middle mouse button to pan, and the mouse wheel to zoom. The simulation controls are visible for the intended workflow, but remain disabled until the native simulation backend exposes runtime commands.
 
 ## Build
 

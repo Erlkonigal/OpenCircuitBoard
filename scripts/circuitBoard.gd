@@ -29,7 +29,7 @@ func _ready() -> void:
 	canvasBoard.position = validRect.position
 	var material := canvasBoard.material as ShaderMaterial
 	if material:
-		material.set_shader_parameter("cellSize", float(cellSize))
+		material.set_shader_parameter("patternSize", float(cellSize * 16))
 		material.set_shader_parameter("boardSize", boardSize)
 	if boardCamera and boardCamera.has_method("setDragBounds"):
 		boardCamera.call("setDragBounds", validRect)
