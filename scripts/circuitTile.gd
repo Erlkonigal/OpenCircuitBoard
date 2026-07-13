@@ -40,6 +40,11 @@ func buildGeometry() -> void:
 	baseBlock.texture = ImageTexture.create_from_image(image)
 	baseBlock.ignore_texture_size = true
 	baseBlock.texture_filter = CanvasItem.TEXTURE_FILTER_LINEAR_WITH_MIPMAPS
+	var material := baseBlock.material as ShaderMaterial
+	if material:
+		var topUvStart := float(offset) / totalSize
+		var topUvEnd := float(offset + int(cellSize)) / totalSize
+		material.set_shader_parameter("topUvBounds", Vector4(topUvStart, topUvStart, topUvEnd, topUvEnd))
 
 	iconRect.size = Vector2.ONE * cellSize
 	iconRect.position = -iconRect.size / 2.0
