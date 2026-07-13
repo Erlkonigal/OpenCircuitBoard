@@ -1,0 +1,23 @@
+[gd_scene load_steps=3 format=3]
+
+[ext_resource type="Script" path="res://scripts/circuitTile.gd" id="1_circuitTile"]
+[ext_resource type="Shader" path="res://shaders/tileExtrusion.gdshader" id="2_tileExtrusion"]
+
+[sub_resource type="ShaderMaterial" id="ShaderMaterial_tileExtrusion"]
+shader = ExtResource("2_tileExtrusion")
+shader_parameter/topColor = Color(1, 1, 1, 1)
+shader_parameter/sideShadowColor = Color(0.2, 0.2, 0.2, 1)
+shader_parameter/extrusionDepth = 24.0
+shader_parameter/extrusionDirection = Vector2(-0.707, 0.707)
+
+[node name="CircuitTile" type="Node2D"]
+y_sort_enabled = true
+script = ExtResource("1_circuitTile")
+
+[node name="BaseBlock" type="TextureRect" parent="."]
+material = SubResource("ShaderMaterial_tileExtrusion")
+mouse_filter = 2
+
+[node name="Icon" type="TextureRect" parent="."]
+mouse_filter = 2
+stretch_mode = 5

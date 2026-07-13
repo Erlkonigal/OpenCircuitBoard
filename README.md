@@ -1,6 +1,8 @@
 # OpenCircuitBoard
 
-OpenCircuitBoard is an empty Godot 4.7 frontend and CMake backend scaffold.
+OpenCircuitBoard is a Godot 4.7 circuit-board editor with a native simulation backend shell.
+
+The editor provides a pan-and-zoom grid, component placement and removal, and a compact component library. Use the left mouse button to place a selected component, the right mouse button to remove it, the middle mouse button to pan, and the mouse wheel to zoom.
 
 ## Build
 

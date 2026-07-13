@@ -1,4 +1,32 @@
-[gd_scene format=3]
+[gd_scene load_steps=8 format=3]
+
+[ext_resource type="Script" path="res://scripts/editorUi.gd" id="1_editorUi"]
+[ext_resource type="Script" path="res://scripts/boardCamera.gd" id="2_boardCamera"]
+[ext_resource type="Script" path="res://scripts/circuitBoard.gd" id="3_circuitBoard"]
+[ext_resource type="PackedScene" path="res://scenes/circuitTile.tscn" id="4_circuitTile"]
+[ext_resource type="Shader" path="res://shaders/boardGrid.gdshader" id="5_boardGrid"]
+
+[sub_resource type="ShaderMaterial" id="ShaderMaterial_boardGrid"]
+shader = ExtResource("5_boardGrid")
+shader_parameter/baseColor = Color(0.13, 0.15, 0.18, 1)
+shader_parameter/gridColor = Color(0.28, 0.34, 0.39, 0.55)
+shader_parameter/cellSize = 64.0
+shader_parameter/boardSize = Vector2(2560, 1792)
+
+[sub_resource type="StyleBoxFlat" id="StyleBox_topBar"]
+bg_color = Color(0.07, 0.09, 0.11, 0.96)
+border_width_bottom = 1
+border_color = Color(0.26, 0.34, 0.38, 1)
+
+[sub_resource type="StyleBoxFlat" id="StyleBox_sideBar"]
+bg_color = Color(0.09, 0.12, 0.15, 0.98)
+border_width_left = 1
+border_width_right = 1
+border_color = Color(0.26, 0.34, 0.38, 1)
+content_margin_left = 16.0
+content_margin_top = 16.0
+content_margin_right = 16.0
+content_margin_bottom = 16.0
 
 [node name="main" type="Control"]
 layout_mode = 3
@@ -7,3 +35,139 @@ anchor_right = 1.0
 anchor_bottom = 1.0
 grow_horizontal = 2
 grow_vertical = 2
+script = ExtResource("1_editorUi")
+
+[node name="BoardViewport" type="SubViewportContainer" parent="."]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+stretch = true
+
+[node name="SubViewport" type="SubViewport" parent="BoardViewport"]
+handle_input_locally = false
+size = Vector2i(1280, 800)
+render_target_update_mode = 4
+
+[node name="BoardCamera" type="Camera2D" parent="BoardViewport/SubViewport" node_paths=PackedStringArray("board")]
+position = Vector2(0, 0)
+script = ExtResource("2_boardCamera")
+board = NodePath("../CircuitBoard")
+
+[node name="CircuitBoard" type="Node2D" parent="BoardViewport/SubViewport" node_paths=PackedStringArray("canvasBoard", "boardCamera")]
+script = ExtResource("3_circuitBoard")
+tileScene = ExtResource("4_circuitTile")
+canvasBoard = NodePath("CanvasBoard")
+boardCamera = NodePath("../BoardCamera")
+
+[node name="CanvasBoard" type="ColorRect" parent="BoardViewport/SubViewport/CircuitBoard"]
+material = SubResource("ShaderMaterial_boardGrid")
+mouse_filter = 2
+color = Color(1, 1, 1, 1)
+
+[node name="PlacedTiles" type="Node2D" parent="BoardViewport/SubViewport/CircuitBoard"]
+y_sort_enabled = true
+
+[node name="Selector" type="ColorRect" parent="BoardViewport/SubViewport/CircuitBoard"]
+z_index = 4096
+offset_right = 64.0
+offset_bottom = 64.0
+mouse_filter = 2
+color = Color(0.31, 0.78, 0.92, 0.26)
+
+[node name="Interface" type="CanvasLayer" parent="."]
+
+[node name="TopBar" type="Panel" parent="Interface"]
+offset_right = 1280.0
+offset_bottom = 58.0
+theme_override_styles/panel = SubResource("StyleBox_topBar")
+
+[node name="Margin" type="MarginContainer" parent="Interface/TopBar"]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+theme_override_constants/margin_left = 12
+theme_override_constants/margin_right = 12
+
+[node name="Row" type="HBoxContainer" parent="Interface/TopBar/Margin"]
+layout_mode = 2
+theme_override_constants/separation = 8
+
+[node name="LeftToggle" type="Button" parent="Interface/TopBar/Margin/Row"]
+layout_mode = 2
+text = "Library"
+
+[node name="Title" type="Label" parent="Interface/TopBar/Margin/Row"]
+layout_mode = 2
+size_flags_horizontal = 3
+theme_override_colors/font_color = Color(0.78, 0.9, 0.94, 1)
+theme_override_font_sizes/font_size = 18
+text = "OpenCircuitBoard"
+horizontal_alignment = 1
+vertical_alignment = 1
+
+[node name="RightToggle" type="Button" parent="Interface/TopBar/Margin/Row"]
+layout_mode = 2
+text = "Tools"
+
+[node name="LeftBar" type="PanelContainer" parent="Interface"]
+visible = false
+offset_top = 58.0
+offset_right = 244.0
+offset_bottom = 800.0
+theme_override_styles/panel = SubResource("StyleBox_sideBar")
+
+[node name="Content" type="VBoxContainer" parent="Interface/LeftBar"]
+layout_mode = 2
+theme_override_constants/separation = 10
+
+[node name="Heading" type="Label" parent="Interface/LeftBar/Content"]
+layout_mode = 2
+theme_override_colors/font_color = Color(0.78, 0.9, 0.94, 1)
+theme_override_font_sizes/font_size = 17
+text = "Circuit Library"
+
+[node name="Description" type="Label" parent="Interface/LeftBar/Content"]
+layout_mode = 2
+autowrap_mode = 2
+text = "Place components with the left mouse button. Remove them with the right mouse button. Pan with the middle mouse button and zoom with the wheel."
+
+[node name="RightBar" type="PanelContainer" parent="Interface"]
+visible = false
+offset_left = 1018.0
+offset_top = 58.0
+offset_right = 1280.0
+offset_bottom = 800.0
+theme_override_styles/panel = SubResource("StyleBox_sideBar")
+
+[node name="Content" type="VBoxContainer" parent="Interface/RightBar"]
+layout_mode = 2
+theme_override_constants/separation = 10
+
+[node name="Heading" type="Label" parent="Interface/RightBar/Content"]
+layout_mode = 2
+theme_override_colors/font_color = Color(0.78, 0.9, 0.94, 1)
+theme_override_font_sizes/font_size = 17
+text = "Components"
+
+[node name="WireButton" type="Button" parent="Interface/RightBar/Content"]
+layout_mode = 2
+text = "Wire"
+
+[node name="OrGateButton" type="Button" parent="Interface/RightBar/Content"]
+layout_mode = 2
+text = "OR Gate"
+
+[node name="ProcessorButton" type="Button" parent="Interface/RightBar/Content"]
+layout_mode = 2
+text = "Processor"
+
+[node name="Selection" type="Label" parent="Interface/RightBar/Content"]
+layout_mode = 2
+autowrap_mode = 2
+text = "Selected: OR Gate"
