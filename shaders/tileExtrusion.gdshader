@@ -6,11 +6,11 @@ uniform vec4 sideShadowColor : source_color = vec4(0.25, 0.25, 0.25, 1.0);
 uniform vec4 topUvBounds = vec4(0.0, 0.0, 1.0, 1.0);
 uniform float extrusionDepth : hint_range(0.0, 100.0) = 32.0;
 uniform vec2 extrusionDirection = vec2(-0.707, 0.707);
-uniform vec4 shadowColor : source_color = vec4(0.0, 0.0, 0.0, 0.4);
+uniform vec4 shadowColor : source_color = vec4(0.012, 0.022, 0.038, 0.42);
 uniform float shadowProjectionDistance : hint_range(0.0, 300.0) = 20.0;
-uniform float shadowDensity : hint_range(0.0, 1.0) = 0.5;
-uniform float shadowFadePower : hint_range(0.1, 5.0) = 2.0;
-uniform float shadowEdgeBlur : hint_range(0.0, 5.0) = 2.5;
+uniform float shadowDensity : hint_range(0.0, 1.0) = 0.48;
+uniform float shadowFadePower : hint_range(0.1, 5.0) = 1.7;
+uniform float shadowEdgeBlur : hint_range(0.0, 12.0) = 8.0;
 uniform float renderShadowOnly : hint_range(0.0, 1.0) = 0.0;
 
 const float seamOverlap = 0.5;
@@ -48,19 +48,36 @@ float extrusionCoverage(vec2 uv, vec2 pixelSize, float depth, float blurScale, f
 	return coverageFromDistance(hitLength, blurScale, overlap);
 }
 
+float sideShadowMask(vec2 uv, vec2 pixelSize, float depth) {
+	vec2 hit = extrusionHit(uv, pixelSize, depth);
+	float sweepMask = coverageFromDistance(hit.y - hit.x, 1.0, 0.0);
+	float topMask = coverageFromDistance(topSignedDistance(uv), 1.0, 0.0);
+	float sideMask = max(sweepMask - topMask, 0.0);
+	float projectionProgress = clamp(hit.x / depth, 0.0, 1.0);
+	float projectionFade = 1.0 - 0.45 * pow(projectionProgress, shadowFadePower);
+	return sideMask * projectionFade;
+}
+
+float sideShadowCoverage(vec2 uv, vec2 pixelSize, float depth) {
+	vec2 direction = normalize(extrusionDirection);
+	vec2 perpendicular = vec2(-direction.y, direction.x);
+	float blurRadius = shadowEdgeBlur * 0.6;
+	float shadowMask = sideShadowMask(uv, pixelSize, depth) * 0.4;
+	shadowMask += sideShadowMask(uv + direction * blurRadius * pixelSize, pixelSize, depth) * 0.15;
+	shadowMask += sideShadowMask(uv - direction * blurRadius * pixelSize, pixelSize, depth) * 0.15;
+	shadowMask += sideShadowMask(uv + perpendicular * blurRadius * pixelSize, pixelSize, depth) * 0.15;
+	shadowMask += sideShadowMask(uv - perpendicular * blurRadius * pixelSize, pixelSize, depth) * 0.15;
+	return shadowMask;
+}
+
 void fragment() {
 	vec2 pixelSize = TEXTURE_PIXEL_SIZE;
 	float depth = max(extrusionDepth, 0.001);
 
 	if (renderShadowOnly > 0.5) {
 		vec2 shadowShift = extrusionDirection * shadowProjectionDistance * pixelSize;
-		vec2 shadowUv = UV - shadowShift;
-		float blurScale = 1.0 + shadowEdgeBlur * 0.5;
-		float shadowMask = max(
-			topCoverage(shadowUv, blurScale, 0.0),
-			extrusionCoverage(shadowUv, pixelSize, depth, blurScale, 0.0)
-		);
-		float shadowAlpha = shadowColor.a * shadowDensity * pow(shadowMask, shadowFadePower) * COLOR.a;
+		float shadowMask = sideShadowCoverage(UV - shadowShift, pixelSize, depth);
+		float shadowAlpha = shadowColor.a * shadowDensity * shadowMask * COLOR.a;
 		COLOR = vec4(shadowColor.rgb * shadowAlpha, shadowAlpha);
 	} else {
 		float topMask = topCoverage(UV, 1.0, seamOverlap);

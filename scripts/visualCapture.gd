@@ -26,6 +26,9 @@ func captureBoard() -> void:
 	board.call("placeTile", Vector2i(0, 0))
 	board.call("selectTool", "wire")
 	board.call("placeTile", Vector2i(-1, 1))
+	# Keep an isolated tile in view to inspect the full shadow silhouette.
+	board.call("selectTool", "orGate")
+	board.call("placeTile", Vector2i(4, -2))
 	var occupancy: Dictionary = board.get("occupancy")
 	var rightTile := occupancy[Vector2i(1, 0)] as Node2D
 	var leftTile := occupancy[Vector2i(0, 0)] as Node2D

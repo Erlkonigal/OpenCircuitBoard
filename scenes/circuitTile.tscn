@@ -10,11 +10,11 @@ shader_parameter/topColor = Color(1, 1, 1, 1)
 shader_parameter/sideShadowColor = Color(0.2, 0.2, 0.2, 1)
 shader_parameter/extrusionDepth = 24.0
 shader_parameter/extrusionDirection = Vector2(-0.707, 0.707)
-shader_parameter/shadowColor = Color(0, 0, 0, 0.4)
+shader_parameter/shadowColor = Color(0.012, 0.022, 0.038, 0.42)
 shader_parameter/shadowProjectionDistance = 20.0
-shader_parameter/shadowDensity = 0.5
-shader_parameter/shadowFadePower = 2.0
-shader_parameter/shadowEdgeBlur = 2.5
+shader_parameter/shadowDensity = 0.48
+shader_parameter/shadowFadePower = 1.7
+shader_parameter/shadowEdgeBlur = 8.0
 shader_parameter/renderShadowOnly = 0.0
 
 [sub_resource type="ShaderMaterial" id="ShaderMaterial_tileShadow"]
@@ -24,11 +24,11 @@ shader_parameter/topColor = Color(1, 1, 1, 1)
 shader_parameter/sideShadowColor = Color(0.2, 0.2, 0.2, 1)
 shader_parameter/extrusionDepth = 24.0
 shader_parameter/extrusionDirection = Vector2(-0.707, 0.707)
-shader_parameter/shadowColor = Color(0, 0, 0, 0.4)
+shader_parameter/shadowColor = Color(0.012, 0.022, 0.038, 0.42)
 shader_parameter/shadowProjectionDistance = 20.0
-shader_parameter/shadowDensity = 0.5
-shader_parameter/shadowFadePower = 2.0
-shader_parameter/shadowEdgeBlur = 2.5
+shader_parameter/shadowDensity = 0.48
+shader_parameter/shadowFadePower = 1.7
+shader_parameter/shadowEdgeBlur = 8.0
 shader_parameter/renderShadowOnly = 1.0
 
 [node name="CircuitTile" type="Node2D"]
