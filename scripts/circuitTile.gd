@@ -30,10 +30,11 @@ func buildGeometry() -> void:
 	image.generate_mipmaps()
 	baseBlock.texture = ImageTexture.create_from_image(image)
 	baseBlock.ignore_texture_size = true
-	baseBlock.texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
+	baseBlock.texture_filter = CanvasItem.TEXTURE_FILTER_LINEAR_WITH_MIPMAPS
 
 	iconRect.size = Vector2.ONE * cellSize
 	iconRect.position = -iconRect.size / 2.0
+	iconRect.texture_filter = CanvasItem.TEXTURE_FILTER_LINEAR_WITH_MIPMAPS
 
 func setAttributes(icon: Texture2D, baseColor: Color) -> void:
 	var material := baseBlock.material as ShaderMaterial
