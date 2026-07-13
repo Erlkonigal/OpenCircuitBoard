@@ -13,13 +13,53 @@ uniform float shadowFadePower : hint_range(0.1, 5.0) = 1.7;
 uniform float shadowEdgeBlur : hint_range(0.0, 12.0) = 8.0;
 uniform float renderShadowOnly : hint_range(0.0, 1.0) = 0.0;
 
-const float seamOverlap = 0.5;
+const float seamOverlap = 0.4;
 const float minimumFeather = 0.00001;
 
 float topSignedDistance(vec2 uv) {
-	vec2 lowerDistance = uv - topUvBounds.xy;
-	vec2 upperDistance = topUvBounds.zw - uv;
-	return min(min(lowerDistance.x, lowerDistance.y), min(upperDistance.x, upperDistance.y));
+	vec2 center = (topUvBounds.xy + topUvBounds.zw) * 0.5;
+	vec2 halfSize = (topUvBounds.zw - topUvBounds.xy) * 0.5;
+	vec2 delta = abs(uv - center) - halfSize;
+	float signedDistance = length(max(delta, vec2(0.0))) + min(max(delta.x, delta.y), 0.0);
+	return -signedDistance;
+}
+
+float cross2(vec2 first, vec2 second) {
+	return first.x * second.y - first.y * second.x;
+}
+
+float pointSegmentDistance(vec2 point, vec2 start, vec2 end) {
+	vec2 edge = end - start;
+	float edgeLengthSquared = max(dot(edge, edge), 0.000000000001);
+	float edgeProgress = clamp(dot(point - start, edge) / edgeLengthSquared, 0.0, 1.0);
+	return length(point - (start + edge * edgeProgress));
+}
+
+float extrusionSignedDistance(vec2 point, vec2 pixelSize, float depth) {
+	vec2 topMin = topUvBounds.xy;
+	vec2 topMax = topUvBounds.zw;
+	vec2 extrusionOffset = extrusionDirection * depth * pixelSize;
+	vec2 vertex0 = topMin;
+	vec2 vertex1 = vec2(topMax.x, topMin.y);
+	vec2 vertex2 = topMax;
+	vec2 vertex3 = topMax + extrusionOffset;
+	vec2 vertex4 = vec2(topMin.x, topMax.y) + extrusionOffset;
+	vec2 vertex5 = topMin + extrusionOffset;
+	float minCross = min(
+		min(cross2(vertex1 - vertex0, point - vertex0), cross2(vertex2 - vertex1, point - vertex1)),
+		min(
+			min(cross2(vertex3 - vertex2, point - vertex2), cross2(vertex4 - vertex3, point - vertex3)),
+			min(cross2(vertex5 - vertex4, point - vertex4), cross2(vertex0 - vertex5, point - vertex5))
+		)
+	);
+	float edgeDistance = min(
+		min(pointSegmentDistance(point, vertex0, vertex1), pointSegmentDistance(point, vertex1, vertex2)),
+		min(
+			min(pointSegmentDistance(point, vertex2, vertex3), pointSegmentDistance(point, vertex3, vertex4)),
+			min(pointSegmentDistance(point, vertex4, vertex5), pointSegmentDistance(point, vertex5, vertex0))
+		)
+	);
+	return edgeDistance * (minCross >= 0.0 ? 1.0 : -1.0);
 }
 
 float coverageFromDistance(float signedDistance, float blurScale, float overlap) {
@@ -43,9 +83,7 @@ vec2 extrusionHit(vec2 uv, vec2 pixelSize, float depth) {
 }
 
 float extrusionCoverage(vec2 uv, vec2 pixelSize, float depth, float blurScale, float overlap) {
-	vec2 hit = extrusionHit(uv, pixelSize, depth);
-	float hitLength = hit.y - hit.x;
-	return coverageFromDistance(hitLength, blurScale, overlap);
+	return coverageFromDistance(extrusionSignedDistance(uv, pixelSize, depth), blurScale, overlap);
 }
 
 float sideShadowMask(vec2 uv, vec2 pixelSize, float depth) {
