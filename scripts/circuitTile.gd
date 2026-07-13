@@ -26,7 +26,16 @@ func buildGeometry() -> void:
 	var image := Image.create(int(totalSize), int(totalSize), true, Image.FORMAT_RGBA8)
 	image.fill(Color.TRANSPARENT)
 	var offset := int(padding / 2.0)
-	image.fill_rect(Rect2i(offset, offset, int(cellSize), int(cellSize)), Color.WHITE)
+	var edgeBleed := 1
+	image.fill_rect(
+		Rect2i(
+			offset - edgeBleed,
+			offset - edgeBleed,
+			int(cellSize) + edgeBleed * 2,
+			int(cellSize) + edgeBleed * 2
+		),
+		Color.WHITE
+	)
 	image.generate_mipmaps()
 	baseBlock.texture = ImageTexture.create_from_image(image)
 	baseBlock.ignore_texture_size = true
