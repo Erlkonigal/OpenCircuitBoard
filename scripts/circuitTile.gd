@@ -1,6 +1,7 @@
 extends Node2D
 
 @onready var baseBlock: TextureRect = $BaseBlock
+@onready var shadowBlock: TextureRect = $ShadowBlock
 @onready var iconRect: TextureRect = $Icon
 
 var gridCoordinates := Vector2i.ZERO
@@ -11,51 +12,46 @@ func setup(board: Node2D, coordinates: Vector2i, size: float) -> void:
 	gridCoordinates = coordinates
 	cellSize = size
 	extrusionDepth = cellSize * 0.5
-	var gridWidth: int = 1000
+	var gridWidth := 1000
 	if "gridWidthCount" in board:
 		gridWidth = int(board.gridWidthCount)
 	z_index = gridWidth - coordinates.x
+	var faceLayerOffset := gridWidth + 1
+	shadowBlock.z_index = 0
+	baseBlock.z_index = faceLayerOffset
+	iconRect.z_index = faceLayerOffset + 1
 	buildGeometry()
 
 func buildGeometry() -> void:
 	var padding := extrusionDepth * 3.0
 	var totalSize := cellSize + padding
-	baseBlock.size = Vector2.ONE * totalSize
-	baseBlock.position = -baseBlock.size / 2.0
-
-	var image := Image.create(int(totalSize), int(totalSize), true, Image.FORMAT_RGBA8)
-	image.fill(Color.TRANSPARENT)
-	var offset := int(padding / 2.0)
-	var edgeBleed := 1
-	image.fill_rect(
-		Rect2i(
-			offset - edgeBleed,
-			offset - edgeBleed,
-			int(cellSize) + edgeBleed * 2,
-			int(cellSize) + edgeBleed * 2
-		),
-		Color.WHITE
-	)
-	image.generate_mipmaps()
-	baseBlock.texture = ImageTexture.create_from_image(image)
-	baseBlock.ignore_texture_size = true
-	baseBlock.texture_filter = CanvasItem.TEXTURE_FILTER_LINEAR_WITH_MIPMAPS
-	var material := baseBlock.material as ShaderMaterial
-	if material:
-		var topUvStart := float(offset) / totalSize
-		var topUvEnd := float(offset + int(cellSize)) / totalSize
-		material.set_shader_parameter("topUvBounds", Vector4(topUvStart, topUvStart, topUvEnd, topUvEnd))
+	var image := Image.create(int(totalSize), int(totalSize), false, Image.FORMAT_RGBA8)
+	image.fill(Color.WHITE)
+	var texture := ImageTexture.create_from_image(image)
+	var topUvStart := padding * 0.5 / totalSize
+	var topUvEnd := topUvStart + cellSize / totalSize
+	var topUvBounds := Vector4(topUvStart, topUvStart, topUvEnd, topUvEnd)
+	for block in [baseBlock, shadowBlock]:
+		block.size = Vector2.ONE * totalSize
+		block.position = -block.size / 2.0
+		block.texture = texture
+		block.ignore_texture_size = true
+		block.texture_filter = CanvasItem.TEXTURE_FILTER_LINEAR
+		var material := block.material as ShaderMaterial
+		if material:
+			material.set_shader_parameter("topUvBounds", topUvBounds)
 
 	iconRect.size = Vector2.ONE * cellSize
 	iconRect.position = -iconRect.size / 2.0
 	iconRect.texture_filter = CanvasItem.TEXTURE_FILTER_LINEAR_WITH_MIPMAPS
 
 func setAttributes(icon: Texture2D, baseColor: Color) -> void:
-	var material := baseBlock.material as ShaderMaterial
-	if material:
-		material.set_shader_parameter("topColor", baseColor)
-		material.set_shader_parameter("sideShadowColor", baseColor.darkened(0.55))
-		material.set_shader_parameter("extrusionDepth", extrusionDepth)
+	for block in [baseBlock, shadowBlock]:
+		var material := block.material as ShaderMaterial
+		if material:
+			material.set_shader_parameter("topColor", baseColor)
+			material.set_shader_parameter("sideShadowColor", baseColor.darkened(0.55))
+			material.set_shader_parameter("extrusionDepth", extrusionDepth)
 	iconRect.texture = icon
 	iconRect.visible = icon != null
 	if icon:

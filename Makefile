@@ -67,7 +67,7 @@ downloadGodot: checkPlatform
 	if [ ! -f "$(downloadedGodotExecutable)" ]; then echo "Downloaded Godot archive did not contain $(notdir $(downloadedGodotExecutable))."; exit 1; fi
 
 # Build entry points
-build: checkPlatform checkBackendTools
+build: checkGodotExecutable checkBackendTools
 	@cmake -S "$(projectRoot)/extension" -B "$(backendBuildRoot)" -DGODOTCPPDIR="$(godotCppRoot)" -DOCBOUTPUTDIR="$(targetBuildRoot)"
 	@cmake --build "$(backendBuildRoot)"
 

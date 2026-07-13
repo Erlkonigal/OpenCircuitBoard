@@ -1,9 +1,10 @@
-[gd_scene load_steps=3 format=3]
+[gd_scene load_steps=4 format=3]
 
 [ext_resource type="Script" path="res://scripts/circuitTile.gd" id="1_circuitTile"]
 [ext_resource type="Shader" path="res://shaders/tileExtrusion.gdshader" id="2_tileExtrusion"]
 
 [sub_resource type="ShaderMaterial" id="ShaderMaterial_tileExtrusion"]
+resource_local_to_scene = true
 shader = ExtResource("2_tileExtrusion")
 shader_parameter/topColor = Color(1, 1, 1, 1)
 shader_parameter/sideShadowColor = Color(0.2, 0.2, 0.2, 1)
@@ -14,16 +15,36 @@ shader_parameter/shadowProjectionDistance = 20.0
 shader_parameter/shadowDensity = 0.5
 shader_parameter/shadowFadePower = 2.0
 shader_parameter/shadowEdgeBlur = 2.5
-shader_parameter/stepDensity = 0.25
+shader_parameter/renderShadowOnly = 0.0
+
+[sub_resource type="ShaderMaterial" id="ShaderMaterial_tileShadow"]
+resource_local_to_scene = true
+shader = ExtResource("2_tileExtrusion")
+shader_parameter/topColor = Color(1, 1, 1, 1)
+shader_parameter/sideShadowColor = Color(0.2, 0.2, 0.2, 1)
+shader_parameter/extrusionDepth = 24.0
+shader_parameter/extrusionDirection = Vector2(-0.707, 0.707)
+shader_parameter/shadowColor = Color(0, 0, 0, 0.4)
+shader_parameter/shadowProjectionDistance = 20.0
+shader_parameter/shadowDensity = 0.5
+shader_parameter/shadowFadePower = 2.0
+shader_parameter/shadowEdgeBlur = 2.5
+shader_parameter/renderShadowOnly = 1.0
 
 [node name="CircuitTile" type="Node2D"]
 y_sort_enabled = true
 script = ExtResource("1_circuitTile")
 
+[node name="ShadowBlock" type="TextureRect" parent="."]
+material = SubResource("ShaderMaterial_tileShadow")
+mouse_filter = 2
+
 [node name="BaseBlock" type="TextureRect" parent="."]
 material = SubResource("ShaderMaterial_tileExtrusion")
+z_index = 1
 mouse_filter = 2
 
 [node name="Icon" type="TextureRect" parent="."]
+z_index = 2
 mouse_filter = 2
 stretch_mode = 5
