@@ -1,15 +1,15 @@
-[gd_scene load_steps=13 format=3]
+[gd_scene load_steps=14 format=3]
 
 [ext_resource type="Script" path="res://scripts/editorUi.gd" id="1_editorUi"]
 [ext_resource type="Script" path="res://scripts/boardCamera.gd" id="2_boardCamera"]
 [ext_resource type="Script" path="res://scripts/circuitBoard.gd" id="3_circuitBoard"]
 [ext_resource type="PackedScene" path="res://scenes/circuitTile.tscn" id="4_circuitTile"]
 [ext_resource type="Shader" path="res://shaders/boardPattern.gdshader" id="5_boardPattern"]
-[ext_resource type="Shader" path="res://shaders/canvasBackdrop.gdshader" id="6_canvasBackdrop"]
+[ext_resource type="Shader" path="res://shaders/canvasShadow.gdshader" id="6_canvasShadow"]
 
 [sub_resource type="ShaderMaterial" id="ShaderMaterial_boardPattern"]
 shader = ExtResource("5_boardPattern")
-shader_parameter/baseColor = Color(0.1, 0.128, 0.178, 1)
+shader_parameter/baseColor = Color(0.09, 0.11, 0.15, 1)
 shader_parameter/shade0 = 1.0
 shader_parameter/shade1 = 0.97
 shader_parameter/shade2 = 0.94
@@ -18,16 +18,33 @@ shader_parameter/shade4 = 0.94
 shader_parameter/shade5 = 0.97
 shader_parameter/patternSize = 1024.0
 shader_parameter/boardSize = Vector2(2560, 1792)
-shader_parameter/edgeColor = Color(0.17, 0.23, 0.22, 1)
-shader_parameter/edgeWidth = 48.0
-shader_parameter/edgeFade = 12.0
+shader_parameter/patternOrigin = Vector2(0, 0)
+shader_parameter/cornerRadius = 64.0
+shader_parameter/edgeSoftness = 1.0
 
-[sub_resource type="ShaderMaterial" id="ShaderMaterial_canvasBackdrop"]
-shader = ExtResource("6_canvasBackdrop")
-shader_parameter/baseColor = Color(0.075, 0.086, 0.091, 1)
-shader_parameter/lineColor = Color(0.15, 0.17, 0.16, 0.42)
-shader_parameter/gridSize = 32.0
-shader_parameter/lineWidth = 1.0
+[sub_resource type="ShaderMaterial" id="ShaderMaterial_canvasPattern"]
+shader = ExtResource("5_boardPattern")
+shader_parameter/baseColor = Color(0.09, 0.11, 0.15, 1)
+shader_parameter/shade0 = 1.0
+shader_parameter/shade1 = 0.97
+shader_parameter/shade2 = 0.94
+shader_parameter/shade3 = 0.91
+shader_parameter/shade4 = 0.94
+shader_parameter/shade5 = 0.97
+shader_parameter/patternSize = 1024.0
+shader_parameter/boardSize = Vector2(18944, 18176)
+shader_parameter/patternOrigin = Vector2(-9472, -9088)
+shader_parameter/cornerRadius = 0.0
+shader_parameter/edgeSoftness = 1.0
+
+[sub_resource type="ShaderMaterial" id="ShaderMaterial_canvasShadow"]
+shader = ExtResource("6_canvasShadow")
+shader_parameter/boardSize = Vector2(2560, 1792)
+shader_parameter/frameSize = Vector2(3072, 2304)
+shader_parameter/boardOffset = Vector2(256, 256)
+shader_parameter/cornerRadius = 64.0
+shader_parameter/shadowBlur = 192.0
+shader_parameter/shadowColor = Color(0.005, 0.009, 0.017, 0.28)
 
 [sub_resource type="StyleBoxFlat" id="StyleBox_topBar"]
 bg_color = Color(0.045, 0.06, 0.09, 0.98)
@@ -114,29 +131,30 @@ handle_input_locally = false
 size = Vector2i(1280, 800)
 render_target_update_mode = 4
 
-[node name="CanvasBackdrop" type="CanvasLayer" parent="BoardViewport/SubViewport"]
-layer = -1
-
-[node name="Surface" type="ColorRect" parent="BoardViewport/SubViewport/CanvasBackdrop"]
-anchors_preset = 15
-anchor_right = 1.0
-anchor_bottom = 1.0
-grow_horizontal = 2
-grow_vertical = 2
-material = SubResource("ShaderMaterial_canvasBackdrop")
-mouse_filter = 2
-color = Color(1, 1, 1, 1)
-
 [node name="BoardCamera" type="Camera2D" parent="BoardViewport/SubViewport" node_paths=PackedStringArray("board")]
 position = Vector2(0, 0)
 script = ExtResource("2_boardCamera")
 board = NodePath("../CircuitBoard")
 
-[node name="CircuitBoard" type="Node2D" parent="BoardViewport/SubViewport" node_paths=PackedStringArray("canvasBoard", "boardCamera")]
+[node name="CircuitBoard" type="Node2D" parent="BoardViewport/SubViewport" node_paths=PackedStringArray("canvasBackground", "canvasShadow", "canvasBoard", "boardCamera")]
 script = ExtResource("3_circuitBoard")
 tileScene = ExtResource("4_circuitTile")
+canvasBackground = NodePath("CanvasBackground")
+canvasShadow = NodePath("CanvasShadow")
 canvasBoard = NodePath("CanvasBoard")
 boardCamera = NodePath("../BoardCamera")
+
+[node name="CanvasBackground" type="ColorRect" parent="BoardViewport/SubViewport/CircuitBoard"]
+z_index = -2
+material = SubResource("ShaderMaterial_canvasPattern")
+mouse_filter = 2
+color = Color(1, 1, 1, 1)
+
+[node name="CanvasShadow" type="ColorRect" parent="BoardViewport/SubViewport/CircuitBoard"]
+z_index = -1
+material = SubResource("ShaderMaterial_canvasShadow")
+mouse_filter = 2
+color = Color(1, 1, 1, 1)
 
 [node name="CanvasBoard" type="ColorRect" parent="BoardViewport/SubViewport/CircuitBoard"]
 material = SubResource("ShaderMaterial_boardPattern")

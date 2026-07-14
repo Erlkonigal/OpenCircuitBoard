@@ -7,8 +7,13 @@ const orGateIcon := preload("res://assets/orGate.svg")
 @export var gridWidthCount := 40
 @export var gridHeightCount := 28
 @export var tileScene: PackedScene
+@export var canvasBackground: ColorRect
+@export var canvasShadow: ColorRect
 @export var canvasBoard: ColorRect
 @export var boardCamera: Camera2D
+@export var canvasCornerRadius := 64.0
+@export var canvasBackgroundMargin := 8192.0
+@export var canvasShadowMargin := 256.0
 
 @onready var selector: ColorRect = $Selector
 @onready var placedTiles: Node2D = $PlacedTiles
@@ -25,16 +30,43 @@ var toolRegistry := {
 func _ready() -> void:
 	var boardSize := Vector2(gridWidthCount * cellSize, gridHeightCount * cellSize)
 	validRect = Rect2(-boardSize / 2.0, boardSize)
-	canvasBoard.size = boardSize
-	canvasBoard.position = validRect.position
-	var material := canvasBoard.material as ShaderMaterial
-	if material:
-		material.set_shader_parameter("patternSize", float(cellSize * 16))
-		material.set_shader_parameter("boardSize", boardSize)
+	configurePatternCanvas(
+		canvasBackground,
+		boardSize + Vector2.ONE * canvasBackgroundMargin * 2.0,
+		validRect.position - Vector2.ONE * canvasBackgroundMargin,
+		0.0
+	)
+	configureCanvasShadow(boardSize)
+	configurePatternCanvas(canvasBoard, boardSize, validRect.position, canvasCornerRadius)
 	if boardCamera and boardCamera.has_method("setDragBounds"):
 		boardCamera.call("setDragBounds", validRect)
-	selector.size = Vector2.ONE * cellSize
-	selector.z_index = min(gridWidthCount * 2 + 100, RenderingServer.CANVAS_ITEM_Z_MAX)
+		selector.size = Vector2.ONE * cellSize
+		selector.z_index = min(gridWidthCount * 2 + 100, RenderingServer.CANVAS_ITEM_Z_MAX)
+
+func configurePatternCanvas(patternCanvas: ColorRect, patternCanvasSize: Vector2, patternCanvasPosition: Vector2, radius: float) -> void:
+	if patternCanvas == null:
+		return
+	patternCanvas.size = patternCanvasSize
+	patternCanvas.position = patternCanvasPosition
+	var material := patternCanvas.material as ShaderMaterial
+	if material:
+		material.set_shader_parameter("patternSize", float(cellSize * 16))
+		material.set_shader_parameter("boardSize", patternCanvasSize)
+		material.set_shader_parameter("patternOrigin", patternCanvasPosition)
+		material.set_shader_parameter("cornerRadius", radius)
+
+func configureCanvasShadow(boardSize: Vector2) -> void:
+	if canvasShadow == null:
+		return
+	var shadowMargin := Vector2.ONE * canvasShadowMargin
+	canvasShadow.size = boardSize + shadowMargin * 2.0
+	canvasShadow.position = validRect.position - shadowMargin
+	var material := canvasShadow.material as ShaderMaterial
+	if material:
+		material.set_shader_parameter("boardSize", boardSize)
+		material.set_shader_parameter("frameSize", canvasShadow.size)
+		material.set_shader_parameter("boardOffset", shadowMargin)
+		material.set_shader_parameter("cornerRadius", canvasCornerRadius)
 
 func _process(_delta: float) -> void:
 	updateSelectorPosition()
