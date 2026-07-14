@@ -22,6 +22,12 @@ func shouldCaptureInterface() -> bool:
 func shouldCaptureSidebar() -> bool:
 	return OS.get_cmdline_user_args().has("--captureSidebar")
 
+func shouldCaptureEventLogDock() -> bool:
+	return OS.get_cmdline_user_args().has("--captureEventLogDock")
+
+func shouldCaptureDockMenu() -> bool:
+	return OS.get_cmdline_user_args().has("--captureDockMenu")
+
 func assertCanvasViewIsStable(boardViewport: SubViewportContainer, subViewport: SubViewport, camera: Camera2D, expectedRect: Rect2, expectedSize: Vector2i, expectedCenter: Vector2, expectedZoom: Vector2) -> void:
 	var actualRect := boardViewport.get_global_rect()
 	assert(actualRect.position.is_equal_approx(expectedRect.position))
@@ -41,11 +47,32 @@ func assertSidebarControlsFit(contentRoot: Control) -> void:
 		assert(controlRect.end.x <= contentRect.end.x + 0.5)
 		assert(control.get_combined_minimum_size().x <= control.size.x + 0.5)
 
+func assertDockLayout(dockHost: Control, dock: Control) -> void:
+	var contentRoot := dock.get_node("background/contentFrame/contentRoot") as VBoxContainer
+	assert(dock.find_children("*", "ScrollContainer", true, false).is_empty())
+	assert(contentRoot.size.y >= contentRoot.get_combined_minimum_size().y)
+	var dockRect := dockHost.get_global_rect()
+	var contentRect := contentRoot.get_global_rect()
+	assert(contentRect.position.x >= dockRect.position.x + 8.0 - 0.5)
+	assert(contentRect.end.x <= dockRect.end.x - 8.0 + 0.5)
+	assertSidebarControlsFit(contentRoot)
+
+func countButtonTooltip(dock: Control, tooltipText: String) -> int:
+	var count := 0
+	for buttonNode in dock.find_children("*", "Button", true, false):
+		var button := buttonNode as Button
+		if button.tooltip_text == tooltipText:
+			count += 1
+	return count
+
 func captureBoard() -> void:
 	var captureViewportSize := Vector2i(
 		int(ProjectSettings.get_setting("display/window/size/viewport_width")),
 		int(ProjectSettings.get_setting("display/window/size/viewport_height"))
 	)
+	assert(captureViewportSize == Vector2i(1280, 720))
+	assert(int(ProjectSettings.get_setting("display/window/size/min_width")) == 1280)
+	assert(int(ProjectSettings.get_setting("display/window/size/min_height")) == 720)
 	root.size = captureViewportSize
 	var mainScene := load("res://main.tscn") as PackedScene
 	var main := mainScene.instantiate()
@@ -68,22 +95,57 @@ func captureBoard() -> void:
 	var dockContentRoot := circuitEditorDock.get_node("background/contentFrame/contentRoot") as VBoxContainer
 	var topBar := main.get_node("Interface/TopBar") as Control
 	var configuredMinimumHeight := int(ProjectSettings.get_setting("display/window/size/min_height"))
-	assert(circuitEditorDock.find_children("*", "ScrollContainer", true, false).is_empty())
-	assert(dockContentRoot.size.y >= dockContentRoot.get_combined_minimum_size().y)
+	assertDockLayout(dockHost, circuitEditorDock)
 	assert(configuredMinimumHeight >= ceili(topBar.size.y + dockContentRoot.get_combined_minimum_size().y))
 	var dockRect := dockHost.get_global_rect()
-	var contentRect := dockContentRoot.get_global_rect()
 	assert(is_equal_approx(dockRect.size.x, 272.0))
-	assert(is_equal_approx(contentRect.position.x, dockRect.position.x + 8.0))
-	assert(is_equal_approx(contentRect.end.x, dockRect.end.x - 8.0))
-	assertSidebarControlsFit(dockContentRoot)
+	var sectionTitleCount := 0
+	for labelNode in circuitEditorDock.find_children("*", "Label", true, false):
+		var label := labelNode as Label
+		assert(label.text != "Layers")
+		if label.text == "Tools":
+			sectionTitleCount += 1
+	assert(sectionTitleCount == 1)
+	for actionName in ["Add", "Image", "Duplicate", "Undo", "Redo", "Draw", "Edit", "Erase", "Sample", "Select", "Transform"]:
+		assert(countButtonTooltip(circuitEditorDock, actionName) == 1)
+	var dockDefinitions: Array[Dictionary] = main.get("dockDefinitions")
+	assert(dockDefinitions.size() == 2)
+	assert(String(dockDefinitions[0].dockId) == "circuitEditor")
+	assert(String(dockDefinitions[1].dockId) == "eventLog")
 	var dockMenu := main.get("dockMenu") as PopupPanel
 	assert(dockMenu.get_child_count() == 1)
-	assert(dockMenu.get_child(0).get_child_count() == 1)
+	var dockMenuGrid := dockMenu.get_child(0) as GridContainer
+	assert(dockMenuGrid.get_child_count() == dockDefinitions.size())
 	var dockMenuButton := circuitEditorDock.get("dockMenuButton") as Button
+	assert(dockMenuButton.icon != null)
+	assert(not dockMenuButton.expand_icon)
+	assert(dockMenuButton.icon.get_size() == Vector2(20, 20))
+	var foundCircuitEditorIcon := false
+	var foundEventLogIcon := false
+	var circuitEditorMenuButton: Button
+	var eventLogMenuButton: Button
+	for menuButtonNode in dockMenuGrid.get_children():
+		var menuButton := menuButtonNode as Button
+		assert(menuButton.icon != null)
+		assert(not menuButton.expand_icon)
+		assert(menuButton.icon.get_size() == Vector2(20, 20))
+		if menuButton.tooltip_text == "CircuitEditor":
+			assert(menuButton.icon == dockMenuButton.icon)
+			circuitEditorMenuButton = menuButton
+			foundCircuitEditorIcon = true
+		elif menuButton.tooltip_text == "EventLog":
+			eventLogMenuButton = menuButton
+			foundEventLogIcon = true
+	assert(foundCircuitEditorIcon)
+	assert(foundEventLogIcon)
+	assert(circuitEditorMenuButton != null)
+	assert(eventLogMenuButton != null)
 	dockMenuButton.emit_signal("pressed")
 	await process_frame
 	assert(dockMenu.visible)
+	assert(dockMenu.position.x >= 0)
+	assert(dockMenu.position.x + dockMenu.size.x <= root.size.x)
+	assert(dockMenu.position.y + dockMenu.size.y <= root.size.y)
 	dockMenu.hide()
 	main.call("setDockWidth", 420.0)
 	assert(is_equal_approx(dockHost.offset_right, 420.0))
@@ -91,7 +153,7 @@ func captureBoard() -> void:
 	main.call("setDockWidth", 1.0)
 	assert(is_equal_approx(dockHost.offset_right, 208.0))
 	await process_frame
-	assertSidebarControlsFit(dockContentRoot)
+	assertDockLayout(dockHost, circuitEditorDock)
 	assertCanvasViewIsStable(boardViewport, subViewport, camera, initialCanvasRect, initialSubViewportSize, initialCameraCenter, initialCameraZoom)
 	main.call("setDockWidth", 272.0)
 	main.call("setLeftSidebarOpen", false)
@@ -137,6 +199,51 @@ func captureBoard() -> void:
 	var rightTile := occupancy[Vector2i(1, 0)] as Node2D
 	var leftTile := occupancy[Vector2i(0, 0)] as Node2D
 	assert(leftTile.z_index > rightTile.z_index)
+	circuitEditorDock.call("recordEvent", "HistoryMarkerOne")
+	await process_frame
+	dockMenuButton.emit_signal("pressed")
+	await process_frame
+	eventLogMenuButton.emit_signal("pressed")
+	await process_frame
+	assert(dockHost.get_child_count() == 1)
+	var eventLogDock := dockHost.get_child(0) as Control
+	assert(eventLogDock.get("dockId") == "eventLog")
+	assertDockLayout(dockHost, eventLogDock)
+	assertCanvasViewIsStable(boardViewport, subViewport, camera, initialCanvasRect, initialSubViewportSize, initialCameraCenter, initialCameraZoom)
+	var eventLogDockMenuButton := eventLogDock.get("dockMenuButton") as Button
+	assert(eventLogDockMenuButton.icon != null)
+	assert(not eventLogDockMenuButton.expand_icon)
+	assert(eventLogDockMenuButton.icon.get_size() == Vector2(20, 20))
+	assert(eventLogDockMenuButton.icon == eventLogMenuButton.icon)
+	var eventLog := eventLogDock.get_node("background/contentFrame/contentRoot/eventLog") as RichTextLabel
+	assert(eventLog.get_parsed_text().contains("HistoryMarkerOne"))
+	main.call("setDockWidth", 1.0)
+	await process_frame
+	assertDockLayout(dockHost, eventLogDock)
+	assertCanvasViewIsStable(boardViewport, subViewport, camera, initialCanvasRect, initialSubViewportSize, initialCameraCenter, initialCameraZoom)
+	main.call("setDockWidth", 272.0)
+	eventLogDockMenuButton.emit_signal("pressed")
+	await process_frame
+	circuitEditorMenuButton.emit_signal("pressed")
+	await process_frame
+	assert(dockHost.get_child_count() == 1)
+	var restoredCircuitEditorDock := dockHost.get_child(0) as Control
+	assert(restoredCircuitEditorDock.get("dockId") == "circuitEditor")
+	assertDockLayout(dockHost, restoredCircuitEditorDock)
+	assertCanvasViewIsStable(boardViewport, subViewport, camera, initialCanvasRect, initialSubViewportSize, initialCameraCenter, initialCameraZoom)
+	restoredCircuitEditorDock.call("recordEvent", "HistoryMarkerTwo")
+	await process_frame
+	main.call("activateDock", "eventLog")
+	await process_frame
+	eventLogDock = dockHost.get_child(0) as Control
+	eventLog = eventLogDock.get_node("background/contentFrame/contentRoot/eventLog") as RichTextLabel
+	var eventLogText := eventLog.get_parsed_text()
+	var firstMarkerIndex := eventLogText.find("HistoryMarkerOne")
+	var secondMarkerIndex := eventLogText.find("HistoryMarkerTwo")
+	assert(firstMarkerIndex >= 0)
+	assert(secondMarkerIndex > firstMarkerIndex)
+	assert(eventLogText.find("HistoryMarkerOne", firstMarkerIndex + 1) == -1)
+	assert(eventLogText.find("HistoryMarkerTwo", secondMarkerIndex + 1) == -1)
 	var selector := board.get_node("Selector") as ColorRect
 	selector.visible = shouldCaptureSelector()
 	if selector.visible:
@@ -174,11 +281,22 @@ func captureBoard() -> void:
 		main.call("setLeftSidebarOpen", false, false)
 		for frame in 2:
 			await process_frame
-	if shouldCaptureSidebar():
+	if shouldCaptureSidebar() or shouldCaptureDockMenu():
+		main.call("activateDock", "circuitEditor")
+		await process_frame
+	if shouldCaptureEventLogDock():
+		main.call("activateDock", "eventLog")
+		await process_frame
+	if shouldCaptureSidebar() or shouldCaptureEventLogDock() or shouldCaptureDockMenu():
 		main.call("setLeftSidebarOpen", true, false)
 		main.call("setRightSidebarOpen", true, false)
 		for frame in 2:
 			await process_frame
+	if shouldCaptureDockMenu():
+		var activeDock := main.get("currentDock") as Control
+		var activeDockMenuButton := activeDock.get("dockMenuButton") as Button
+		activeDockMenuButton.emit_signal("pressed")
+		await process_frame
 
 	var viewport := main.get_node("BoardViewport/SubViewport") as SubViewport
 	var image := viewport.get_texture().get_image()
@@ -189,7 +307,7 @@ func captureBoard() -> void:
 	var outputPath := "user://capture.png"
 	var error := image.save_png(outputPath)
 	print("capture=", outputPath, " error=", error, " data=", OS.get_user_data_dir())
-	if shouldCaptureInterface() or shouldCaptureSidebar():
+	if shouldCaptureInterface() or shouldCaptureSidebar() or shouldCaptureEventLogDock() or shouldCaptureDockMenu():
 		var interfaceImage := main.get_viewport().get_texture().get_image()
 		if shouldCaptureInterface():
 			var interfaceError := interfaceImage.save_png("user://interfaceCapture.png")
@@ -197,4 +315,10 @@ func captureBoard() -> void:
 		if shouldCaptureSidebar():
 			var sidebarError := interfaceImage.save_png("user://sidebarCapture.png")
 			print("sidebarCapture=user://sidebarCapture.png error=", sidebarError)
+		if shouldCaptureEventLogDock():
+			var eventLogDockError := interfaceImage.save_png("user://eventLogDockCapture.png")
+			print("eventLogDockCapture=user://eventLogDockCapture.png error=", eventLogDockError)
+		if shouldCaptureDockMenu():
+			var dockMenuError := interfaceImage.save_png("user://dockMenuCapture.png")
+			print("dockMenuCapture=user://dockMenuCapture.png error=", dockMenuError)
 	quit(error)

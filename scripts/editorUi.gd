@@ -7,6 +7,9 @@ const panelRightCloseIcon := preload("res://assets/panelRightClose.svg")
 const panelRightOpenIcon := preload("res://assets/panelRightOpen.svg")
 const sidebarAnimationDuration := 0.18
 const topBarButtonActiveIconColor := Color("f2c94c")
+const dockMenuButtonSize := 28
+const dockMenuSeparation := 5
+const dockMenuPadding := 14
 
 @onready var board: Node2D = $BoardViewport/SubViewport/CircuitBoard
 @onready var topBar: Panel = $Interface/TopBar
@@ -20,8 +23,10 @@ const topBarButtonActiveIconColor := Color("f2c94c")
 var dockDefinitions: Array[Dictionary] = []
 var currentDock: Control
 var dockMenu: PopupPanel
+var dockMenuColumns := 1
 var dockWidth := 272.0
 var rightDockWidth := 300.0
+var eventHistory: Array[String] = []
 var leftSidebarOpen := true
 var rightSidebarOpen := true
 var isResizingDock := false
@@ -63,25 +68,27 @@ func buildDockMenu() -> void:
 	dockMenu.add_theme_stylebox_override("panel", makeMenuBox())
 	$Interface.add_child(dockMenu)
 	var grid := GridContainer.new()
-	grid.columns = 3
-	grid.add_theme_constant_override("h_separation", 5)
-	grid.add_theme_constant_override("v_separation", 5)
+	dockMenuColumns = clampi(dockDefinitions.size(), 1, 3)
+	grid.columns = dockMenuColumns
+	grid.add_theme_constant_override("h_separation", dockMenuSeparation)
+	grid.add_theme_constant_override("v_separation", dockMenuSeparation)
 	dockMenu.add_child(grid)
 	for definition in dockDefinitions:
 		var button := Button.new()
-		button.custom_minimum_size = Vector2(38, 38)
+		button.custom_minimum_size = Vector2(dockMenuButtonSize, dockMenuButtonSize)
 		button.tooltip_text = String(definition.dockTitle)
 		button.icon = definition.dockIcon
-		button.expand_icon = true
+		button.expand_icon = false
 		button.add_theme_color_override("icon_normal_color", Color("9aa8bf"))
 		button.add_theme_color_override("icon_hover_color", Color("e2eaf7"))
 		button.add_theme_stylebox_override("normal", makeMenuItemBox(Color.TRANSPARENT))
 		button.add_theme_stylebox_override("hover", makeMenuItemBox(Color("2b374a")))
-		button.pressed.connect(func() -> void:
-			activateDock(String(definition.dockId))
-			dockMenu.hide()
-		)
+		button.pressed.connect(activateDockFromMenu.bind(String(definition.dockId)))
 		grid.add_child(button)
+
+func activateDockFromMenu(dockId: String) -> void:
+	activateDock(dockId)
+	dockMenu.hide()
 
 func activateDock(dockId: String) -> void:
 	var definition: Dictionary = {}
@@ -102,11 +109,24 @@ func activateDock(dockId: String) -> void:
 		currentDock.connect("dockMenuRequested", showDockMenu)
 	if currentDock.has_signal("inkSelected"):
 		currentDock.connect("inkSelected", selectInk)
+	if currentDock.has_signal("eventRecorded"):
+		currentDock.connect("eventRecorded", recordEvent)
+	if currentDock.has_method("setEventHistory"):
+		currentDock.call("setEventHistory", eventHistory)
 	setDockWidth(float(definition.dockWidth))
+
+func recordEvent(eventText: String) -> void:
+	eventHistory.append(eventText)
+	if currentDock and currentDock.has_method("appendEvent"):
+		currentDock.call("appendEvent", eventText)
 
 func showDockMenu(menuButton: Button) -> void:
 	var buttonPosition := menuButton.get_global_rect().position
-	var menuSize := Vector2i(130, 130)
+	var menuRows := ceili(float(dockDefinitions.size()) / float(dockMenuColumns))
+	var menuSize := Vector2i(
+		dockMenuPadding + dockMenuColumns * dockMenuButtonSize + (dockMenuColumns - 1) * dockMenuSeparation,
+		dockMenuPadding + menuRows * dockMenuButtonSize + (menuRows - 1) * dockMenuSeparation
+	)
 	var popupPosition := Vector2i(buttonPosition + Vector2(4.0, menuButton.size.y))
 	dockMenu.popup(Rect2i(popupPosition, menuSize))
 

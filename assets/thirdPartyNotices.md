@@ -2,8 +2,9 @@
 
 ## Lucide Icons
 
-`panelLeftClose.svg`, `panelLeftOpen.svg`, `panelRightClose.svg`, and
-`panelRightOpen.svg` are derived from Lucide Icons.
+`panelLeftClose.svg`, `panelLeftOpen.svg`, `panelRightClose.svg`,
+`panelRightOpen.svg`, `circuitEditor.svg`, and `eventLog.svg` are derived from
+Lucide Icons.
 
 ISC License
 

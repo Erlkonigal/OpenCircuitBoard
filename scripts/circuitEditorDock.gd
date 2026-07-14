@@ -2,8 +2,11 @@ extends "res://scripts/dockView.gd"
 
 signal dockMenuRequested(menuButton: Button)
 signal inkSelected(ink: Dictionary)
+signal eventRecorded(eventText: String)
 
 const InkRegistry := preload("res://scripts/inkRegistry.gd")
+const circuitEditorIcon := preload("res://assets/circuitEditor.svg")
+const dockIconSize := 20
 const sidebarBackgroundColor := Color("131c28")
 const sectionBackgroundColor := Color("1a2432")
 const sectionBorderColor := Color("26364a")
@@ -19,7 +22,6 @@ var selectedInkId := "or"
 var hoveredInkLabel: Label
 var positionXLabel: Label
 var positionYLabel: Label
-var eventLog: RichTextLabel
 var solidIcon: ImageTexture
 var dockMenuButton: Button
 var checkboxUncheckedIcon: ImageTexture
@@ -31,7 +33,7 @@ func _init() -> void:
 	dockId = "circuitEditor"
 	dockTitle = "CircuitEditor"
 	dockWidth = 272.0
-	dockIcon = makeSwitchIcon()
+	dockIcon = circuitEditorIcon
 
 func _ready() -> void:
 	solidIcon = makeSolidIcon()
@@ -70,22 +72,20 @@ func buildDock() -> void:
 	content.add_theme_constant_override("separation", 3)
 	root.add_child(content)
 
-	content.add_child(buildLayersSection())
 	content.add_child(buildToolsSection())
 	content.add_child(buildCursorInfoSection())
 	content.add_child(buildInksSection())
 	content.add_child(buildArraySection())
-	content.add_child(buildEventLogSection())
 
 func buildHeader() -> Control:
 	var header := HBoxContainer.new()
-	header.custom_minimum_size = Vector2(0, 26)
+	header.custom_minimum_size = Vector2(0, 28)
 	header.add_theme_constant_override("separation", 6)
 	dockMenuButton = Button.new()
-	dockMenuButton.custom_minimum_size = Vector2(24, 24)
+	dockMenuButton.custom_minimum_size = Vector2(dockIconSize + 8, dockIconSize + 8)
 	dockMenuButton.tooltip_text = "SwitchDock"
 	dockMenuButton.icon = dockIcon
-	dockMenuButton.expand_icon = true
+	dockMenuButton.expand_icon = false
 	dockMenuButton.add_theme_color_override("icon_normal_color", mutedTextColor)
 	dockMenuButton.add_theme_color_override("icon_hover_color", primaryTextColor)
 	dockMenuButton.add_theme_color_override("icon_pressed_color", activeAccentColor)
@@ -102,34 +102,28 @@ func buildHeader() -> Control:
 	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	title.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	title.add_theme_color_override("font_color", Color("8e9db2"))
-	title.add_theme_font_size_override("font_size", 14)
+	title.add_theme_font_size_override("font_size", 15)
 	header.add_child(title)
 	var spacer := Control.new()
-	spacer.custom_minimum_size = Vector2(24, 24)
+	spacer.custom_minimum_size = Vector2(dockIconSize + 8, dockIconSize + 8)
 	header.add_child(spacer)
 	return header
 
-func buildLayersSection() -> Control:
-	var panel := makeSection()
-	var section := getSectionContent(panel)
-	section.add_child(makeSectionTitle("Layers"))
-	var row := HBoxContainer.new()
-	row.add_theme_constant_override("separation", 6)
-	for actionName in ["Add", "Image", "Duplicate", "Undo", "Redo"]:
-		row.add_child(makeActionButton(actionName))
-	section.add_child(row)
-	return panel
-
 func buildToolsSection() -> Control:
 	var panel := makeSection()
+	panel.name = "toolsSection"
 	var section := getSectionContent(panel)
 	section.add_child(makeSectionTitle("Tools"))
+	section.add_child(makeActionRow(["Add", "Image", "Duplicate", "Undo", "Redo"]))
+	section.add_child(makeActionRow(["Draw", "Edit", "Erase", "Sample", "Select", "Transform"]))
+	return panel
+
+func makeActionRow(actionNames: Array[String]) -> HBoxContainer:
 	var row := HBoxContainer.new()
 	row.add_theme_constant_override("separation", 6)
-	for actionName in ["Draw", "Edit", "Erase", "Sample", "Select", "Transform"]:
+	for actionName in actionNames:
 		row.add_child(makeActionButton(actionName))
-	section.add_child(row)
-	return panel
+	return row
 
 func buildCursorInfoSection() -> Control:
 	var panel := makeSection()
@@ -157,13 +151,13 @@ func buildInksSection() -> Control:
 			var categoryLabel := Label.new()
 			categoryLabel.text = category
 			categoryLabel.add_theme_color_override("font_color", mutedTextColor)
-			categoryLabel.add_theme_font_size_override("font_size", 13)
+			categoryLabel.add_theme_font_size_override("font_size", 14)
 			section.add_child(categoryLabel)
 			lastCategory = category
 		var grid: GridContainer
 		if section.get_child_count() == 0 or not (section.get_child(-1) is GridContainer):
 			grid = GridContainer.new()
-			grid.columns = 5
+			grid.columns = 4
 			grid.add_theme_constant_override("h_separation", 4)
 			grid.add_theme_constant_override("v_separation", 3)
 			section.add_child(grid)
@@ -193,23 +187,6 @@ func buildArraySection() -> Control:
 	section.add_child(makeArrayToggle("MulticoloredTraces"))
 	return panel
 
-func buildEventLogSection() -> Control:
-	var panel := makeSection()
-	panel.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	panel.custom_minimum_size = Vector2(0, 32)
-	var section := getSectionContent(panel)
-	section.add_child(makeSectionTitle("EventLog"))
-	eventLog = RichTextLabel.new()
-	eventLog.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	eventLog.bbcode_enabled = false
-	eventLog.scroll_following = true
-	eventLog.add_theme_color_override("default_color", Color("8f9db0"))
-	eventLog.add_theme_font_size_override("normal_font_size", 12)
-	eventLog.add_theme_constant_override("line_separation", 2)
-	eventLog.add_theme_stylebox_override("normal", makeFieldBox(sectionBorderColor))
-	section.add_child(eventLog)
-	return panel
-
 func makeSection() -> PanelContainer:
 	var panel := PanelContainer.new()
 	panel.add_theme_stylebox_override("panel", makeBox(sectionBackgroundColor, 5, sectionBorderColor))
@@ -232,12 +209,12 @@ func makeSectionTitle(titleText: String) -> Label:
 	var title := Label.new()
 	title.text = titleText
 	title.add_theme_color_override("font_color", primaryTextColor)
-	title.add_theme_font_size_override("font_size", 14)
+	title.add_theme_font_size_override("font_size", 15)
 	return title
 
 func makeActionButton(actionName: String) -> Button:
 	var button := Button.new()
-	button.custom_minimum_size = Vector2(22, 20)
+	button.custom_minimum_size = Vector2(24, 22)
 	button.tooltip_text = actionName
 	button.icon = solidIcon
 	button.expand_icon = false
@@ -249,12 +226,12 @@ func makeActionButton(actionName: String) -> Button:
 	button.add_theme_stylebox_override("hover", makeBox(controlHoverColor, 2, Color.TRANSPARENT))
 	button.add_theme_stylebox_override("pressed", makeBox(Color.TRANSPARENT, 2, Color.TRANSPARENT))
 	button.add_theme_stylebox_override("hover_pressed", makeBox(controlHoverColor, 2, Color.TRANSPARENT))
-	button.pressed.connect(func() -> void: appendEvent("%sAction" % actionName))
+	button.pressed.connect(func() -> void: recordEvent("%sAction" % actionName))
 	return button
 
 func makeInkButton(ink: Dictionary) -> Button:
 	var button := Button.new()
-	button.custom_minimum_size = Vector2(24, 20)
+	button.custom_minimum_size = Vector2(26, 22)
 	button.toggle_mode = true
 	button.tooltip_text = String(ink.title)
 	button.icon = solidIcon
@@ -278,7 +255,7 @@ func makeInfoLabel(labelText: String) -> Label:
 	var label := Label.new()
 	label.text = labelText
 	label.add_theme_color_override("font_color", mutedTextColor)
-	label.add_theme_font_size_override("font_size", 13)
+	label.add_theme_font_size_override("font_size", 14)
 	return label
 
 func makeInfoValue(valueText: String) -> Label:
@@ -287,7 +264,7 @@ func makeInfoValue(valueText: String) -> Label:
 	value.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	value.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	value.add_theme_color_override("font_color", primaryTextColor)
-	value.add_theme_font_size_override("font_size", 13)
+	value.add_theme_font_size_override("font_size", 14)
 	value.add_theme_stylebox_override("normal", makeFieldBox(sectionBorderColor))
 	return value
 
@@ -301,7 +278,7 @@ func makeSpinBox(value: float, minimum: float, maximum: float) -> SpinBox:
 	var spinBox := SpinBox.new()
 	spinBox.custom_minimum_size = Vector2(0, 22)
 	spinBox.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	spinBox.add_theme_constant_override("buttons_width", 12)
+	spinBox.add_theme_constant_override("buttons_width", 10)
 	spinBox.add_theme_constant_override("field_and_buttons_separation", 1)
 	spinBox.min_value = minimum
 	spinBox.max_value = maximum
@@ -309,13 +286,15 @@ func makeSpinBox(value: float, minimum: float, maximum: float) -> SpinBox:
 	spinBox.allow_greater = false
 	spinBox.allow_lesser = false
 	var lineEdit := spinBox.get_line_edit()
+	lineEdit.custom_minimum_size = Vector2(0, 22)
+	lineEdit.add_theme_constant_override("minimum_character_width", 1)
 	lineEdit.add_theme_color_override("font_color", primaryTextColor)
 	lineEdit.add_theme_color_override("caret_color", primaryTextColor)
 	lineEdit.add_theme_color_override("selection_color", Color("38506b"))
 	lineEdit.add_theme_stylebox_override("normal", makeFieldBox(sectionBorderColor))
 	lineEdit.add_theme_stylebox_override("read_only", makeFieldBox(sectionBorderColor))
 	lineEdit.add_theme_stylebox_override("focus", makeFieldBox(fieldFocusBorderColor))
-	spinBox.value_changed.connect(func(_nextValue: float) -> void: appendEvent("ArrayUpdated"))
+	spinBox.value_changed.connect(func(_nextValue: float) -> void: recordEvent("ArrayUpdated"))
 	return spinBox
 
 func makeArrayToggle(labelText: String) -> CheckBox:
@@ -330,7 +309,7 @@ func makeArrayToggle(labelText: String) -> CheckBox:
 	toggle.add_theme_icon_override("unchecked_disabled", checkboxUncheckedDisabledIcon)
 	toggle.add_theme_icon_override("checked_disabled", checkboxCheckedDisabledIcon)
 	toggle.add_theme_stylebox_override("focus", makeBox(Color.TRANSPARENT, 3, fieldFocusBorderColor))
-	toggle.toggled.connect(func(_enabled: bool) -> void: appendEvent("ArrayUpdated"))
+	toggle.toggled.connect(func(_enabled: bool) -> void: recordEvent("ArrayUpdated"))
 	return toggle
 
 func makeInfoField(labelText: String, value: Label) -> HBoxContainer:
@@ -350,14 +329,14 @@ func makeArrayValueField(labelText: String, value: float, minimum: float, maximu
 	field.add_child(makeSpinBox(value, minimum, maximum))
 	return field
 
-func selectInk(ink: Dictionary, recordEvent := true) -> void:
+func selectInk(ink: Dictionary, shouldRecordEvent := true) -> void:
 	if ink.is_empty():
 		return
 	selectedInkId = String(ink.toolId)
 	for toolId in inkButtons:
 		inkButtons[toolId].set_pressed_no_signal(toolId == selectedInkId)
-	if recordEvent:
-		appendEvent("Selected%s" % ink.title)
+	if shouldRecordEvent:
+		recordEvent("Selected%s" % ink.title)
 	inkSelected.emit(ink)
 
 func setHoveredInk(titleText: String) -> void:
@@ -374,9 +353,8 @@ func updateCursorInfo(position: Vector2i, isValid: bool) -> void:
 	positionXLabel.text = str(position.x) if isValid else "0"
 	positionYLabel.text = str(position.y) if isValid else "0"
 
-func appendEvent(eventText: String) -> void:
-	if eventLog:
-		eventLog.append_text(eventText + "\n")
+func recordEvent(eventText: String) -> void:
+	eventRecorded.emit(eventText)
 
 func makeBox(color: Color, radius: int, borderColor: Color) -> StyleBoxFlat:
 	var box := StyleBoxFlat.new()
@@ -402,7 +380,7 @@ func makeFieldBox(borderColor: Color) -> StyleBoxFlat:
 	return box
 
 func makeSolidIcon() -> ImageTexture:
-	var image := Image.create(12, 12, false, Image.FORMAT_RGBA8)
+	var image := Image.create(14, 14, false, Image.FORMAT_RGBA8)
 	image.fill(Color.WHITE)
 	return ImageTexture.create_from_image(image)
 
@@ -417,14 +395,4 @@ func makeCheckboxIcon(isChecked: bool, borderColor: Color, markColor: Color) -> 
 	if isChecked:
 		for point in [Vector2i(3, 7), Vector2i(4, 8), Vector2i(5, 9), Vector2i(6, 8), Vector2i(7, 7), Vector2i(8, 6), Vector2i(9, 5), Vector2i(10, 4)]:
 			image.set_pixelv(point, markColor)
-	return ImageTexture.create_from_image(image)
-
-func makeSwitchIcon() -> ImageTexture:
-	var image := Image.create(16, 16, false, Image.FORMAT_RGBA8)
-	image.fill(Color.TRANSPARENT)
-	for y in range(3, 13):
-		for x in range(2, 6):
-			image.set_pixel(x, y, Color.WHITE)
-		for x in range(10, 14):
-			image.set_pixel(x, y, Color.WHITE)
 	return ImageTexture.create_from_image(image)
