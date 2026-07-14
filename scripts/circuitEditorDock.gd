@@ -4,6 +4,15 @@ signal dockMenuRequested(menuButton: Button)
 signal inkSelected(ink: Dictionary)
 
 const InkRegistry := preload("res://scripts/inkRegistry.gd")
+const sidebarBackgroundColor := Color("131c28")
+const sectionBackgroundColor := Color("1a2432")
+const sectionBorderColor := Color("26364a")
+const fieldBackgroundColor := Color("111a26")
+const fieldFocusBorderColor := Color("536b86")
+const primaryTextColor := Color("b4c1d3")
+const mutedTextColor := Color("75859b")
+const controlHoverColor := Color("26364a")
+const activeAccentColor := Color("f2c94c")
 
 var inkButtons: Dictionary[String, Button] = {}
 var selectedInkId := "or"
@@ -13,6 +22,10 @@ var positionYLabel: Label
 var eventLog: RichTextLabel
 var solidIcon: ImageTexture
 var dockMenuButton: Button
+var checkboxUncheckedIcon: ImageTexture
+var checkboxCheckedIcon: ImageTexture
+var checkboxUncheckedDisabledIcon: ImageTexture
+var checkboxCheckedDisabledIcon: ImageTexture
 
 func _init() -> void:
 	dockId = "circuitEditor"
@@ -22,6 +35,10 @@ func _init() -> void:
 
 func _ready() -> void:
 	solidIcon = makeSolidIcon()
+	checkboxUncheckedIcon = makeCheckboxIcon(false, Color("60728a"), Color.TRANSPARENT)
+	checkboxCheckedIcon = makeCheckboxIcon(true, activeAccentColor, activeAccentColor)
+	checkboxUncheckedDisabledIcon = makeCheckboxIcon(false, Color("39485a"), Color.TRANSPARENT)
+	checkboxCheckedDisabledIcon = makeCheckboxIcon(true, Color("596879"), Color("596879"))
 	buildDock()
 	selectInk(InkRegistry.getInk(selectedInkId), false)
 
@@ -30,20 +47,27 @@ func buildDock() -> void:
 	var background := Panel.new()
 	background.name = "background"
 	background.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
-	background.add_theme_stylebox_override("panel", makeBox(Color("151c27"), 0, Color.TRANSPARENT))
+	background.add_theme_stylebox_override("panel", makeBox(sidebarBackgroundColor, 0, Color.TRANSPARENT))
 	add_child(background)
+
+	var contentFrame := MarginContainer.new()
+	contentFrame.name = "contentFrame"
+	contentFrame.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	contentFrame.add_theme_constant_override("margin_left", 8)
+	contentFrame.add_theme_constant_override("margin_right", 8)
+	background.add_child(contentFrame)
 
 	var root := VBoxContainer.new()
 	root.name = "contentRoot"
 	root.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
-	root.add_theme_constant_override("separation", 6)
-	background.add_child(root)
+	root.add_theme_constant_override("separation", 3)
+	contentFrame.add_child(root)
 	root.add_child(buildHeader())
 	var content := VBoxContainer.new()
 	content.name = "content"
 	content.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	content.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	content.add_theme_constant_override("separation", 7)
+	content.add_theme_constant_override("separation", 3)
 	root.add_child(content)
 
 	content.add_child(buildLayersSection())
@@ -55,17 +79,21 @@ func buildDock() -> void:
 
 func buildHeader() -> Control:
 	var header := HBoxContainer.new()
-	header.custom_minimum_size = Vector2(0, 31)
+	header.custom_minimum_size = Vector2(0, 26)
 	header.add_theme_constant_override("separation", 6)
 	dockMenuButton = Button.new()
 	dockMenuButton.custom_minimum_size = Vector2(24, 24)
 	dockMenuButton.tooltip_text = "SwitchDock"
 	dockMenuButton.icon = dockIcon
 	dockMenuButton.expand_icon = true
-	dockMenuButton.add_theme_color_override("icon_normal_color", Color("8493aa"))
-	dockMenuButton.add_theme_color_override("icon_hover_color", Color("d5deed"))
+	dockMenuButton.add_theme_color_override("icon_normal_color", mutedTextColor)
+	dockMenuButton.add_theme_color_override("icon_hover_color", primaryTextColor)
+	dockMenuButton.add_theme_color_override("icon_pressed_color", activeAccentColor)
+	dockMenuButton.add_theme_color_override("icon_hover_pressed_color", activeAccentColor)
 	dockMenuButton.add_theme_stylebox_override("normal", makeBox(Color.TRANSPARENT, 2, Color.TRANSPARENT))
-	dockMenuButton.add_theme_stylebox_override("hover", makeBox(Color("273243"), 2, Color.TRANSPARENT))
+	dockMenuButton.add_theme_stylebox_override("hover", makeBox(controlHoverColor, 2, Color.TRANSPARENT))
+	dockMenuButton.add_theme_stylebox_override("pressed", makeBox(Color.TRANSPARENT, 2, Color.TRANSPARENT))
+	dockMenuButton.add_theme_stylebox_override("hover_pressed", makeBox(controlHoverColor, 2, Color.TRANSPARENT))
 	dockMenuButton.pressed.connect(func() -> void: dockMenuRequested.emit(dockMenuButton))
 	header.add_child(dockMenuButton)
 	var title := Label.new()
@@ -73,8 +101,8 @@ func buildHeader() -> Control:
 	title.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	title.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-	title.add_theme_color_override("font_color", Color("728098"))
-	title.add_theme_font_size_override("font_size", 16)
+	title.add_theme_color_override("font_color", Color("8e9db2"))
+	title.add_theme_font_size_override("font_size", 14)
 	header.add_child(title)
 	var spacer := Control.new()
 	spacer.custom_minimum_size = Vector2(24, 24)
@@ -107,19 +135,14 @@ func buildCursorInfoSection() -> Control:
 	var panel := makeSection()
 	var section := getSectionContent(panel)
 	section.add_child(makeSectionTitle("CursorInfo"))
-	var hoveredRow := HBoxContainer.new()
-	hoveredRow.add_child(makeInfoLabel("HoveredInk"))
 	hoveredInkLabel = makeInfoValue("None")
-	hoveredRow.add_child(hoveredInkLabel)
-	section.add_child(hoveredRow)
+	section.add_child(makeInfoField("HoveredInk", hoveredInkLabel))
 	var positionRow := HBoxContainer.new()
-	positionRow.add_theme_constant_override("separation", 8)
-	positionRow.add_child(makeInfoLabel("PositionX"))
+	positionRow.add_theme_constant_override("separation", 6)
 	positionXLabel = makeSmallInfoValue("0")
-	positionRow.add_child(positionXLabel)
-	positionRow.add_child(makeInfoLabel("PositionY"))
+	positionRow.add_child(makeInfoField("X", positionXLabel))
 	positionYLabel = makeSmallInfoValue("0")
-	positionRow.add_child(positionYLabel)
+	positionRow.add_child(makeInfoField("Y", positionYLabel))
 	section.add_child(positionRow)
 	return panel
 
@@ -133,16 +156,16 @@ func buildInksSection() -> Control:
 		if category != lastCategory:
 			var categoryLabel := Label.new()
 			categoryLabel.text = category
-			categoryLabel.add_theme_color_override("font_color", Color("66748a"))
-			categoryLabel.add_theme_font_size_override("font_size", 14)
+			categoryLabel.add_theme_color_override("font_color", mutedTextColor)
+			categoryLabel.add_theme_font_size_override("font_size", 13)
 			section.add_child(categoryLabel)
 			lastCategory = category
 		var grid: GridContainer
 		if section.get_child_count() == 0 or not (section.get_child(-1) is GridContainer):
 			grid = GridContainer.new()
-			grid.columns = 4
-			grid.add_theme_constant_override("h_separation", 6)
-			grid.add_theme_constant_override("v_separation", 5)
+			grid.columns = 5
+			grid.add_theme_constant_override("h_separation", 4)
+			grid.add_theme_constant_override("v_separation", 3)
 			section.add_child(grid)
 		else:
 			grid = section.get_child(-1) as GridContainer
@@ -153,20 +176,15 @@ func buildArraySection() -> Control:
 	var panel := makeSection()
 	var section := getSectionContent(panel)
 	section.add_child(makeSectionTitle("Array"))
-	var repeatRow := HBoxContainer.new()
-	repeatRow.add_theme_constant_override("separation", 6)
-	repeatRow.add_child(makeInfoLabel("Repeat"))
-	repeatRow.add_child(makeSpinBox(1, 1, 99))
-	repeatRow.add_child(makeInfoLabel("Angle"))
-	repeatRow.add_child(makeSpinBox(0, 0, 360))
-	section.add_child(repeatRow)
-	var offsetRow := HBoxContainer.new()
-	offsetRow.add_theme_constant_override("separation", 6)
-	offsetRow.add_child(makeInfoLabel("OffsetX"))
-	offsetRow.add_child(makeSpinBox(2, -999, 999))
-	offsetRow.add_child(makeInfoLabel("OffsetY"))
-	offsetRow.add_child(makeSpinBox(0, -999, 999))
-	section.add_child(offsetRow)
+	var parameterGrid := GridContainer.new()
+	parameterGrid.columns = 2
+	parameterGrid.add_theme_constant_override("h_separation", 4)
+	parameterGrid.add_theme_constant_override("v_separation", 4)
+	parameterGrid.add_child(makeArrayValueField("Repeat", 1, 1, 99))
+	parameterGrid.add_child(makeArrayValueField("Angle", 0, 0, 360))
+	parameterGrid.add_child(makeArrayValueField("OffsetX", 2, -999, 999))
+	parameterGrid.add_child(makeArrayValueField("OffsetY", 0, -999, 999))
+	section.add_child(parameterGrid)
 	var toggleRow := HBoxContainer.new()
 	toggleRow.add_theme_constant_override("separation", 6)
 	toggleRow.add_child(makeArrayToggle("AutoCross"))
@@ -178,30 +196,31 @@ func buildArraySection() -> Control:
 func buildEventLogSection() -> Control:
 	var panel := makeSection()
 	panel.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	panel.custom_minimum_size = Vector2(0, 150)
+	panel.custom_minimum_size = Vector2(0, 32)
 	var section := getSectionContent(panel)
 	section.add_child(makeSectionTitle("EventLog"))
 	eventLog = RichTextLabel.new()
 	eventLog.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	eventLog.bbcode_enabled = false
 	eventLog.scroll_following = true
-	eventLog.add_theme_color_override("default_color", Color("8f9bb0"))
-	eventLog.add_theme_font_size_override("normal_font_size", 13)
-	eventLog.add_theme_stylebox_override("normal", makeBox(Color("121923"), 4, Color.TRANSPARENT))
+	eventLog.add_theme_color_override("default_color", Color("8f9db0"))
+	eventLog.add_theme_font_size_override("normal_font_size", 12)
+	eventLog.add_theme_constant_override("line_separation", 2)
+	eventLog.add_theme_stylebox_override("normal", makeFieldBox(sectionBorderColor))
 	section.add_child(eventLog)
 	return panel
 
 func makeSection() -> PanelContainer:
 	var panel := PanelContainer.new()
-	panel.add_theme_stylebox_override("panel", makeBox(Color("1c2532"), 6, Color.TRANSPARENT))
+	panel.add_theme_stylebox_override("panel", makeBox(sectionBackgroundColor, 5, sectionBorderColor))
 	var margin := MarginContainer.new()
-	margin.add_theme_constant_override("margin_left", 8)
-	margin.add_theme_constant_override("margin_top", 7)
-	margin.add_theme_constant_override("margin_right", 8)
-	margin.add_theme_constant_override("margin_bottom", 7)
+	margin.add_theme_constant_override("margin_left", 6)
+	margin.add_theme_constant_override("margin_top", 4)
+	margin.add_theme_constant_override("margin_right", 6)
+	margin.add_theme_constant_override("margin_bottom", 4)
 	panel.add_child(margin)
 	var content := VBoxContainer.new()
-	content.add_theme_constant_override("separation", 5)
+	content.add_theme_constant_override("separation", 3)
 	margin.add_child(content)
 	panel.set_meta("sectionContent", content)
 	return panel
@@ -212,39 +231,43 @@ func getSectionContent(panel: PanelContainer) -> VBoxContainer:
 func makeSectionTitle(titleText: String) -> Label:
 	var title := Label.new()
 	title.text = titleText
-	title.add_theme_color_override("font_color", Color("a4b0c5"))
-	title.add_theme_font_size_override("font_size", 15)
+	title.add_theme_color_override("font_color", primaryTextColor)
+	title.add_theme_font_size_override("font_size", 14)
 	return title
 
 func makeActionButton(actionName: String) -> Button:
 	var button := Button.new()
-	button.custom_minimum_size = Vector2(20, 20)
+	button.custom_minimum_size = Vector2(22, 20)
 	button.tooltip_text = actionName
 	button.icon = solidIcon
-	button.expand_icon = true
+	button.expand_icon = false
 	button.add_theme_color_override("icon_normal_color", Color("91a0b9"))
-	button.add_theme_color_override("icon_hover_color", Color("dbe5f4"))
+	button.add_theme_color_override("icon_hover_color", primaryTextColor)
+	button.add_theme_color_override("icon_pressed_color", activeAccentColor)
+	button.add_theme_color_override("icon_hover_pressed_color", activeAccentColor)
 	button.add_theme_stylebox_override("normal", makeBox(Color.TRANSPARENT, 2, Color.TRANSPARENT))
-	button.add_theme_stylebox_override("hover", makeBox(Color("303e52"), 2, Color.TRANSPARENT))
+	button.add_theme_stylebox_override("hover", makeBox(controlHoverColor, 2, Color.TRANSPARENT))
+	button.add_theme_stylebox_override("pressed", makeBox(Color.TRANSPARENT, 2, Color.TRANSPARENT))
+	button.add_theme_stylebox_override("hover_pressed", makeBox(controlHoverColor, 2, Color.TRANSPARENT))
 	button.pressed.connect(func() -> void: appendEvent("%sAction" % actionName))
 	return button
 
 func makeInkButton(ink: Dictionary) -> Button:
 	var button := Button.new()
-	button.custom_minimum_size = Vector2(36, 28)
+	button.custom_minimum_size = Vector2(24, 20)
 	button.toggle_mode = true
 	button.tooltip_text = String(ink.title)
 	button.icon = solidIcon
-	button.expand_icon = true
+	button.expand_icon = false
 	var accent: Color = ink.color
 	button.add_theme_color_override("icon_normal_color", accent)
 	button.add_theme_color_override("icon_hover_color", accent.lightened(0.15))
-	button.add_theme_color_override("icon_pressed_color", Color("17202c"))
-	button.add_theme_color_override("icon_hover_pressed_color", Color("17202c"))
-	button.add_theme_stylebox_override("normal", makeBox(Color("19212d"), 3, Color.TRANSPARENT))
-	button.add_theme_stylebox_override("hover", makeBox(Color("273446"), 3, Color.TRANSPARENT))
-	button.add_theme_stylebox_override("pressed", makeBox(accent, 3, accent))
-	button.add_theme_stylebox_override("hover_pressed", makeBox(accent.lightened(0.06), 3, accent))
+	button.add_theme_color_override("icon_pressed_color", accent)
+	button.add_theme_color_override("icon_hover_pressed_color", accent.lightened(0.15))
+	button.add_theme_stylebox_override("normal", makeBox(fieldBackgroundColor, 3, Color.TRANSPARENT))
+	button.add_theme_stylebox_override("hover", makeBox(controlHoverColor, 3, Color.TRANSPARENT))
+	button.add_theme_stylebox_override("pressed", makeBox(fieldBackgroundColor, 3, accent))
+	button.add_theme_stylebox_override("hover_pressed", makeBox(controlHoverColor, 3, accent.lightened(0.15)))
 	button.pressed.connect(selectInk.bind(ink, true))
 	button.mouse_entered.connect(setHoveredInk.bind(String(ink.title)))
 	button.mouse_exited.connect(clearHoveredInk)
@@ -254,7 +277,7 @@ func makeInkButton(ink: Dictionary) -> Button:
 func makeInfoLabel(labelText: String) -> Label:
 	var label := Label.new()
 	label.text = labelText
-	label.add_theme_color_override("font_color", Color("68758a"))
+	label.add_theme_color_override("font_color", mutedTextColor)
 	label.add_theme_font_size_override("font_size", 13)
 	return label
 
@@ -263,33 +286,69 @@ func makeInfoValue(valueText: String) -> Label:
 	value.text = valueText
 	value.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	value.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	value.add_theme_color_override("font_color", Color("aab7c9"))
-	value.add_theme_stylebox_override("normal", makeBox(Color("3a4757"), 5, Color.TRANSPARENT))
+	value.add_theme_color_override("font_color", primaryTextColor)
+	value.add_theme_font_size_override("font_size", 13)
+	value.add_theme_stylebox_override("normal", makeFieldBox(sectionBorderColor))
 	return value
 
 func makeSmallInfoValue(valueText: String) -> Label:
 	var value := makeInfoValue(valueText)
-	value.custom_minimum_size = Vector2(38, 0)
+	value.custom_minimum_size = Vector2(34, 0)
 	value.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
 	return value
 
 func makeSpinBox(value: float, minimum: float, maximum: float) -> SpinBox:
 	var spinBox := SpinBox.new()
-	spinBox.custom_minimum_size = Vector2(42, 24)
+	spinBox.custom_minimum_size = Vector2(0, 22)
+	spinBox.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	spinBox.add_theme_constant_override("buttons_width", 12)
+	spinBox.add_theme_constant_override("field_and_buttons_separation", 1)
 	spinBox.min_value = minimum
 	spinBox.max_value = maximum
 	spinBox.value = value
 	spinBox.allow_greater = false
 	spinBox.allow_lesser = false
+	var lineEdit := spinBox.get_line_edit()
+	lineEdit.add_theme_color_override("font_color", primaryTextColor)
+	lineEdit.add_theme_color_override("caret_color", primaryTextColor)
+	lineEdit.add_theme_color_override("selection_color", Color("38506b"))
+	lineEdit.add_theme_stylebox_override("normal", makeFieldBox(sectionBorderColor))
+	lineEdit.add_theme_stylebox_override("read_only", makeFieldBox(sectionBorderColor))
+	lineEdit.add_theme_stylebox_override("focus", makeFieldBox(fieldFocusBorderColor))
 	spinBox.value_changed.connect(func(_nextValue: float) -> void: appendEvent("ArrayUpdated"))
 	return spinBox
 
 func makeArrayToggle(labelText: String) -> CheckBox:
 	var toggle := CheckBox.new()
 	toggle.text = labelText
-	toggle.add_theme_color_override("font_color", Color("7f8ca1"))
+	toggle.add_theme_color_override("font_color", Color("8d9bb0"))
+	toggle.add_theme_color_override("font_hover_color", primaryTextColor)
+	toggle.add_theme_color_override("font_pressed_color", primaryTextColor)
+	toggle.add_theme_font_size_override("font_size", 11)
+	toggle.add_theme_icon_override("unchecked", checkboxUncheckedIcon)
+	toggle.add_theme_icon_override("checked", checkboxCheckedIcon)
+	toggle.add_theme_icon_override("unchecked_disabled", checkboxUncheckedDisabledIcon)
+	toggle.add_theme_icon_override("checked_disabled", checkboxCheckedDisabledIcon)
+	toggle.add_theme_stylebox_override("focus", makeBox(Color.TRANSPARENT, 3, fieldFocusBorderColor))
 	toggle.toggled.connect(func(_enabled: bool) -> void: appendEvent("ArrayUpdated"))
 	return toggle
+
+func makeInfoField(labelText: String, value: Label) -> HBoxContainer:
+	var field := HBoxContainer.new()
+	field.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	field.add_theme_constant_override("separation", 4)
+	field.add_child(makeInfoLabel(labelText))
+	value.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	field.add_child(value)
+	return field
+
+func makeArrayValueField(labelText: String, value: float, minimum: float, maximum: float) -> VBoxContainer:
+	var field := VBoxContainer.new()
+	field.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	field.add_theme_constant_override("separation", 2)
+	field.add_child(makeInfoLabel(labelText))
+	field.add_child(makeSpinBox(value, minimum, maximum))
+	return field
 
 func selectInk(ink: Dictionary, recordEvent := true) -> void:
 	if ink.is_empty():
@@ -334,9 +393,30 @@ func makeBox(color: Color, radius: int, borderColor: Color) -> StyleBoxFlat:
 		box.border_color = borderColor
 	return box
 
+func makeFieldBox(borderColor: Color) -> StyleBoxFlat:
+	var box := makeBox(fieldBackgroundColor, 4, borderColor)
+	box.content_margin_left = 5
+	box.content_margin_top = 1
+	box.content_margin_right = 5
+	box.content_margin_bottom = 1
+	return box
+
 func makeSolidIcon() -> ImageTexture:
-	var image := Image.create(16, 16, false, Image.FORMAT_RGBA8)
+	var image := Image.create(12, 12, false, Image.FORMAT_RGBA8)
 	image.fill(Color.WHITE)
+	return ImageTexture.create_from_image(image)
+
+func makeCheckboxIcon(isChecked: bool, borderColor: Color, markColor: Color) -> ImageTexture:
+	var image := Image.create(14, 14, false, Image.FORMAT_RGBA8)
+	image.fill(Color.TRANSPARENT)
+	for index in range(1, 13):
+		image.set_pixel(index, 1, borderColor)
+		image.set_pixel(index, 12, borderColor)
+		image.set_pixel(1, index, borderColor)
+		image.set_pixel(12, index, borderColor)
+	if isChecked:
+		for point in [Vector2i(3, 7), Vector2i(4, 8), Vector2i(5, 9), Vector2i(6, 8), Vector2i(7, 7), Vector2i(8, 6), Vector2i(9, 5), Vector2i(10, 4)]:
+			image.set_pixelv(point, markColor)
 	return ImageTexture.create_from_image(image)
 
 func makeSwitchIcon() -> ImageTexture:

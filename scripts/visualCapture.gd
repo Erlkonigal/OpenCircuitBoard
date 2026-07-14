@@ -30,6 +30,17 @@ func assertCanvasViewIsStable(boardViewport: SubViewportContainer, subViewport: 
 	assert(camera.get_screen_center_position().is_equal_approx(expectedCenter))
 	assert(camera.zoom.is_equal_approx(expectedZoom))
 
+func assertSidebarControlsFit(contentRoot: Control) -> void:
+	var contentRect := contentRoot.get_global_rect()
+	for child in contentRoot.find_children("*", "Control", true, false):
+		var control := child as Control
+		if control == null or not control.visible:
+			continue
+		var controlRect := control.get_global_rect()
+		assert(controlRect.position.x >= contentRect.position.x - 0.5)
+		assert(controlRect.end.x <= contentRect.end.x + 0.5)
+		assert(control.get_combined_minimum_size().x <= control.size.x + 0.5)
+
 func captureBoard() -> void:
 	var captureViewportSize := Vector2i(
 		int(ProjectSettings.get_setting("display/window/size/viewport_width")),
@@ -54,12 +65,18 @@ func captureBoard() -> void:
 	assert(dockHost.get_child_count() == 1)
 	var circuitEditorDock := dockHost.get_child(0) as Control
 	assert(circuitEditorDock.get("dockId") == "circuitEditor")
-	var dockContentRoot := circuitEditorDock.get_node("background/contentRoot") as VBoxContainer
+	var dockContentRoot := circuitEditorDock.get_node("background/contentFrame/contentRoot") as VBoxContainer
 	var topBar := main.get_node("Interface/TopBar") as Control
 	var configuredMinimumHeight := int(ProjectSettings.get_setting("display/window/size/min_height"))
 	assert(circuitEditorDock.find_children("*", "ScrollContainer", true, false).is_empty())
 	assert(dockContentRoot.size.y >= dockContentRoot.get_combined_minimum_size().y)
 	assert(configuredMinimumHeight >= ceili(topBar.size.y + dockContentRoot.get_combined_minimum_size().y))
+	var dockRect := dockHost.get_global_rect()
+	var contentRect := dockContentRoot.get_global_rect()
+	assert(is_equal_approx(dockRect.size.x, 272.0))
+	assert(is_equal_approx(contentRect.position.x, dockRect.position.x + 8.0))
+	assert(is_equal_approx(contentRect.end.x, dockRect.end.x - 8.0))
+	assertSidebarControlsFit(dockContentRoot)
 	var dockMenu := main.get("dockMenu") as PopupPanel
 	assert(dockMenu.get_child_count() == 1)
 	assert(dockMenu.get_child(0).get_child_count() == 1)
@@ -73,6 +90,8 @@ func captureBoard() -> void:
 	assertCanvasViewIsStable(boardViewport, subViewport, camera, initialCanvasRect, initialSubViewportSize, initialCameraCenter, initialCameraZoom)
 	main.call("setDockWidth", 1.0)
 	assert(is_equal_approx(dockHost.offset_right, 208.0))
+	await process_frame
+	assertSidebarControlsFit(dockContentRoot)
 	assertCanvasViewIsStable(boardViewport, subViewport, camera, initialCanvasRect, initialSubViewportSize, initialCameraCenter, initialCameraZoom)
 	main.call("setDockWidth", 272.0)
 	main.call("setLeftSidebarOpen", false)
