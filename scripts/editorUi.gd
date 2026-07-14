@@ -9,7 +9,6 @@ const sidebarAnimationDuration := 0.18
 const topBarButtonActiveIconColor := Color("f2c94c")
 
 @onready var board: Node2D = $BoardViewport/SubViewport/CircuitBoard
-@onready var boardViewport: SubViewportContainer = $BoardViewport
 @onready var topBar: Panel = $Interface/TopBar
 @onready var leftSidebarToggle: Button = $Interface/TopBar/Content/leftSidebarToggle
 @onready var rightSidebarToggle: Button = $Interface/TopBar/Content/rightSidebarToggle
@@ -28,7 +27,6 @@ var rightSidebarOpen := true
 var isResizingDock := false
 var leftSidebarTween: Tween
 var rightSidebarTween: Tween
-var boardLayoutTween: Tween
 
 func _ready() -> void:
 	configureTopBar()
@@ -142,14 +140,10 @@ func updateSidebarLayout(animate: bool) -> void:
 	var rightEnd := 0.0 if rightSidebarOpen else rightDockWidth
 	var resizeStart := dockWidth if leftSidebarOpen else -6.0
 	var resizeEnd := dockWidth + 6.0 if leftSidebarOpen else 0.0
-	var boardLeft := dockWidth if leftSidebarOpen else 0.0
-	var boardRight := rightDockWidth if rightSidebarOpen else 0.0
 	if leftSidebarTween:
 		leftSidebarTween.kill()
 	if rightSidebarTween:
 		rightSidebarTween.kill()
-	if boardLayoutTween:
-		boardLayoutTween.kill()
 	if not animate:
 		dockHost.offset_left = leftStart
 		dockHost.offset_right = leftEnd
@@ -158,8 +152,6 @@ func updateSidebarLayout(animate: bool) -> void:
 		dockResizeHandle.offset_left = resizeStart
 		dockResizeHandle.offset_right = resizeEnd
 		dockResizeHandle.visible = leftSidebarOpen
-		boardViewport.offset_left = boardLeft
-		boardViewport.offset_right = -boardRight
 		return
 	dockHost.visible = true
 	rightDock.visible = true
@@ -174,9 +166,6 @@ func updateSidebarLayout(animate: bool) -> void:
 	rightSidebarTween.tween_property(rightDock, "offset_left", rightStart, sidebarAnimationDuration)
 	rightSidebarTween.parallel().tween_property(rightDock, "offset_right", rightEnd, sidebarAnimationDuration)
 	rightSidebarTween.chain().tween_callback(finishRightSidebarTransition.bind(rightSidebarOpen))
-	boardLayoutTween = create_tween().set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
-	boardLayoutTween.tween_property(boardViewport, "offset_left", boardLeft, sidebarAnimationDuration)
-	boardLayoutTween.parallel().tween_property(boardViewport, "offset_right", -boardRight, sidebarAnimationDuration)
 
 func finishLeftSidebarTransition(isOpen: bool) -> void:
 	if leftSidebarOpen == isOpen:

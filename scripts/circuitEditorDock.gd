@@ -28,23 +28,23 @@ func _ready() -> void:
 func buildDock() -> void:
 	set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	var background := Panel.new()
+	background.name = "background"
 	background.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	background.add_theme_stylebox_override("panel", makeBox(Color("151c27"), 0, Color.TRANSPARENT))
 	add_child(background)
 
 	var root := VBoxContainer.new()
+	root.name = "contentRoot"
 	root.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	root.add_theme_constant_override("separation", 6)
 	background.add_child(root)
 	root.add_child(buildHeader())
-	var scroll := ScrollContainer.new()
-	scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
-	root.add_child(scroll)
 	var content := VBoxContainer.new()
+	content.name = "content"
 	content.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	content.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	content.add_theme_constant_override("separation", 7)
-	scroll.add_child(content)
+	root.add_child(content)
 
 	content.add_child(buildLayersSection())
 	content.add_child(buildToolsSection())
