@@ -59,7 +59,7 @@ func captureBoard() -> void:
 		push_error("The subviewport image is unavailable.")
 		quit(1)
 		return
-	var outputPath := "user://tileCapture.png"
+	var outputPath := "user://capture.png"
 	var error := image.save_png(outputPath)
 	print("capture=", outputPath, " error=", error, " data=", OS.get_user_data_dir())
 	quit(error)
