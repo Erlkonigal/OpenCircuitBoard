@@ -28,6 +28,9 @@ func shouldCaptureEventLogDock() -> bool:
 func shouldCaptureDockMenu() -> bool:
 	return OS.get_cmdline_user_args().has("--captureDockMenu")
 
+func shouldCaptureDefaultZoom() -> bool:
+	return OS.get_cmdline_user_args().has("--captureDefaultZoom")
+
 func assertCanvasViewIsStable(boardViewport: SubViewportContainer, subViewport: SubViewport, camera: Camera2D, expectedRect: Rect2, expectedSize: Vector2i, expectedCenter: Vector2, expectedZoom: Vector2) -> void:
 	var actualRect := boardViewport.get_global_rect()
 	assert(actualRect.position.is_equal_approx(expectedRect.position))
@@ -88,6 +91,8 @@ func captureBoard() -> void:
 	var initialSubViewportSize := subViewport.size
 	var initialCameraCenter := camera.get_screen_center_position()
 	var initialCameraZoom := camera.zoom
+	var expectedDefaultZoom := Vector2(0.5, 0.5)
+	assert(initialCameraZoom.is_equal_approx(expectedDefaultZoom))
 	var dockHost := main.get_node("Interface/DockHost") as Control
 	assert(dockHost.get_child_count() == 1)
 	var circuitEditorDock := dockHost.get_child(0) as Control
@@ -273,7 +278,10 @@ func captureBoard() -> void:
 	selector.visible = shouldCaptureSelector()
 	if selector.visible:
 		selector.position = Vector2(8, -8) * float(board.get("cellSize"))
-	camera.zoom = Vector2.ONE * getCaptureZoom()
+	if shouldCaptureDefaultZoom():
+		camera.zoom = initialCameraZoom
+	else:
+		camera.zoom = Vector2.ONE * getCaptureZoom()
 	if shouldCaptureBoardEdge():
 		camera.global_position = boardBounds.position
 	for frame in 5:
