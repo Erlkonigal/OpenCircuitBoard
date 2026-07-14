@@ -6,7 +6,7 @@ signal eventRecorded(eventText: String)
 
 const InkRegistry := preload("res://scripts/inkRegistry.gd")
 const circuitEditorIcon := preload("res://assets/circuitEditor.svg")
-const dockIconSize := 20
+const dockIconSize := 16
 const sidebarBackgroundColor := Color("131c28")
 const sectionBackgroundColor := Color("1a2432")
 const sectionBorderColor := Color("26364a")
@@ -24,10 +24,6 @@ var positionXLabel: Label
 var positionYLabel: Label
 var solidIcon: ImageTexture
 var dockMenuButton: Button
-var checkboxUncheckedIcon: ImageTexture
-var checkboxCheckedIcon: ImageTexture
-var checkboxUncheckedDisabledIcon: ImageTexture
-var checkboxCheckedDisabledIcon: ImageTexture
 
 func _init() -> void:
 	dockId = "circuitEditor"
@@ -37,10 +33,6 @@ func _init() -> void:
 
 func _ready() -> void:
 	solidIcon = makeSolidIcon()
-	checkboxUncheckedIcon = makeCheckboxIcon(false, Color("60728a"), Color.TRANSPARENT)
-	checkboxCheckedIcon = makeCheckboxIcon(true, activeAccentColor, activeAccentColor)
-	checkboxUncheckedDisabledIcon = makeCheckboxIcon(false, Color("39485a"), Color.TRANSPARENT)
-	checkboxCheckedDisabledIcon = makeCheckboxIcon(true, Color("596879"), Color("596879"))
 	buildDock()
 	selectInk(InkRegistry.getInk(selectedInkId), false)
 
@@ -86,6 +78,8 @@ func buildHeader() -> Control:
 	dockMenuButton.tooltip_text = "SwitchDock"
 	dockMenuButton.icon = dockIcon
 	dockMenuButton.expand_icon = false
+	dockMenuButton.icon_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	dockMenuButton.vertical_icon_alignment = VERTICAL_ALIGNMENT_CENTER
 	dockMenuButton.add_theme_color_override("icon_normal_color", mutedTextColor)
 	dockMenuButton.add_theme_color_override("icon_hover_color", primaryTextColor)
 	dockMenuButton.add_theme_color_override("icon_pressed_color", activeAccentColor)
@@ -102,7 +96,7 @@ func buildHeader() -> Control:
 	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	title.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	title.add_theme_color_override("font_color", Color("8e9db2"))
-	title.add_theme_font_size_override("font_size", 15)
+	title.add_theme_font_size_override("font_size", 16)
 	header.add_child(title)
 	var spacer := Control.new()
 	spacer.custom_minimum_size = Vector2(dockIconSize + 8, dockIconSize + 8)
@@ -151,7 +145,7 @@ func buildInksSection() -> Control:
 			var categoryLabel := Label.new()
 			categoryLabel.text = category
 			categoryLabel.add_theme_color_override("font_color", mutedTextColor)
-			categoryLabel.add_theme_font_size_override("font_size", 14)
+			categoryLabel.add_theme_font_size_override("font_size", 15)
 			section.add_child(categoryLabel)
 			lastCategory = category
 		var grid: GridContainer
@@ -179,12 +173,6 @@ func buildArraySection() -> Control:
 	parameterGrid.add_child(makeArrayValueField("OffsetX", 2, -999, 999))
 	parameterGrid.add_child(makeArrayValueField("OffsetY", 0, -999, 999))
 	section.add_child(parameterGrid)
-	var toggleRow := HBoxContainer.new()
-	toggleRow.add_theme_constant_override("separation", 6)
-	toggleRow.add_child(makeArrayToggle("AutoCross"))
-	toggleRow.add_child(makeArrayToggle("Filter"))
-	section.add_child(toggleRow)
-	section.add_child(makeArrayToggle("MulticoloredTraces"))
 	return panel
 
 func makeSection() -> PanelContainer:
@@ -209,7 +197,7 @@ func makeSectionTitle(titleText: String) -> Label:
 	var title := Label.new()
 	title.text = titleText
 	title.add_theme_color_override("font_color", primaryTextColor)
-	title.add_theme_font_size_override("font_size", 15)
+	title.add_theme_font_size_override("font_size", 16)
 	return title
 
 func makeActionButton(actionName: String) -> Button:
@@ -218,6 +206,8 @@ func makeActionButton(actionName: String) -> Button:
 	button.tooltip_text = actionName
 	button.icon = solidIcon
 	button.expand_icon = false
+	button.icon_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	button.vertical_icon_alignment = VERTICAL_ALIGNMENT_CENTER
 	button.add_theme_color_override("icon_normal_color", Color("91a0b9"))
 	button.add_theme_color_override("icon_hover_color", primaryTextColor)
 	button.add_theme_color_override("icon_pressed_color", activeAccentColor)
@@ -236,6 +226,8 @@ func makeInkButton(ink: Dictionary) -> Button:
 	button.tooltip_text = String(ink.title)
 	button.icon = solidIcon
 	button.expand_icon = false
+	button.icon_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	button.vertical_icon_alignment = VERTICAL_ALIGNMENT_CENTER
 	var accent: Color = ink.color
 	button.add_theme_color_override("icon_normal_color", accent)
 	button.add_theme_color_override("icon_hover_color", accent.lightened(0.15))
@@ -255,7 +247,7 @@ func makeInfoLabel(labelText: String) -> Label:
 	var label := Label.new()
 	label.text = labelText
 	label.add_theme_color_override("font_color", mutedTextColor)
-	label.add_theme_font_size_override("font_size", 14)
+	label.add_theme_font_size_override("font_size", 15)
 	return label
 
 func makeInfoValue(valueText: String) -> Label:
@@ -264,7 +256,7 @@ func makeInfoValue(valueText: String) -> Label:
 	value.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	value.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	value.add_theme_color_override("font_color", primaryTextColor)
-	value.add_theme_font_size_override("font_size", 14)
+	value.add_theme_font_size_override("font_size", 15)
 	value.add_theme_stylebox_override("normal", makeFieldBox(sectionBorderColor))
 	return value
 
@@ -288,6 +280,7 @@ func makeSpinBox(value: float, minimum: float, maximum: float) -> SpinBox:
 	var lineEdit := spinBox.get_line_edit()
 	lineEdit.custom_minimum_size = Vector2(0, 22)
 	lineEdit.add_theme_constant_override("minimum_character_width", 1)
+	lineEdit.add_theme_font_size_override("font_size", 15)
 	lineEdit.add_theme_color_override("font_color", primaryTextColor)
 	lineEdit.add_theme_color_override("caret_color", primaryTextColor)
 	lineEdit.add_theme_color_override("selection_color", Color("38506b"))
@@ -296,21 +289,6 @@ func makeSpinBox(value: float, minimum: float, maximum: float) -> SpinBox:
 	lineEdit.add_theme_stylebox_override("focus", makeFieldBox(fieldFocusBorderColor))
 	spinBox.value_changed.connect(func(_nextValue: float) -> void: recordEvent("ArrayUpdated"))
 	return spinBox
-
-func makeArrayToggle(labelText: String) -> CheckBox:
-	var toggle := CheckBox.new()
-	toggle.text = labelText
-	toggle.add_theme_color_override("font_color", Color("8d9bb0"))
-	toggle.add_theme_color_override("font_hover_color", primaryTextColor)
-	toggle.add_theme_color_override("font_pressed_color", primaryTextColor)
-	toggle.add_theme_font_size_override("font_size", 11)
-	toggle.add_theme_icon_override("unchecked", checkboxUncheckedIcon)
-	toggle.add_theme_icon_override("checked", checkboxCheckedIcon)
-	toggle.add_theme_icon_override("unchecked_disabled", checkboxUncheckedDisabledIcon)
-	toggle.add_theme_icon_override("checked_disabled", checkboxCheckedDisabledIcon)
-	toggle.add_theme_stylebox_override("focus", makeBox(Color.TRANSPARENT, 3, fieldFocusBorderColor))
-	toggle.toggled.connect(func(_enabled: bool) -> void: recordEvent("ArrayUpdated"))
-	return toggle
 
 func makeInfoField(labelText: String, value: Label) -> HBoxContainer:
 	var field := HBoxContainer.new()
@@ -380,19 +358,6 @@ func makeFieldBox(borderColor: Color) -> StyleBoxFlat:
 	return box
 
 func makeSolidIcon() -> ImageTexture:
-	var image := Image.create(14, 14, false, Image.FORMAT_RGBA8)
+	var image := Image.create(16, 16, false, Image.FORMAT_RGBA8)
 	image.fill(Color.WHITE)
-	return ImageTexture.create_from_image(image)
-
-func makeCheckboxIcon(isChecked: bool, borderColor: Color, markColor: Color) -> ImageTexture:
-	var image := Image.create(14, 14, false, Image.FORMAT_RGBA8)
-	image.fill(Color.TRANSPARENT)
-	for index in range(1, 13):
-		image.set_pixel(index, 1, borderColor)
-		image.set_pixel(index, 12, borderColor)
-		image.set_pixel(1, index, borderColor)
-		image.set_pixel(12, index, borderColor)
-	if isChecked:
-		for point in [Vector2i(3, 7), Vector2i(4, 8), Vector2i(5, 9), Vector2i(6, 8), Vector2i(7, 7), Vector2i(8, 6), Vector2i(9, 5), Vector2i(10, 4)]:
-			image.set_pixelv(point, markColor)
 	return ImageTexture.create_from_image(image)

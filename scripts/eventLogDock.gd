@@ -3,7 +3,7 @@ extends "res://scripts/dockView.gd"
 signal dockMenuRequested(menuButton: Button)
 
 const eventLogIcon := preload("res://assets/eventLog.svg")
-const dockIconSize := 20
+const dockIconSize := 16
 const sidebarBackgroundColor := Color("131c28")
 const fieldBackgroundColor := Color("111a26")
 const sectionBorderColor := Color("26364a")
@@ -65,7 +65,7 @@ func buildDock() -> void:
 	eventLog.bbcode_enabled = false
 	eventLog.scroll_following = true
 	eventLog.add_theme_color_override("default_color", primaryTextColor)
-	eventLog.add_theme_font_size_override("normal_font_size", 14)
+	eventLog.add_theme_font_size_override("normal_font_size", 15)
 	eventLog.add_theme_constant_override("line_separation", 3)
 	eventLog.add_theme_stylebox_override("normal", makeLogBox())
 	root.add_child(eventLog)
@@ -79,6 +79,8 @@ func buildHeader() -> Control:
 	dockMenuButton.tooltip_text = "SwitchDock"
 	dockMenuButton.icon = dockIcon
 	dockMenuButton.expand_icon = false
+	dockMenuButton.icon_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	dockMenuButton.vertical_icon_alignment = VERTICAL_ALIGNMENT_CENTER
 	dockMenuButton.add_theme_color_override("icon_normal_color", mutedTextColor)
 	dockMenuButton.add_theme_color_override("icon_hover_color", primaryTextColor)
 	dockMenuButton.add_theme_color_override("icon_pressed_color", activeAccentColor)
@@ -95,7 +97,7 @@ func buildHeader() -> Control:
 	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	title.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	title.add_theme_color_override("font_color", Color("8e9db2"))
-	title.add_theme_font_size_override("font_size", 15)
+	title.add_theme_font_size_override("font_size", 16)
 	header.add_child(title)
 	var spacer := Control.new()
 	spacer.custom_minimum_size = Vector2(dockIconSize + 8, dockIconSize + 8)

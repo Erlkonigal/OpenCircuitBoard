@@ -7,6 +7,7 @@ const panelRightCloseIcon := preload("res://assets/panelRightClose.svg")
 const panelRightOpenIcon := preload("res://assets/panelRightOpen.svg")
 const sidebarAnimationDuration := 0.18
 const topBarButtonActiveIconColor := Color("f2c94c")
+const topBarFontSize := 16
 const dockMenuButtonSize := 28
 const dockMenuSeparation := 5
 const dockMenuPadding := 14
@@ -79,6 +80,8 @@ func buildDockMenu() -> void:
 		button.tooltip_text = String(definition.dockTitle)
 		button.icon = definition.dockIcon
 		button.expand_icon = false
+		button.icon_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		button.vertical_icon_alignment = VERTICAL_ALIGNMENT_CENTER
 		button.add_theme_color_override("icon_normal_color", Color("9aa8bf"))
 		button.add_theme_color_override("icon_hover_color", Color("e2eaf7"))
 		button.add_theme_stylebox_override("normal", makeMenuItemBox(Color.TRANSPARENT))
@@ -215,6 +218,8 @@ func configureTopBar() -> void:
 	topBarBox.border_width_bottom = 1
 	topBarBox.border_color = Color("263346")
 	topBar.add_theme_stylebox_override("panel", topBarBox)
+	var title := $Interface/TopBar/Content/Title as Label
+	title.add_theme_font_size_override("font_size", topBarFontSize)
 	for child in $Interface/TopBar/Content.get_children():
 		var topBarButton := child as Button
 		if topBarButton:
@@ -223,7 +228,9 @@ func configureTopBar() -> void:
 	dockResizeHandle.mouse_default_cursor_shape = Control.CURSOR_HSIZE
 
 func configureTopBarButton(topBarButton: Button) -> void:
-	topBarButton.expand_icon = true
+	topBarButton.expand_icon = false
+	topBarButton.icon_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	topBarButton.vertical_icon_alignment = VERTICAL_ALIGNMENT_CENTER
 	topBarButton.add_theme_color_override("icon_normal_color", Color("8d9db5"))
 	topBarButton.add_theme_color_override("icon_hover_color", Color("e1e9f6"))
 	topBarButton.add_theme_color_override("icon_pressed_color", topBarButtonActiveIconColor)

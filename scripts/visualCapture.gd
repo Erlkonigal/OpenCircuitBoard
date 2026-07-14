@@ -94,11 +94,24 @@ func captureBoard() -> void:
 	assert(circuitEditorDock.get("dockId") == "circuitEditor")
 	var dockContentRoot := circuitEditorDock.get_node("background/contentFrame/contentRoot") as VBoxContainer
 	var topBar := main.get_node("Interface/TopBar") as Control
+	var topBarTitle := main.get_node("Interface/TopBar/Content/Title") as Label
 	var configuredMinimumHeight := int(ProjectSettings.get_setting("display/window/size/min_height"))
 	assertDockLayout(dockHost, circuitEditorDock)
 	assert(configuredMinimumHeight >= ceili(topBar.size.y + dockContentRoot.get_combined_minimum_size().y))
+	assert(topBarTitle.get_theme_font_size("font_size") == 16)
+	for topBarChild in (main.get_node("Interface/TopBar/Content") as Control).get_children():
+		var topBarButton := topBarChild as Button
+		if topBarButton == null:
+			continue
+		assert(topBarButton.icon != null)
+		assert(not topBarButton.expand_icon)
+		assert(topBarButton.icon_alignment == HORIZONTAL_ALIGNMENT_CENTER)
+		assert(topBarButton.vertical_icon_alignment == VERTICAL_ALIGNMENT_CENTER)
+		assert(topBarButton.icon.get_size() == Vector2(16, 16))
 	var dockRect := dockHost.get_global_rect()
 	assert(is_equal_approx(dockRect.size.x, 272.0))
+	assert(circuitEditorDock.find_children("*", "CheckBox", true, false).is_empty())
+	assert(circuitEditorDock.find_children("*", "SpinBox", true, false).size() == 4)
 	var sectionTitleCount := 0
 	for labelNode in circuitEditorDock.find_children("*", "Label", true, false):
 		var label := labelNode as Label
@@ -119,7 +132,15 @@ func captureBoard() -> void:
 	var dockMenuButton := circuitEditorDock.get("dockMenuButton") as Button
 	assert(dockMenuButton.icon != null)
 	assert(not dockMenuButton.expand_icon)
-	assert(dockMenuButton.icon.get_size() == Vector2(20, 20))
+	assert(dockMenuButton.icon_alignment == HORIZONTAL_ALIGNMENT_CENTER)
+	assert(dockMenuButton.vertical_icon_alignment == VERTICAL_ALIGNMENT_CENTER)
+	assert(dockMenuButton.icon.get_size() == Vector2(16, 16))
+	for dockButtonNode in circuitEditorDock.find_children("*", "Button", true, false):
+		var dockButton := dockButtonNode as Button
+		if dockButton.icon != null:
+			assert(dockButton.icon_alignment == HORIZONTAL_ALIGNMENT_CENTER)
+			assert(dockButton.vertical_icon_alignment == VERTICAL_ALIGNMENT_CENTER)
+			assert(dockButton.icon.get_size() == Vector2(16, 16))
 	var foundCircuitEditorIcon := false
 	var foundEventLogIcon := false
 	var circuitEditorMenuButton: Button
@@ -128,7 +149,9 @@ func captureBoard() -> void:
 		var menuButton := menuButtonNode as Button
 		assert(menuButton.icon != null)
 		assert(not menuButton.expand_icon)
-		assert(menuButton.icon.get_size() == Vector2(20, 20))
+		assert(menuButton.icon_alignment == HORIZONTAL_ALIGNMENT_CENTER)
+		assert(menuButton.vertical_icon_alignment == VERTICAL_ALIGNMENT_CENTER)
+		assert(menuButton.icon.get_size() == Vector2(16, 16))
 		if menuButton.tooltip_text == "CircuitEditor":
 			assert(menuButton.icon == dockMenuButton.icon)
 			circuitEditorMenuButton = menuButton
@@ -213,7 +236,9 @@ func captureBoard() -> void:
 	var eventLogDockMenuButton := eventLogDock.get("dockMenuButton") as Button
 	assert(eventLogDockMenuButton.icon != null)
 	assert(not eventLogDockMenuButton.expand_icon)
-	assert(eventLogDockMenuButton.icon.get_size() == Vector2(20, 20))
+	assert(eventLogDockMenuButton.icon_alignment == HORIZONTAL_ALIGNMENT_CENTER)
+	assert(eventLogDockMenuButton.vertical_icon_alignment == VERTICAL_ALIGNMENT_CENTER)
+	assert(eventLogDockMenuButton.icon.get_size() == Vector2(16, 16))
 	assert(eventLogDockMenuButton.icon == eventLogMenuButton.icon)
 	var eventLog := eventLogDock.get_node("background/contentFrame/contentRoot/eventLog") as RichTextLabel
 	assert(eventLog.get_parsed_text().contains("HistoryMarkerOne"))
