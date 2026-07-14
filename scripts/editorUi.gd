@@ -11,6 +11,8 @@ extends Control
 @onready var pointerLabel: Label = $Interface/LeftBar/Content/Pointer
 @onready var zoomLabel: Label = $Interface/TopBar/Margin/Rows/CommandRow/ZoomLabel
 
+var fullscreenExitMode := Window.MODE_WINDOWED
+
 var toolDescriptions := {
 	"wire": "Place a wire marker on an available cell.",
 	"orGate": "Place an OR gate on an available cell.",
@@ -33,6 +35,25 @@ func _ready() -> void:
 func _process(_delta: float) -> void:
 	updatePointerStatus()
 	zoomLabel.text = "Zoom %d%%" % roundi(boardCamera.zoom.x * 100.0)
+
+func _input(event: InputEvent) -> void:
+	var keyEvent := event as InputEventKey
+	if keyEvent == null:
+		return
+	if not keyEvent.pressed or keyEvent.echo or not keyEvent.alt_pressed:
+		return
+	if keyEvent.keycode != KEY_ENTER and keyEvent.keycode != KEY_KP_ENTER:
+		return
+	toggleFullscreen()
+	get_viewport().set_input_as_handled()
+
+func toggleFullscreen() -> void:
+	var window := get_window()
+	if window.mode == Window.MODE_FULLSCREEN or window.mode == Window.MODE_EXCLUSIVE_FULLSCREEN:
+		window.mode = fullscreenExitMode
+		return
+	fullscreenExitMode = window.mode
+	window.mode = Window.MODE_FULLSCREEN
 
 func selectTool(toolId: String) -> void:
 	board.call("selectTool", toolId)
