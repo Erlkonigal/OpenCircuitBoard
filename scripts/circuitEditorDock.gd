@@ -1,6 +1,5 @@
 extends "res://scripts/dockView.gd"
 
-signal dockMenuRequested(menuButton: Button)
 signal inkSelected(ink: Dictionary)
 
 const InkRegistry := preload("res://scripts/inkRegistry.gd")
@@ -35,8 +34,6 @@ func buildDock() -> void:
 	root.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	root.add_theme_constant_override("separation", 6)
 	background.add_child(root)
-	root.add_child(buildHeader())
-
 	var scroll := ScrollContainer.new()
 	scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
@@ -52,36 +49,6 @@ func buildDock() -> void:
 	content.add_child(buildInksSection())
 	content.add_child(buildArraySection())
 	content.add_child(buildEventLogSection())
-
-func buildHeader() -> Control:
-	var header := HBoxContainer.new()
-	header.custom_minimum_size = Vector2(0, 31)
-	header.add_theme_constant_override("separation", 6)
-	header.add_theme_constant_override("margin_left", 8)
-	header.add_theme_constant_override("margin_right", 8)
-	var menuButton := Button.new()
-	menuButton.custom_minimum_size = Vector2(24, 24)
-	menuButton.tooltip_text = "SwitchDock"
-	menuButton.icon = dockIcon
-	menuButton.expand_icon = true
-	menuButton.add_theme_color_override("icon_normal_color", Color("8493aa"))
-	menuButton.add_theme_color_override("icon_hover_color", Color("d5deed"))
-	menuButton.add_theme_stylebox_override("normal", makeBox(Color.TRANSPARENT, 2, Color.TRANSPARENT))
-	menuButton.add_theme_stylebox_override("hover", makeBox(Color("273243"), 2, Color.TRANSPARENT))
-	menuButton.pressed.connect(func() -> void: dockMenuRequested.emit(menuButton))
-	header.add_child(menuButton)
-	var title := Label.new()
-	title.text = dockTitle
-	title.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	title.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-	title.add_theme_color_override("font_color", Color("728098"))
-	title.add_theme_font_size_override("font_size", 16)
-	header.add_child(title)
-	var spacer := Control.new()
-	spacer.custom_minimum_size = Vector2(24, 24)
-	header.add_child(spacer)
-	return header
 
 func buildLayersSection() -> Control:
 	var panel := makeSection()

@@ -61,6 +61,7 @@ anchors_preset = 15
 anchor_right = 1.0
 anchor_bottom = 1.0
 offset_left = 272.0
+offset_top = 38.0
 grow_horizontal = 2
 grow_vertical = 2
 stretch = true
@@ -112,9 +113,51 @@ color = Color(1, 1, 1, 0.22)
 
 [node name="Interface" type="CanvasLayer" parent="."]
 
+[node name="TopBar" type="Panel" parent="Interface"]
+layout_mode = 1
+anchors_preset = 10
+anchor_right = 1.0
+offset_bottom = 38.0
+grow_horizontal = 2
+mouse_filter = 0
+
+[node name="Content" type="HBoxContainer" parent="Interface/TopBar"]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+offset_left = 8.0
+offset_right = -8.0
+grow_horizontal = 2
+grow_vertical = 2
+theme_override_constants/separation = 8
+
+[node name="dockMenuButton" type="Button" parent="Interface/TopBar/Content"]
+layout_mode = 2
+custom_minimum_size = Vector2(24, 24)
+size_flags_vertical = 4
+tooltip_text = "SwitchDock"
+
+[node name="Title" type="Label" parent="Interface/TopBar/Content"]
+layout_mode = 2
+size_flags_horizontal = 3
+text = "CircuitEditor"
+vertical_alignment = 1
+
 [node name="DockHost" type="Control" parent="Interface"]
 layout_mode = 3
 anchor_bottom = 1.0
+offset_top = 38.0
 offset_right = 272.0
+grow_vertical = 2
+mouse_filter = 0
+clip_contents = true
+
+[node name="DockResizeHandle" type="ColorRect" parent="Interface"]
+layout_mode = 3
+anchor_bottom = 1.0
+offset_left = 272.0
+offset_top = 38.0
+offset_right = 278.0
 grow_vertical = 2
 mouse_filter = 0

@@ -34,6 +34,17 @@ func captureBoard() -> void:
 	var dockMenu := main.get("dockMenu") as PopupPanel
 	assert(dockMenu.get_child_count() == 1)
 	assert(dockMenu.get_child(0).get_child_count() == 1)
+	var dockMenuButton := main.get_node("Interface/TopBar/Content/dockMenuButton") as Button
+	dockMenuButton.emit_signal("pressed")
+	await process_frame
+	assert(dockMenu.visible)
+	dockMenu.hide()
+	main.call("setDockWidth", 420.0)
+	assert(is_equal_approx(dockHost.offset_right, 420.0))
+	assert(is_equal_approx((main.get_node("BoardViewport") as Control).offset_left, 420.0))
+	main.call("setDockWidth", 1.0)
+	assert(is_equal_approx(dockHost.offset_right, 208.0))
+	main.call("setDockWidth", 272.0)
 	var inkButtons: Dictionary = circuitEditorDock.get("inkButtons")
 	assert(inkButtons.size() == 19)
 	var toolRegistry: Dictionary = board.get("toolRegistry")
