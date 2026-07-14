@@ -1,24 +1,39 @@
 extends Control
 
 const DockRegistry := preload("res://scripts/dockRegistry.gd")
+const panelLeftCloseIcon := preload("res://assets/panelLeftClose.svg")
+const panelLeftOpenIcon := preload("res://assets/panelLeftOpen.svg")
+const panelRightCloseIcon := preload("res://assets/panelRightClose.svg")
+const panelRightOpenIcon := preload("res://assets/panelRightOpen.svg")
+const sidebarAnimationDuration := 0.18
 
 @onready var board: Node2D = $BoardViewport/SubViewport/CircuitBoard
 @onready var boardViewport: SubViewportContainer = $BoardViewport
 @onready var topBar: Panel = $Interface/TopBar
-@onready var dockMenuButton: Button = $Interface/TopBar/Content/dockMenuButton
-@onready var dockTitle: Label = $Interface/TopBar/Content/Title
+@onready var leftSidebarToggle: Button = $Interface/TopBar/Content/leftSidebarToggle
+@onready var rightSidebarToggle: Button = $Interface/TopBar/Content/rightSidebarToggle
 @onready var dockHost: Control = $Interface/DockHost
 @onready var dockResizeHandle: ColorRect = $Interface/DockResizeHandle
+@onready var rightDock: Panel = $Interface/RightDock
+@onready var selectionLabel: Label = $Interface/RightDock/Margin/Content/Selection
 
 var dockDefinitions: Array[Dictionary] = []
 var currentDock: Control
 var dockMenu: PopupPanel
 var dockWidth := 272.0
+var rightDockWidth := 300.0
+var leftSidebarOpen := true
+var rightSidebarOpen := true
 var isResizingDock := false
+var leftSidebarTween: Tween
+var rightSidebarTween: Tween
+var boardLayoutTween: Tween
 
 func _ready() -> void:
 	configureTopBar()
-	dockMenuButton.pressed.connect(showDockMenu.bind(dockMenuButton))
+	configureRightDock()
+	leftSidebarToggle.toggled.connect(setLeftSidebarOpen)
+	rightSidebarToggle.toggled.connect(setRightSidebarOpen)
 	dockResizeHandle.gui_input.connect(handleDockResizeInput)
 	dockResizeHandle.mouse_entered.connect(func() -> void: dockResizeHandle.color = Color("5d7090"))
 	dockResizeHandle.mouse_exited.connect(func() -> void:
@@ -32,6 +47,8 @@ func _ready() -> void:
 		return
 	buildDockMenu()
 	activateDock(String(dockDefinitions[0].dockId))
+	setLeftSidebarOpen(leftSidebarToggle.button_pressed, false)
+	setRightSidebarOpen(rightSidebarToggle.button_pressed, false)
 
 func _process(_delta: float) -> void:
 	if currentDock == null or not currentDock.has_method("updateCursorInfo"):
@@ -82,10 +99,10 @@ func activateDock(dockId: String) -> void:
 	currentDock = dockScene.instantiate() as Control
 	dockHost.add_child(currentDock)
 	currentDock.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	if currentDock.has_signal("dockMenuRequested"):
+		currentDock.connect("dockMenuRequested", showDockMenu)
 	if currentDock.has_signal("inkSelected"):
 		currentDock.connect("inkSelected", selectInk)
-	dockTitle.text = String(definition.dockTitle)
-	dockMenuButton.icon = definition.dockIcon
 	setDockWidth(float(definition.dockWidth))
 
 func showDockMenu(menuButton: Button) -> void:
@@ -96,6 +113,76 @@ func showDockMenu(menuButton: Button) -> void:
 
 func selectInk(ink: Dictionary) -> void:
 	board.call("selectTool", String(ink.toolId))
+	selectionLabel.text = String(ink.title)
+
+func setLeftSidebarOpen(isOpen: bool, animate := true) -> void:
+	leftSidebarOpen = isOpen
+	leftSidebarToggle.set_pressed_no_signal(isOpen)
+	updateSidebarLayout(animate)
+
+func setRightSidebarOpen(isOpen: bool, animate := true) -> void:
+	rightSidebarOpen = isOpen
+	rightSidebarToggle.set_pressed_no_signal(isOpen)
+	updateSidebarLayout(animate)
+
+func setDockWidth(requestedWidth: float) -> void:
+	var maximumWidth := maxf(208.0, minf(480.0, size.x * 0.5))
+	dockWidth = clampf(requestedWidth, 208.0, maximumWidth)
+	updateSidebarLayout(false)
+
+func updateSidebarLayout(animate: bool) -> void:
+	leftSidebarToggle.icon = panelLeftCloseIcon if leftSidebarOpen else panelLeftOpenIcon
+	rightSidebarToggle.icon = panelRightCloseIcon if rightSidebarOpen else panelRightOpenIcon
+	leftSidebarToggle.tooltip_text = "CloseLeftSidebar" if leftSidebarOpen else "OpenLeftSidebar"
+	rightSidebarToggle.tooltip_text = "CloseRightSidebar" if rightSidebarOpen else "OpenRightSidebar"
+	var leftStart := 0.0 if leftSidebarOpen else -dockWidth
+	var leftEnd := dockWidth if leftSidebarOpen else 0.0
+	var rightStart := -rightDockWidth if rightSidebarOpen else 0.0
+	var rightEnd := 0.0 if rightSidebarOpen else rightDockWidth
+	var resizeStart := dockWidth if leftSidebarOpen else -6.0
+	var resizeEnd := dockWidth + 6.0 if leftSidebarOpen else 0.0
+	var boardLeft := dockWidth if leftSidebarOpen else 0.0
+	var boardRight := rightDockWidth if rightSidebarOpen else 0.0
+	if leftSidebarTween:
+		leftSidebarTween.kill()
+	if rightSidebarTween:
+		rightSidebarTween.kill()
+	if boardLayoutTween:
+		boardLayoutTween.kill()
+	if not animate:
+		dockHost.offset_left = leftStart
+		dockHost.offset_right = leftEnd
+		rightDock.offset_left = rightStart
+		rightDock.offset_right = rightEnd
+		dockResizeHandle.offset_left = resizeStart
+		dockResizeHandle.offset_right = resizeEnd
+		dockResizeHandle.visible = leftSidebarOpen
+		boardViewport.offset_left = boardLeft
+		boardViewport.offset_right = -boardRight
+		return
+	dockHost.visible = true
+	rightDock.visible = true
+	dockResizeHandle.visible = true
+	leftSidebarTween = create_tween().set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
+	leftSidebarTween.tween_property(dockHost, "offset_left", leftStart, sidebarAnimationDuration)
+	leftSidebarTween.parallel().tween_property(dockHost, "offset_right", leftEnd, sidebarAnimationDuration)
+	leftSidebarTween.parallel().tween_property(dockResizeHandle, "offset_left", resizeStart, sidebarAnimationDuration)
+	leftSidebarTween.parallel().tween_property(dockResizeHandle, "offset_right", resizeEnd, sidebarAnimationDuration)
+	leftSidebarTween.chain().tween_callback(finishLeftSidebarTransition.bind(leftSidebarOpen))
+	rightSidebarTween = create_tween().set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
+	rightSidebarTween.tween_property(rightDock, "offset_left", rightStart, sidebarAnimationDuration)
+	rightSidebarTween.parallel().tween_property(rightDock, "offset_right", rightEnd, sidebarAnimationDuration)
+	rightSidebarTween.chain().tween_callback(finishRightSidebarTransition.bind(rightSidebarOpen))
+	boardLayoutTween = create_tween().set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
+	boardLayoutTween.tween_property(boardViewport, "offset_left", boardLeft, sidebarAnimationDuration)
+	boardLayoutTween.parallel().tween_property(boardViewport, "offset_right", -boardRight, sidebarAnimationDuration)
+
+func finishLeftSidebarTransition(isOpen: bool) -> void:
+	if leftSidebarOpen == isOpen:
+		dockResizeHandle.visible = isOpen
+
+func finishRightSidebarTransition(_isOpen: bool) -> void:
+	pass
 
 func handleDockResizeInput(event: InputEvent) -> void:
 	var mouseButton := event as InputEventMouseButton
@@ -109,14 +196,6 @@ func handleDockResizeInput(event: InputEvent) -> void:
 		setDockWidth(get_global_mouse_position().x)
 		get_viewport().set_input_as_handled()
 
-func setDockWidth(requestedWidth: float) -> void:
-	var maximumWidth := maxf(208.0, minf(480.0, size.x * 0.5))
-	dockWidth = clampf(requestedWidth, 208.0, maximumWidth)
-	dockHost.offset_right = dockWidth
-	boardViewport.offset_left = dockWidth
-	dockResizeHandle.offset_left = dockWidth
-	dockResizeHandle.offset_right = dockWidth + 6.0
-
 func syncDockLayout() -> void:
 	setDockWidth(dockWidth)
 
@@ -126,15 +205,28 @@ func configureTopBar() -> void:
 	topBarBox.border_width_bottom = 1
 	topBarBox.border_color = Color("263346")
 	topBar.add_theme_stylebox_override("panel", topBarBox)
-	dockTitle.add_theme_color_override("font_color", Color("99a8bf"))
-	dockTitle.add_theme_font_size_override("font_size", 16)
-	dockMenuButton.expand_icon = true
-	dockMenuButton.add_theme_color_override("icon_normal_color", Color("8d9db5"))
-	dockMenuButton.add_theme_color_override("icon_hover_color", Color("e1e9f6"))
-	dockMenuButton.add_theme_stylebox_override("normal", makeMenuItemBox(Color.TRANSPARENT))
-	dockMenuButton.add_theme_stylebox_override("hover", makeMenuItemBox(Color("2b374a")))
+	for sidebarToggle in [leftSidebarToggle, rightSidebarToggle]:
+		sidebarToggle.expand_icon = true
+		sidebarToggle.add_theme_color_override("icon_normal_color", Color("8d9db5"))
+		sidebarToggle.add_theme_color_override("icon_hover_color", Color("e1e9f6"))
+		sidebarToggle.add_theme_stylebox_override("normal", makeMenuItemBox(Color.TRANSPARENT))
+		sidebarToggle.add_theme_stylebox_override("hover", makeMenuItemBox(Color("2b374a")))
 	dockResizeHandle.color = Color("263346")
 	dockResizeHandle.mouse_default_cursor_shape = Control.CURSOR_HSIZE
+
+func configureRightDock() -> void:
+	var rightDockBox := StyleBoxFlat.new()
+	rightDockBox.bg_color = Color("151c27")
+	rightDockBox.border_width_left = 1
+	rightDockBox.border_color = Color("263346")
+	rightDock.add_theme_stylebox_override("panel", rightDockBox)
+	var title := $Interface/RightDock/Margin/Content/Title as Label
+	var selectedLabel := $Interface/RightDock/Margin/Content/SelectedLabel as Label
+	title.add_theme_color_override("font_color", Color("a4b0c5"))
+	title.add_theme_font_size_override("font_size", 16)
+	selectedLabel.add_theme_color_override("font_color", Color("68758a"))
+	selectionLabel.add_theme_color_override("font_color", Color("55dfeb"))
+	selectionLabel.add_theme_font_size_override("font_size", 20)
 
 func makeMenuBox() -> StyleBoxFlat:
 	var box := StyleBoxFlat.new()
