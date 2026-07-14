@@ -9,6 +9,9 @@ uniform float shade4 : hint_range(0.0, 2.0) = 0.94;
 uniform float shade5 : hint_range(0.0, 2.0) = 0.97;
 uniform float patternSize : hint_range(64.0, 4096.0) = 1024.0;
 uniform vec2 boardSize = vec2(2560.0, 1792.0);
+uniform vec4 edgeColor : source_color = vec4(0.17, 0.23, 0.22, 1.0);
+uniform float edgeWidth : hint_range(1.0, 256.0) = 48.0;
+uniform float edgeFade : hint_range(0.1, 128.0) = 12.0;
 
 const float sqrt3 = 1.7320508;
 
@@ -41,5 +44,12 @@ void fragment() {
 	else if (sector == 3) brightness = shade3;
 	else if (sector == 4) brightness = shade4;
 	else if (sector == 5) brightness = shade5;
-	COLOR = vec4(applyShade(baseColor.rgb, brightness), baseColor.a);
+	vec2 edgeDistances = min(UV, vec2(1.0) - UV) * boardSize;
+	float edgeDistance = min(edgeDistances.x, edgeDistances.y);
+	float edgeFadeWidth = min(edgeFade, edgeWidth * 0.5);
+	float edgeStrength = 1.0 - smoothstep(edgeFadeWidth, edgeWidth, edgeDistance);
+	float edgeOpacity = smoothstep(0.0, edgeFadeWidth, edgeDistance);
+	vec3 boardColor = applyShade(baseColor.rgb, brightness);
+	boardColor = mix(boardColor, edgeColor.rgb, edgeStrength * edgeColor.a);
+	COLOR = vec4(boardColor, baseColor.a * edgeOpacity);
 }

@@ -10,6 +10,9 @@ func getCaptureZoom() -> float:
 			captureZoom = maxf(argument.trim_prefix("--captureZoom=").to_float(), 0.01)
 	return captureZoom
 
+func shouldCaptureSelector() -> bool:
+	return OS.get_cmdline_user_args().has("--captureSelector")
+
 func captureBoard() -> void:
 	var mainScene := load("res://main.tscn") as PackedScene
 	var main := mainScene.instantiate()
@@ -33,7 +36,10 @@ func captureBoard() -> void:
 	var rightTile := occupancy[Vector2i(1, 0)] as Node2D
 	var leftTile := occupancy[Vector2i(0, 0)] as Node2D
 	assert(leftTile.z_index > rightTile.z_index)
-	board.get_node("Selector").visible = false
+	var selector := board.get_node("Selector") as ColorRect
+	selector.visible = shouldCaptureSelector()
+	if selector.visible:
+		selector.position = Vector2(8, -8) * float(board.get("cellSize"))
 	camera.zoom = Vector2.ONE * getCaptureZoom()
 	for frame in 5:
 		await process_frame
