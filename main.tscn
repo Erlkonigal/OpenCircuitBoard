@@ -112,7 +112,7 @@ corner_radius_bottom_right = 2
 corner_radius_bottom_left = 2
 
 [sub_resource type="StyleBoxFlat" id="styleBoxSidebarIconPressed"]
-bg_color = Color(0.1, 0.2, 0.25, 1)
+bg_color = Color(0, 0, 0, 0)
 corner_radius_top_left = 2
 corner_radius_top_right = 2
 corner_radius_bottom_right = 2
@@ -261,7 +261,8 @@ theme_override_constants/separation = 6
 
 [node name="leftSidebarToggle" type="Button" parent="Interface/TopBar/Margin/Rows/CommandRow"]
 layout_mode = 2
-custom_minimum_size = Vector2(28, 28)
+custom_minimum_size = Vector2(18, 18)
+size_flags_vertical = 4
 toggle_mode = true
 button_pressed = true
 expand_icon = true
@@ -272,6 +273,7 @@ theme_override_colors/icon_pressed_color = Color(0.76, 0.94, 0.96, 1)
 theme_override_styles/normal = SubResource("styleBoxSidebarIconNormal")
 theme_override_styles/hover = SubResource("styleBoxSidebarIconHover")
 theme_override_styles/pressed = SubResource("styleBoxSidebarIconPressed")
+theme_override_styles/hover_pressed = SubResource("styleBoxSidebarIconHover")
 
 [node name="ModeLabel" type="Label" parent="Interface/TopBar/Margin/Rows/CommandRow"]
 layout_mode = 2
@@ -334,7 +336,8 @@ vertical_alignment = 1
 
 [node name="rightSidebarToggle" type="Button" parent="Interface/TopBar/Margin/Rows/CommandRow"]
 layout_mode = 2
-custom_minimum_size = Vector2(28, 28)
+custom_minimum_size = Vector2(18, 18)
+size_flags_vertical = 4
 toggle_mode = true
 button_pressed = true
 expand_icon = true
@@ -345,6 +348,7 @@ theme_override_colors/icon_pressed_color = Color(0.76, 0.94, 0.96, 1)
 theme_override_styles/normal = SubResource("styleBoxSidebarIconNormal")
 theme_override_styles/hover = SubResource("styleBoxSidebarIconHover")
 theme_override_styles/pressed = SubResource("styleBoxSidebarIconPressed")
+theme_override_styles/hover_pressed = SubResource("styleBoxSidebarIconHover")
 
 [node name="LeftBar" type="PanelContainer" parent="Interface"]
 anchors_preset = 13
