@@ -1,6 +1,6 @@
 extends Node2D
 
-const orGateIcon := preload("res://assets/orGate.svg")
+const InkRegistry := preload("res://scripts/inkRegistry.gd")
 
 @export_group("Board")
 @export var cellSize := 64
@@ -20,14 +20,11 @@ const orGateIcon := preload("res://assets/orGate.svg")
 
 var validRect := Rect2()
 var occupancy: Dictionary[Vector2i, Node2D] = {}
-var selectedTool := "orGate"
-var toolRegistry := {
-	"wire": {"color": Color("bdc3c7"), "icon": null},
-	"orGate": {"color": Color("2ecc71"), "icon": orGateIcon},
-	"processor": {"color": Color("e74c3c"), "icon": null},
-}
+var selectedTool := "or"
+var toolRegistry: Dictionary = {}
 
 func _ready() -> void:
+	toolRegistry = InkRegistry.getBoardToolRegistry()
 	var boardSize := Vector2(gridWidthCount * cellSize, gridHeightCount * cellSize)
 	validRect = Rect2(-boardSize / 2.0, boardSize)
 	configurePatternCanvas(
