@@ -98,12 +98,7 @@ content_margin_left = 10.0
 content_margin_right = 10.0
 
 [sub_resource type="StyleBoxFlat" id="styleBoxSidebarIconNormal"]
-bg_color = Color(0.065, 0.085, 0.12, 1)
-border_width_left = 1
-border_width_top = 1
-border_width_right = 1
-border_width_bottom = 1
-border_color = Color(0.15, 0.2, 0.28, 1)
+bg_color = Color(0, 0, 0, 0)
 corner_radius_top_left = 2
 corner_radius_top_right = 2
 corner_radius_bottom_right = 2
@@ -111,11 +106,6 @@ corner_radius_bottom_left = 2
 
 [sub_resource type="StyleBoxFlat" id="styleBoxSidebarIconHover"]
 bg_color = Color(0.11, 0.15, 0.21, 1)
-border_width_left = 1
-border_width_top = 1
-border_width_right = 1
-border_width_bottom = 1
-border_color = Color(0.33, 0.43, 0.56, 1)
 corner_radius_top_left = 2
 corner_radius_top_right = 2
 corner_radius_bottom_right = 2
@@ -123,11 +113,6 @@ corner_radius_bottom_left = 2
 
 [sub_resource type="StyleBoxFlat" id="styleBoxSidebarIconPressed"]
 bg_color = Color(0.1, 0.2, 0.25, 1)
-border_width_left = 1
-border_width_top = 1
-border_width_right = 1
-border_width_bottom = 1
-border_color = Color(0.28, 0.65, 0.72, 1)
 corner_radius_top_left = 2
 corner_radius_top_right = 2
 corner_radius_bottom_right = 2
@@ -158,9 +143,9 @@ layout_mode = 1
 anchors_preset = 15
 anchor_right = 1.0
 anchor_bottom = 1.0
-offset_left = 280.0
+offset_left = 0.0
 offset_top = 68.0
-offset_right = -300.0
+offset_right = 0.0
 grow_horizontal = 2
 grow_vertical = 2
 stretch = true
