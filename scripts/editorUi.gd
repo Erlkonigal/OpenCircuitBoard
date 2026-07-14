@@ -1,7 +1,16 @@
 extends Control
 
+const panelLeftCloseIcon := preload("res://assets/panelLeftClose.svg")
+const panelLeftOpenIcon := preload("res://assets/panelLeftOpen.svg")
+const panelRightCloseIcon := preload("res://assets/panelRightClose.svg")
+const panelRightOpenIcon := preload("res://assets/panelRightOpen.svg")
+
 @onready var board: Node2D = $BoardViewport/SubViewport/CircuitBoard
 @onready var boardCamera: Camera2D = $BoardViewport/SubViewport/BoardCamera
+@onready var boardViewport: SubViewportContainer = $BoardViewport
+@onready var topBar: Panel = $Interface/TopBar
+@onready var leftBar: PanelContainer = $Interface/LeftBar
+@onready var rightBar: PanelContainer = $Interface/RightBar
 @onready var wireButton: Button = $Interface/LeftBar/Content/WireButton
 @onready var orGateButton: Button = $Interface/LeftBar/Content/OrGateButton
 @onready var processorButton: Button = $Interface/LeftBar/Content/ProcessorButton
@@ -10,8 +19,15 @@ extends Control
 @onready var boardSizeLabel: Label = $Interface/LeftBar/Content/BoardSize
 @onready var pointerLabel: Label = $Interface/LeftBar/Content/Pointer
 @onready var zoomLabel: Label = $Interface/TopBar/Margin/Rows/CommandRow/ZoomLabel
+@onready var leftSidebarToggle: Button = $Interface/TopBar/Margin/Rows/CommandRow/leftSidebarToggle
+@onready var rightSidebarToggle: Button = $Interface/TopBar/Margin/Rows/CommandRow/rightSidebarToggle
 
 var fullscreenExitMode := Window.MODE_WINDOWED
+var leftSidebarWidth := 0.0
+var rightSidebarWidth := 0.0
+var topBarHeight := 0.0
+var leftSidebarOpen := true
+var rightSidebarOpen := true
 
 var toolDescriptions := {
 	"wire": "Place a wire marker on an available cell.",
@@ -29,8 +45,15 @@ func _ready() -> void:
 	wireButton.pressed.connect(selectTool.bind("wire"))
 	orGateButton.pressed.connect(selectTool.bind("orGate"))
 	processorButton.pressed.connect(selectTool.bind("processor"))
+	leftSidebarToggle.toggled.connect(setLeftSidebarOpen)
+	rightSidebarToggle.toggled.connect(setRightSidebarOpen)
+	leftSidebarWidth = leftBar.offset_right - leftBar.offset_left
+	rightSidebarWidth = rightBar.offset_right - rightBar.offset_left
+	topBarHeight = topBar.offset_bottom - topBar.offset_top
 	boardSizeLabel.text = "%d x %d cells" % [board.gridWidthCount, board.gridHeightCount]
 	selectTool("orGate")
+	setLeftSidebarOpen(leftSidebarToggle.button_pressed)
+	setRightSidebarOpen(rightSidebarToggle.button_pressed)
 
 func _process(_delta: float) -> void:
 	updatePointerStatus()
@@ -54,6 +77,27 @@ func toggleFullscreen() -> void:
 		return
 	fullscreenExitMode = window.mode
 	window.mode = Window.MODE_FULLSCREEN
+
+func setLeftSidebarOpen(isOpen: bool) -> void:
+	leftSidebarOpen = isOpen
+	leftSidebarToggle.set_pressed_no_signal(isOpen)
+	updateSidebarLayout()
+
+func setRightSidebarOpen(isOpen: bool) -> void:
+	rightSidebarOpen = isOpen
+	rightSidebarToggle.set_pressed_no_signal(isOpen)
+	updateSidebarLayout()
+
+func updateSidebarLayout() -> void:
+	leftBar.visible = leftSidebarOpen
+	rightBar.visible = rightSidebarOpen
+	boardViewport.offset_left = leftSidebarWidth if leftSidebarOpen else 0.0
+	boardViewport.offset_top = topBarHeight
+	boardViewport.offset_right = -rightSidebarWidth if rightSidebarOpen else 0.0
+	leftSidebarToggle.icon = panelLeftCloseIcon if leftSidebarOpen else panelLeftOpenIcon
+	rightSidebarToggle.icon = panelRightCloseIcon if rightSidebarOpen else panelRightOpenIcon
+	leftSidebarToggle.tooltip_text = "Collapse component library" if leftSidebarOpen else "Expand component library"
+	rightSidebarToggle.tooltip_text = "Collapse inspector" if rightSidebarOpen else "Expand inspector"
 
 func selectTool(toolId: String) -> void:
 	board.call("selectTool", toolId)
