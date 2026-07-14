@@ -20,6 +20,11 @@ func shouldCaptureInterface() -> bool:
 	return OS.get_cmdline_user_args().has("--captureInterface")
 
 func captureBoard() -> void:
+	var captureViewportSize := Vector2i(
+		int(ProjectSettings.get_setting("display/window/size/viewport_width")),
+		int(ProjectSettings.get_setting("display/window/size/viewport_height"))
+	)
+	root.size = captureViewportSize
 	var mainScene := load("res://main.tscn") as PackedScene
 	var main := mainScene.instantiate()
 	root.add_child(main)
@@ -90,6 +95,31 @@ func captureBoard() -> void:
 	if shouldCaptureBoardEdge():
 		assert(is_equal_approx(camera.global_position.x, boardBounds.position.x))
 		assert(is_equal_approx(camera.global_position.y, boardBounds.position.y))
+	if shouldCaptureInterface():
+		var topBarContent := main.get_node("Interface/TopBar/Content") as Control
+		for child in topBarContent.get_children():
+			var topBarButton := child as Button
+			if topBarButton == null:
+				continue
+			var normalStyle := topBarButton.get_theme_stylebox("normal") as StyleBoxFlat
+			var hoverStyle := topBarButton.get_theme_stylebox("hover") as StyleBoxFlat
+			var pressedStyle := topBarButton.get_theme_stylebox("pressed") as StyleBoxFlat
+			var hoverPressedStyle := topBarButton.get_theme_stylebox("hover_pressed") as StyleBoxFlat
+			assert(normalStyle != null)
+			assert(hoverStyle != null)
+			assert(pressedStyle != null)
+			assert(hoverPressedStyle != null)
+			assert(pressedStyle.bg_color.is_equal_approx(Color.TRANSPARENT))
+			assert(hoverPressedStyle.bg_color.is_equal_approx(hoverStyle.bg_color))
+			assert(is_equal_approx(normalStyle.content_margin_left, pressedStyle.content_margin_left))
+			assert(is_equal_approx(normalStyle.content_margin_top, pressedStyle.content_margin_top))
+			assert(is_equal_approx(normalStyle.content_margin_right, pressedStyle.content_margin_right))
+			assert(is_equal_approx(normalStyle.content_margin_bottom, pressedStyle.content_margin_bottom))
+			assert(topBarButton.get_theme_color("icon_pressed_color").is_equal_approx(Color("f2c94c")))
+			assert(topBarButton.get_theme_color("icon_hover_pressed_color").is_equal_approx(Color("f2c94c")))
+		main.call("setLeftSidebarOpen", false, false)
+		for frame in 2:
+			await process_frame
 
 	var viewport := main.get_node("BoardViewport/SubViewport") as SubViewport
 	var image := viewport.get_texture().get_image()

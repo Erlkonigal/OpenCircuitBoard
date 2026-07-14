@@ -6,6 +6,7 @@ const panelLeftOpenIcon := preload("res://assets/panelLeftOpen.svg")
 const panelRightCloseIcon := preload("res://assets/panelRightClose.svg")
 const panelRightOpenIcon := preload("res://assets/panelRightOpen.svg")
 const sidebarAnimationDuration := 0.18
+const topBarButtonActiveIconColor := Color("f2c94c")
 
 @onready var board: Node2D = $BoardViewport/SubViewport/CircuitBoard
 @onready var boardViewport: SubViewportContainer = $BoardViewport
@@ -205,14 +206,23 @@ func configureTopBar() -> void:
 	topBarBox.border_width_bottom = 1
 	topBarBox.border_color = Color("263346")
 	topBar.add_theme_stylebox_override("panel", topBarBox)
-	for sidebarToggle in [leftSidebarToggle, rightSidebarToggle]:
-		sidebarToggle.expand_icon = true
-		sidebarToggle.add_theme_color_override("icon_normal_color", Color("8d9db5"))
-		sidebarToggle.add_theme_color_override("icon_hover_color", Color("e1e9f6"))
-		sidebarToggle.add_theme_stylebox_override("normal", makeMenuItemBox(Color.TRANSPARENT))
-		sidebarToggle.add_theme_stylebox_override("hover", makeMenuItemBox(Color("2b374a")))
+	for child in $Interface/TopBar/Content.get_children():
+		var topBarButton := child as Button
+		if topBarButton:
+			configureTopBarButton(topBarButton)
 	dockResizeHandle.color = Color("263346")
 	dockResizeHandle.mouse_default_cursor_shape = Control.CURSOR_HSIZE
+
+func configureTopBarButton(topBarButton: Button) -> void:
+	topBarButton.expand_icon = true
+	topBarButton.add_theme_color_override("icon_normal_color", Color("8d9db5"))
+	topBarButton.add_theme_color_override("icon_hover_color", Color("e1e9f6"))
+	topBarButton.add_theme_color_override("icon_pressed_color", topBarButtonActiveIconColor)
+	topBarButton.add_theme_color_override("icon_hover_pressed_color", topBarButtonActiveIconColor)
+	topBarButton.add_theme_stylebox_override("normal", makeMenuItemBox(Color.TRANSPARENT))
+	topBarButton.add_theme_stylebox_override("hover", makeMenuItemBox(Color("2b374a")))
+	topBarButton.add_theme_stylebox_override("pressed", makeMenuItemBox(Color.TRANSPARENT))
+	topBarButton.add_theme_stylebox_override("hover_pressed", makeMenuItemBox(Color("2b374a")))
 
 func configureRightDock() -> void:
 	var rightDockBox := StyleBoxFlat.new()
