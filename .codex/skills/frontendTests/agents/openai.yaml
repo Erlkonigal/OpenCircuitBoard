@@ -1,4 +1,0 @@
-interface:
-  display_name: "前端测试"
-  short_description: "Run and inspect Godot frontend test scenarios"
-  default_prompt: "Use $frontendTests to run scripts/tests/frontendTest.gd, inspect capture.png, and validate the changed surface with the relevant scenario."

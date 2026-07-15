@@ -1,5 +1,5 @@
 ---
-name: frontendTests
+name: frontend-tests
 description: Run and inspect split Godot frontend test scenarios through scripts/tests/frontendTest.gd. Use for frontend editor, rendering, tile, selector, board-boundary, or interaction changes before handoff.
 ---
 
