@@ -1,1 +1,4 @@
-<svg width="64" height="64" viewBox="0 0 64 64" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M17 50V14H34C44 14 44 32 34 32H17M32 32L47 50" stroke="white" stroke-width="6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+<!-- Derived from Tabler Icons letter-w. See assets/thirdPartyNotices.md. -->
+<svg width="64" height="64" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <path d="M4 4L8 20L12 6L16 20L20 4" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>

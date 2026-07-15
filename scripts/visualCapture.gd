@@ -709,11 +709,22 @@ func captureBoard() -> void:
 	assert(is_equal_approx(dockResizeHandle.get_global_rect().position.x, 272.0))
 	assert(is_equal_approx(rightDockResizeHandle.get_global_rect().position.x, 1002.0))
 	assert(circuitEditorDock.find_children("*", "CheckBox", true, false).is_empty())
-	assert(circuitEditorDock.find_children("*", "SpinBox", true, false).size() == 4)
+	assert(circuitEditorDock.find_children("*", "SpinBox", true, false).is_empty())
+	var circuitEditorLabelTexts: Array[String] = []
 	for labelNode in circuitEditorDock.find_children("*", "Label", true, false):
 		var label := labelNode as Label
+		circuitEditorLabelTexts.append(label.text)
 		assert(label.text != "Layers")
 		assert(label.text != "Tools")
+	assert(circuitEditorLabelTexts.has("Circuit Editor"))
+	assert(circuitEditorLabelTexts.has("Cursor Info"))
+	assert(not circuitEditorLabelTexts.has("CircuitEditor"))
+	assert(not circuitEditorLabelTexts.has("CursorInfo"))
+	assert(not circuitEditorLabelTexts.has("Array"))
+	assert(not circuitEditorLabelTexts.has("Repeat"))
+	assert(not circuitEditorLabelTexts.has("Angle"))
+	assert(not circuitEditorLabelTexts.has("OffsetX"))
+	assert(not circuitEditorLabelTexts.has("OffsetY"))
 	var dockDefinitions: Array[Dictionary] = main.get("dockDefinitions")
 	assert(dockDefinitions.size() == 3)
 	var circuitEditorDefinition := findDockDefinition(dockDefinitions, "circuitEditor")
@@ -722,6 +733,8 @@ func captureBoard() -> void:
 	assert(not circuitEditorDefinition.is_empty())
 	assert(not clipboardDefinition.is_empty())
 	assert(not eventLogDefinition.is_empty())
+	assert(String(circuitEditorDefinition.get("dockTitle", "")) == "Circuit Editor")
+	assert(String(eventLogDefinition.get("dockTitle", "")) == "Event Log")
 	for definition in [circuitEditorDefinition, clipboardDefinition, eventLogDefinition]:
 		var definitionIcon := definition.get("dockIcon") as Texture2D
 		assert(definitionIcon != null)
@@ -739,9 +752,9 @@ func captureBoard() -> void:
 	for menuButtonNode in dockMenuGrid.get_children():
 		var menuButton := menuButtonNode as Button
 		assertIconButton(menuButton)
-	var circuitEditorMenuButton := findDockMenuButton(dockMenuGrid, "CircuitEditor")
+	var circuitEditorMenuButton := findDockMenuButton(dockMenuGrid, "Circuit Editor")
 	var clipboardMenuButton := findDockMenuButton(dockMenuGrid, "Clipboard")
-	var eventLogMenuButton := findDockMenuButton(dockMenuGrid, "EventLog")
+	var eventLogMenuButton := findDockMenuButton(dockMenuGrid, "Event Log")
 	assert(circuitEditorMenuButton != null)
 	assert(clipboardMenuButton != null)
 	assert(eventLogMenuButton != null)
@@ -821,6 +834,10 @@ func captureBoard() -> void:
 	assertInkButton(busButton, InkRegistry.getInk("bus"), false)
 	var traceButton := inkButtons.get("trace") as Button
 	assertInkButton(traceButton, InkRegistry.getInk("trace"), false)
+	var readButton := inkButtons.get("read") as Button
+	assertInkButton(readButton, InkRegistry.getInk("read"), false)
+	var writeButton := inkButtons.get("write") as Button
+	assertInkButton(writeButton, InkRegistry.getInk("write"), false)
 	var interactionModeBeforeTraceMenu := int(board.get("interactionMode"))
 	root.push_input(makeMouseButtonEvent(traceButton, MOUSE_BUTTON_RIGHT, true))
 	await process_frame
@@ -956,6 +973,10 @@ func captureBoard() -> void:
 	assert(eventLogDockMenuButton.vertical_icon_alignment == VERTICAL_ALIGNMENT_CENTER)
 	assert(eventLogDockMenuButton.icon.get_size() == Vector2(16, 16))
 	assert(eventLogDockMenuButton.icon == eventLogMenuButton.icon)
+	var eventLogContent := eventLogDock.get_node("background/contentFrame/contentRoot") as VBoxContainer
+	var eventLogHeader := eventLogContent.get_child(0) as HBoxContainer
+	var eventLogTitle := eventLogHeader.get_child(1) as Label
+	assert(eventLogTitle.text == "Event Log")
 	var eventLog := eventLogDock.get_node("background/contentFrame/contentRoot/eventLog") as RichTextLabel
 	assert(eventLog.get_parsed_text().contains("HistoryMarkerOne"))
 	main.call("setDockWidth", 1.0)

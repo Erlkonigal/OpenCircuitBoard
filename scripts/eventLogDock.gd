@@ -18,7 +18,7 @@ var dockMenuButton: Button
 
 func _init() -> void:
 	dockId = "eventLog"
-	dockTitle = "EventLog"
+	dockTitle = "Event Log"
 	dockWidth = 272.0
 	dockIcon = eventLogIcon
 

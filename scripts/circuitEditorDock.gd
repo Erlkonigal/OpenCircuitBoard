@@ -13,7 +13,6 @@ const sidebarBackgroundColor := Color("131c28")
 const sectionBackgroundColor := Color("1a2432")
 const sectionBorderColor := Color("26364a")
 const fieldBackgroundColor := Color("111a26")
-const fieldFocusBorderColor := Color("536b86")
 const primaryTextColor := Color("b4c1d3")
 const mutedTextColor := Color("75859b")
 const controlHoverColor := Color("26364a")
@@ -29,7 +28,7 @@ var dockMenuButton: Button
 
 func _init() -> void:
 	dockId = "circuitEditor"
-	dockTitle = "CircuitEditor"
+	dockTitle = "Circuit Editor"
 	dockWidth = 272.0
 	dockIcon = circuitEditorIcon
 
@@ -67,7 +66,6 @@ func buildDock() -> void:
 
 	content.add_child(buildCursorInfoSection())
 	content.add_child(buildInksSection())
-	content.add_child(buildArraySection())
 
 func buildHeader() -> Control:
 	var header := HBoxContainer.new()
@@ -106,7 +104,7 @@ func buildHeader() -> Control:
 func buildCursorInfoSection() -> Control:
 	var panel := makeSection()
 	var section := getSectionContent(panel)
-	section.add_child(makeSectionTitle("CursorInfo"))
+	section.add_child(makeSectionTitle("Cursor Info"))
 	hoveredInkLabel = makeInfoValue("None")
 	section.add_child(makeInfoField("HoveredInk", hoveredInkLabel))
 	var positionRow := HBoxContainer.new()
@@ -142,21 +140,6 @@ func buildInksSection() -> Control:
 		else:
 			grid = section.get_child(-1) as GridContainer
 		grid.add_child(makeInkButton(ink))
-	return panel
-
-func buildArraySection() -> Control:
-	var panel := makeSection()
-	var section := getSectionContent(panel)
-	section.add_child(makeSectionTitle("Array"))
-	var parameterGrid := GridContainer.new()
-	parameterGrid.columns = 2
-	parameterGrid.add_theme_constant_override("h_separation", 4)
-	parameterGrid.add_theme_constant_override("v_separation", 4)
-	parameterGrid.add_child(makeArrayValueField("Repeat", 1, 1, 99))
-	parameterGrid.add_child(makeArrayValueField("Angle", 0, 0, 360))
-	parameterGrid.add_child(makeArrayValueField("OffsetX", 2, -999, 999))
-	parameterGrid.add_child(makeArrayValueField("OffsetY", 0, -999, 999))
-	section.add_child(parameterGrid)
 	return panel
 
 func makeSection() -> PanelContainer:
@@ -219,30 +202,6 @@ func makeSmallInfoValue(valueText: String) -> Label:
 	value.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
 	return value
 
-func makeSpinBox(value: float, minimum: float, maximum: float) -> SpinBox:
-	var spinBox := SpinBox.new()
-	spinBox.custom_minimum_size = Vector2(0, 22)
-	spinBox.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	spinBox.add_theme_constant_override("buttons_width", 10)
-	spinBox.add_theme_constant_override("field_and_buttons_separation", 1)
-	spinBox.min_value = minimum
-	spinBox.max_value = maximum
-	spinBox.value = value
-	spinBox.allow_greater = false
-	spinBox.allow_lesser = false
-	var lineEdit := spinBox.get_line_edit()
-	lineEdit.custom_minimum_size = Vector2(0, 22)
-	lineEdit.add_theme_constant_override("minimum_character_width", 1)
-	lineEdit.add_theme_font_size_override("font_size", 15)
-	lineEdit.add_theme_color_override("font_color", primaryTextColor)
-	lineEdit.add_theme_color_override("caret_color", primaryTextColor)
-	lineEdit.add_theme_color_override("selection_color", Color("38506b"))
-	lineEdit.add_theme_stylebox_override("normal", makeFieldBox(sectionBorderColor))
-	lineEdit.add_theme_stylebox_override("read_only", makeFieldBox(sectionBorderColor))
-	lineEdit.add_theme_stylebox_override("focus", makeFieldBox(fieldFocusBorderColor))
-	spinBox.value_changed.connect(func(_nextValue: float) -> void: recordEvent("ArrayUpdated"))
-	return spinBox
-
 func makeInfoField(labelText: String, value: Label) -> HBoxContainer:
 	var field := HBoxContainer.new()
 	field.size_flags_horizontal = Control.SIZE_EXPAND_FILL
@@ -250,14 +209,6 @@ func makeInfoField(labelText: String, value: Label) -> HBoxContainer:
 	field.add_child(makeInfoLabel(labelText))
 	value.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	field.add_child(value)
-	return field
-
-func makeArrayValueField(labelText: String, value: float, minimum: float, maximum: float) -> VBoxContainer:
-	var field := VBoxContainer.new()
-	field.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	field.add_theme_constant_override("separation", 2)
-	field.add_child(makeInfoLabel(labelText))
-	field.add_child(makeSpinBox(value, minimum, maximum))
 	return field
 
 func selectInk(ink: Dictionary, shouldRecordEvent := true, shouldEmit := true) -> void:
