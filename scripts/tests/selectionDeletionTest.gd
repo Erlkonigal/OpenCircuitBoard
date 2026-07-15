@@ -1,0 +1,43 @@
+extends RefCounted
+
+func run(context) -> void:
+	await context.resetMain()
+	await context.waitFrames(1)
+	var board := context.board as Node2D
+	var data := context.data as Dictionary
+	var selectionDeleteStart := Vector2i(-9, -12)
+	var selectionDeleteOther := selectionDeleteStart + Vector2i(2, 0)
+	var selectionDeleteGap := selectionDeleteStart + Vector2i(1, 0)
+	data["selectionDeleteStart"] = selectionDeleteStart
+	data["selectionDeleteOther"] = selectionDeleteOther
+	assert(board.call("placeTile", selectionDeleteStart, "or"))
+	assert(board.call("placeTile", selectionDeleteOther, "xor"))
+	board.call("setSelection", Rect2i(selectionDeleteStart, Vector2i(3, 1)))
+	var selectionBeforeDelete: Dictionary = board.call("getSelectionItem")
+	var clipboardHistoryBeforeDelete: Array = board.call("getClipboardHistory")
+	var historyBeforeSelectionDelete := (board.get("undoStack") as Array).size()
+	assert(board.call("handleLeftButtonPress", selectionDeleteGap, false))
+	assert((board.get("moveStartCoordinates") as Vector2i) == selectionDeleteGap)
+	assert((board.get("undoStack") as Array).size() == historyBeforeSelectionDelete)
+	board.call("finishMove")
+	assert(board.call("getSelectionItem") == selectionBeforeDelete)
+	assert(board.call("handleRightButtonPress", selectionDeleteGap))
+	var tileData: Dictionary = board.get("tileData")
+	assert(not tileData.has(selectionDeleteStart))
+	assert(not tileData.has(selectionDeleteOther))
+	assert((board.call("getSelectionItem").get("cells", []) as Array).is_empty())
+	assert(board.call("getClipboardHistory") == clipboardHistoryBeforeDelete)
+	assert((board.get("undoStack") as Array).size() == historyBeforeSelectionDelete + 1)
+	context.sendCtrlShortcut(board, KEY_Z)
+	assert(tileData.has(selectionDeleteStart))
+	assert(tileData.has(selectionDeleteOther))
+	assert(board.call("getSelectionItem") == selectionBeforeDelete)
+	context.sendCtrlShortcut(board, KEY_U)
+	assert(not tileData.has(selectionDeleteStart))
+	assert(not tileData.has(selectionDeleteOther))
+	assert((board.call("getSelectionItem").get("cells", []) as Array).is_empty())
+	context.sendCtrlShortcut(board, KEY_Z)
+	board.call("clearSelection")
+	board.call("removeTile", selectionDeleteStart)
+	board.call("removeTile", selectionDeleteOther)
+	assert((board.get("undoStack") as Array).size() == historyBeforeSelectionDelete)

@@ -1,4 +1,0 @@
-interface:
-  display_name: "Frontend Visual Validation"
-  short_description: "Capture and inspect Godot frontend visuals"
-  default_prompt: "Generate capture.png with scripts/visualCapture.gd and inspect it to validate the frontend."

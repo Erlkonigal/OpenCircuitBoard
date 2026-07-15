@@ -10,7 +10,7 @@
 ## Build And Validation
 
 - Use `make` targets for normal configure, build, test, and clean workflows. Native builds require matching Godot 4.7 headers, `g++`, CMake, and SCons.
-- Validate frontend editor, rendering, or interaction changes with `scripts/visualCapture.gd`; inspect the resulting `user://capture.png` before handoff.
+- Validate frontend editor, rendering, or interaction changes with `scripts/tests/frontendTest.gd`; inspect the resulting `user://capture.png` before handoff.
 - Run the relevant validation before handing work over. Each completed work session must finish with a Git commit whose subject is a title and whose body begins on line two with a concise summary of the completed work.
 - Preserve user changes in a dirty worktree; do not reset or discard them.
 

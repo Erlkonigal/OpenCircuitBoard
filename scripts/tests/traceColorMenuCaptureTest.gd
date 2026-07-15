@@ -1,0 +1,19 @@
+extends RefCounted
+
+const InkRegistry := preload("res://scripts/inkRegistry.gd")
+
+func run(context) -> Dictionary:
+	await context.resetMain()
+	context.main.call("activateDock", "circuitEditor")
+	await context.waitFrames()
+	var dock := context.getDockForSide(context.main, "left") as Control
+	var inkButtons: Dictionary = dock.get("inkButtons")
+	var traceButton := inkButtons.get("trace") as Button
+	dock.call("selectInk", InkRegistry.getInk("traceBlue"), false)
+	await context.waitFrames()
+	context.root.push_input(context.makeMouseButtonEvent(traceButton, MOUSE_BUTTON_RIGHT, true))
+	await context.waitFrames()
+	context.root.push_input(context.makeMouseButtonEvent(traceButton, MOUSE_BUTTON_RIGHT, false))
+	await context.waitFrames()
+	assert((context.main.get("inkVariantMenu") as PopupPanel).visible)
+	return {}
