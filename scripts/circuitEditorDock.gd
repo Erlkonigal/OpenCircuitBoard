@@ -283,6 +283,7 @@ func updateInkButtonStates() -> void:
 		var isSelected := InkRegistry.getPaletteToolId(selectedInk) == paletteToolId
 		var displayedInk: Dictionary = selectedInk if isSelected else paletteInk
 		button.set_pressed_no_signal(isSelected)
+		button.call("setInkIcon", displayedInk.get("icon") as Texture2D)
 		button.call("setInkAppearance", displayedInk.get("color", Color.WHITE), isSelected)
 
 func handleInkButtonInput(event: InputEvent, anchorButton: Button, paletteToolId: String) -> void:

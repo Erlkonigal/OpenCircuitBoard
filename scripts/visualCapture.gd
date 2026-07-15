@@ -214,11 +214,16 @@ func assertInkButton(button: Button, ink: Dictionary, isSelected: bool) -> void:
 	var pressedStyle := button.get_theme_stylebox("pressed") as StyleBoxFlat
 	assert(pressedStyle != null)
 	assert(pressedStyle.bg_color.is_equal_approx(inkColor))
-	var glyph := button.get_node("glyph") as Control
-	assert(glyph != null)
-	var expectedGlyphColor: Color = Color("111a26") if isSelected else inkColor
-	var actualGlyphColor: Color = glyph.get("glyphColor")
-	assert(actualGlyphColor.is_equal_approx(expectedGlyphColor))
+	var icon := button.get_node("inkIcon") as TextureRect
+	var expectedIcon := ink.get("icon") as Texture2D
+	assert(icon != null)
+	assert(expectedIcon != null)
+	assert(icon.texture == expectedIcon)
+	assert(expectedIcon.get_size() == Vector2(64, 64))
+	assert(icon.expand_mode == TextureRect.EXPAND_IGNORE_SIZE)
+	assert(icon.stretch_mode == TextureRect.STRETCH_SCALE)
+	var expectedIconColor: Color = Color("111a26") if isSelected else inkColor
+	assert(icon.modulate.is_equal_approx(expectedIconColor))
 	var variantIndicator := button.get_node_or_null("variantIndicator") as Control
 	var isExpandable := bool(button.get("isExpandable"))
 	assert((variantIndicator != null) == isExpandable)
@@ -233,6 +238,19 @@ func assertInkButton(button: Button, ink: Dictionary, isSelected: bool) -> void:
 		assert(indicatorRect.position.y >= buttonRect.get_center().y)
 		assert(indicatorRect.end.x <= buttonRect.end.x + 0.5)
 		assert(indicatorRect.end.y <= buttonRect.end.y + 0.5)
+
+func assertTileIcon(tile: Node2D, ink: Dictionary, cellSize: float) -> void:
+	var iconRect := tile.get_node("Icon") as TextureRect
+	var expectedIcon := ink.get("icon") as Texture2D
+	var inkColor: Color = ink.get("color", Color.WHITE)
+	assert(iconRect != null)
+	assert(expectedIcon != null)
+	assert(iconRect.visible)
+	assert(iconRect.texture == expectedIcon)
+	assert(iconRect.size.is_equal_approx(Vector2.ONE * cellSize))
+	assert(iconRect.position.is_equal_approx(-iconRect.size / 2.0))
+	assert(iconRect.stretch_mode == TextureRect.STRETCH_SCALE)
+	assert(iconRect.modulate.is_equal_approx(inkColor.darkened(0.45)))
 
 func assertClipboardDock(dockHost: Control, clipboardDock: Control, expectedHistory: Array, expectedSelectedIndex: int) -> void:
 	assert(String(clipboardDock.get("dockId")) == "clipboard")
@@ -652,6 +670,11 @@ func captureBoard() -> void:
 	assert(toolRegistry.size() == 29)
 	for toolId in ["cross", "tunnel", "mesh", "bus", "busRed", "busGreen", "busYellow", "busCyan", "busMagenta", "read", "write", "trace", "traceRed", "traceGreen", "traceBlue", "traceCyan", "traceMagenta", "buffer", "and", "or", "xor", "not", "nand", "nor", "xnor", "latchOn", "latchOff", "clock", "led"]:
 		assert(toolRegistry.has(toolId))
+		var toolAttributes: Dictionary = toolRegistry[toolId]
+		var toolIcon := toolAttributes.get("icon") as Texture2D
+		assert(toolIcon != null)
+		assert(toolIcon.get_size() == Vector2(64, 64))
+		assert(InkRegistry.getInk(toolId).get("icon") == toolIcon)
 	assert(InkRegistry.getPaletteInks().size() == 19)
 	assert(InkRegistry.getComponentInks().size() == 29)
 	assert(InkRegistry.getInkVariants("trace").size() == 6)
@@ -736,6 +759,14 @@ func captureBoard() -> void:
 	var occupancy: Dictionary = board.get("occupancy")
 	var rightTile := occupancy[Vector2i(1, 0)] as Node2D
 	var leftTile := occupancy[Vector2i(0, 0)] as Node2D
+	var busTile := occupancy[Vector2i(-3, 1)] as Node2D
+	var traceRedTile := occupancy[Vector2i(-2, 1)] as Node2D
+	var traceBlueTile := occupancy[Vector2i(-1, 1)] as Node2D
+	assertTileIcon(rightTile, InkRegistry.getInk("or"), float(board.get("cellSize")))
+	assertTileIcon(leftTile, InkRegistry.getInk("xor"), float(board.get("cellSize")))
+	assertTileIcon(busTile, InkRegistry.getInk("busMagenta"), float(board.get("cellSize")))
+	assertTileIcon(traceRedTile, InkRegistry.getInk("traceRed"), float(board.get("cellSize")))
+	assertTileIcon(traceBlueTile, InkRegistry.getInk("traceBlue"), float(board.get("cellSize")))
 	assert(leftTile.z_index > rightTile.z_index)
 	circuitEditorDock.call("recordEvent", "HistoryMarkerOne")
 	await process_frame

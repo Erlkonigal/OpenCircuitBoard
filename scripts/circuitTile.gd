@@ -43,6 +43,7 @@ func buildGeometry() -> void:
 
 	iconRect.size = Vector2.ONE * cellSize
 	iconRect.position = -iconRect.size / 2.0
+	iconRect.stretch_mode = TextureRect.STRETCH_SCALE
 	iconRect.texture_filter = CanvasItem.TEXTURE_FILTER_LINEAR_WITH_MIPMAPS
 
 func setAttributes(icon: Texture2D, baseColor: Color) -> void:

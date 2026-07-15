@@ -1,5 +1,37 @@
 extends RefCounted
 
+const iconByComponentId := {
+	"cross": preload("res://assets/inks/cross.svg"),
+	"tunnel": preload("res://assets/inks/tunnel.svg"),
+	"mesh": preload("res://assets/inks/mesh.svg"),
+	"bus": preload("res://assets/inks/bus.svg"),
+	"busRed": preload("res://assets/inks/busRed.svg"),
+	"busGreen": preload("res://assets/inks/busGreen.svg"),
+	"busYellow": preload("res://assets/inks/busYellow.svg"),
+	"busCyan": preload("res://assets/inks/busCyan.svg"),
+	"busMagenta": preload("res://assets/inks/busMagenta.svg"),
+	"read": preload("res://assets/inks/read.svg"),
+	"write": preload("res://assets/inks/write.svg"),
+	"trace": preload("res://assets/inks/trace.svg"),
+	"traceRed": preload("res://assets/inks/traceRed.svg"),
+	"traceGreen": preload("res://assets/inks/traceGreen.svg"),
+	"traceBlue": preload("res://assets/inks/traceBlue.svg"),
+	"traceCyan": preload("res://assets/inks/traceCyan.svg"),
+	"traceMagenta": preload("res://assets/inks/traceMagenta.svg"),
+	"buffer": preload("res://assets/inks/buffer.svg"),
+	"and": preload("res://assets/inks/and.svg"),
+	"or": preload("res://assets/inks/or.svg"),
+	"xor": preload("res://assets/inks/xor.svg"),
+	"not": preload("res://assets/inks/not.svg"),
+	"nand": preload("res://assets/inks/nand.svg"),
+	"nor": preload("res://assets/inks/nor.svg"),
+	"xnor": preload("res://assets/inks/xnor.svg"),
+	"latchOn": preload("res://assets/inks/latchOn.svg"),
+	"latchOff": preload("res://assets/inks/latchOff.svg"),
+	"clock": preload("res://assets/inks/clock.svg"),
+	"led": preload("res://assets/inks/led.svg"),
+}
+
 static func getInks() -> Array[Dictionary]:
 	return getPaletteInks()
 
@@ -57,7 +89,7 @@ static func getBoardToolRegistry() -> Dictionary:
 			"componentId": componentId,
 			"paletteToolId": getPaletteToolId(ink),
 			"color": ink.color,
-			"icon": null,
+			"icon": ink.icon,
 		}
 	return toolRegistry
 
@@ -72,6 +104,9 @@ static func getComponentId(ink: Dictionary) -> String:
 
 static func getPaletteToolId(ink: Dictionary) -> String:
 	return String(ink.get("paletteToolId", getComponentId(ink)))
+
+static func getInkIcon(componentId: String) -> Texture2D:
+	return iconByComponentId[componentId] as Texture2D
 
 static func makeInk(
 	toolId: String,
@@ -89,5 +124,6 @@ static func makeInk(
 		"title": title,
 		"category": category,
 		"color": color,
+		"icon": getInkIcon(toolId),
 		"isExpandable": isExpandable,
 	}

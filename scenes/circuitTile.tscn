@@ -47,4 +47,4 @@ mouse_filter = 2
 [node name="Icon" type="TextureRect" parent="."]
 z_index = 2
 mouse_filter = 2
-stretch_mode = 5
+stretch_mode = 0
