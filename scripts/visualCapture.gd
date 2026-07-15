@@ -876,6 +876,9 @@ func captureBoard() -> void:
 		assert(bool(InkRegistry.getInk(toolId).get("defaultIsOn", true)) == expectedDefaultIsOn)
 	assert(InkRegistry.getPaletteInks().size() == 19)
 	assert(InkRegistry.getComponentInks().size() == 29)
+	var latchOnColor: Color = InkRegistry.getInk("latchOn").get("color", Color.WHITE)
+	var latchOffColor: Color = InkRegistry.getInk("latchOff").get("color", Color.WHITE)
+	assert(latchOnColor.is_equal_approx(latchOffColor))
 	assert(InkRegistry.getInkVariants("trace").size() == 6)
 	assert(InkRegistry.getInkVariants("bus").size() == 6)
 	var orButton := inkButtons.get("or") as Button

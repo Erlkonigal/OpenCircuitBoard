@@ -53,7 +53,7 @@ static func getPaletteInks() -> Array[Dictionary]:
 		makeInk("nor", "Nor", "Gates", Color("46d8e5")),
 		makeInk("xnor", "Xnor", "Gates", Color("bf58ee")),
 		makeInk("latchOn", "LatchOn", "General Components", Color("43ec90")),
-		makeInk("latchOff", "LatchOff", "General Components", Color("67d9a2"), "", false, false),
+		makeInk("latchOff", "LatchOff", "General Components", Color("43ec90"), "", false, false),
 		makeInk("clock", "Clock", "General Components", Color("f05b70")),
 		makeInk("led", "Led", "General Components", Color("e6edf8")),
 	]
