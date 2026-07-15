@@ -219,6 +219,20 @@ func assertInkButton(button: Button, ink: Dictionary, isSelected: bool) -> void:
 	var expectedGlyphColor: Color = Color("111a26") if isSelected else inkColor
 	var actualGlyphColor: Color = glyph.get("glyphColor")
 	assert(actualGlyphColor.is_equal_approx(expectedGlyphColor))
+	var variantIndicator := button.get_node_or_null("variantIndicator") as Control
+	var isExpandable := bool(button.get("isExpandable"))
+	assert((variantIndicator != null) == isExpandable)
+	if variantIndicator:
+		assert(variantIndicator.mouse_filter == Control.MOUSE_FILTER_IGNORE)
+		var expectedIndicatorColor := Color("111a26") if isSelected else Color("b4c1d3")
+		var actualIndicatorColor: Color = variantIndicator.get("indicatorColor")
+		assert(actualIndicatorColor.is_equal_approx(expectedIndicatorColor))
+		var buttonRect := button.get_global_rect()
+		var indicatorRect := variantIndicator.get_global_rect()
+		assert(indicatorRect.position.x >= buttonRect.get_center().x)
+		assert(indicatorRect.position.y >= buttonRect.get_center().y)
+		assert(indicatorRect.end.x <= buttonRect.end.x + 0.5)
+		assert(indicatorRect.end.y <= buttonRect.end.y + 0.5)
 
 func assertClipboardDock(dockHost: Control, clipboardDock: Control, expectedHistory: Array, expectedSelectedIndex: int) -> void:
 	assert(String(clipboardDock.get("dockId")) == "clipboard")
@@ -633,6 +647,7 @@ func captureBoard() -> void:
 	assertCanvasViewIsStable(boardViewport, subViewport, camera, initialCanvasRect, initialSubViewportSize, initialCameraCenter, initialCameraZoom)
 	var inkButtons: Dictionary = circuitEditorDock.get("inkButtons")
 	assert(inkButtons.size() == 19)
+	assert(circuitEditorDock.find_children("variantIndicator", "Control", true, false).size() == 2)
 	var toolRegistry: Dictionary = board.get("toolRegistry")
 	assert(toolRegistry.size() == 29)
 	for toolId in ["cross", "tunnel", "mesh", "bus", "busRed", "busGreen", "busYellow", "busCyan", "busMagenta", "read", "write", "trace", "traceRed", "traceGreen", "traceBlue", "traceCyan", "traceMagenta", "buffer", "and", "or", "xor", "not", "nand", "nor", "xnor", "latchOn", "latchOff", "clock", "led"]:
