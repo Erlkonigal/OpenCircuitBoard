@@ -37,7 +37,7 @@ var rightSidebarTween: Tween
 func _ready() -> void:
 	configureTopBar()
 	configureRightDock()
-	board.connect("clipboardChanged", updateClipboardItem)
+	board.connect("clipboardChanged", updateClipboardHistory)
 	board.connect("clipboardCopied", showClipboardDock)
 	leftSidebarToggle.toggled.connect(setLeftSidebarOpen)
 	rightSidebarToggle.toggled.connect(setRightSidebarOpen)
@@ -120,8 +120,8 @@ func activateDock(dockId: String) -> void:
 		currentDock.connect("clipboardItemSelected", selectClipboardItem)
 	if currentDock.has_method("setEventHistory"):
 		currentDock.call("setEventHistory", eventHistory)
-	if currentDock.has_method("setClipboardItem"):
-		currentDock.call("setClipboardItem", board.call("getClipboardItem"))
+	if currentDock.has_method("setClipboardHistory"):
+		currentDock.call("setClipboardHistory", board.call("getClipboardHistory"), board.call("getSelectedClipboardIndex"))
 	setDockWidth(float(definition.dockWidth))
 
 func recordEvent(eventText: String) -> void:
@@ -143,19 +143,17 @@ func selectInk(ink: Dictionary) -> void:
 	board.call("selectTool", String(ink.toolId))
 	selectionLabel.text = String(ink.title)
 
-func updateClipboardItem(item: Dictionary) -> void:
-	if currentDock and currentDock.has_method("setClipboardItem"):
-		currentDock.call("setClipboardItem", item)
+func updateClipboardHistory(history: Array[Dictionary], selectedIndex: int) -> void:
+	if currentDock and currentDock.has_method("setClipboardHistory"):
+		currentDock.call("setClipboardHistory", history, selectedIndex)
 
-func showClipboardDock(item: Dictionary) -> void:
+func showClipboardDock(history: Array[Dictionary], selectedIndex: int) -> void:
 	activateDock("clipboard")
-	if currentDock and currentDock.has_method("setClipboardItem"):
-		currentDock.call("setClipboardItem", item)
+	if currentDock and currentDock.has_method("setClipboardHistory"):
+		currentDock.call("setClipboardHistory", history, selectedIndex)
 
-func selectClipboardItem(item: Dictionary) -> void:
-	if item.is_empty():
-		return
-	board.call("selectClipboardItem", item)
+func selectClipboardItem(index: int) -> void:
+	board.call("selectClipboardItem", index)
 
 func setLeftSidebarOpen(isOpen: bool, animate := true) -> void:
 	leftSidebarOpen = isOpen

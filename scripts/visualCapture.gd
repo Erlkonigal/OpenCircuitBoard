@@ -90,7 +90,7 @@ func assertIconButton(button: Button) -> void:
 	assert(button.vertical_icon_alignment == VERTICAL_ALIGNMENT_CENTER)
 	assert(button.icon.get_size() == Vector2(16, 16))
 
-func assertClipboardDock(dockHost: Control, clipboardDock: Control, expectedClipboard: Dictionary) -> void:
+func assertClipboardDock(dockHost: Control, clipboardDock: Control, expectedHistory: Array, expectedSelectedIndex: int) -> void:
 	assert(String(clipboardDock.get("dockId")) == "clipboard")
 	assertDockLayout(dockHost, clipboardDock)
 	var dockIcon := clipboardDock.get("dockIcon") as Texture2D
@@ -98,22 +98,36 @@ func assertClipboardDock(dockHost: Control, clipboardDock: Control, expectedClip
 	assert(dockIcon.get_size() == Vector2(16, 16))
 	var dockMenuButton := clipboardDock.get("dockMenuButton") as Button
 	assertIconButton(dockMenuButton)
-	var itemButton := clipboardDock.find_child("clipboardItem", true, false) as Button
-	var itemTitle := clipboardDock.find_child("clipboardItemTitle", true, false) as Label
-	var itemDetails := clipboardDock.find_child("clipboardItemDetails", true, false) as Label
-	var preview := clipboardDock.find_child("clipboardPreview", true, false) as Control
-	assert(itemButton != null)
-	assert(itemTitle != null)
-	assert(itemDetails != null)
-	assert(preview != null)
-	assert(not itemButton.disabled)
-	assert(itemButton.button_pressed)
-	assert(itemTitle.text == "Selection")
-	var boundsSize: Vector2i = expectedClipboard.get("boundsSize", Vector2i.ZERO)
-	var tileCount := (expectedClipboard.get("tiles", []) as Array).size()
-	assert(itemDetails.text.contains("%d x %d" % [boundsSize.x, boundsSize.y]))
-	assert(itemDetails.text.contains("%d tiles" % tileCount))
-	assert(preview.custom_minimum_size.y >= 64.0)
+	var historyGrid := clipboardDock.find_child("clipboardHistory", true, false) as GridContainer
+	var emptyHistoryLabel := clipboardDock.find_child("emptyClipboardHistory", true, false) as Label
+	assert(historyGrid != null)
+	assert(emptyHistoryLabel != null)
+	assert(historyGrid.columns == 2)
+	assert((clipboardDock.get("clipboardHistory") as Array).size() == expectedHistory.size())
+	assert(int(clipboardDock.get("selectedClipboardIndex")) == expectedSelectedIndex)
+	assert(historyGrid.get_child_count() == expectedHistory.size())
+	assert(historyGrid.visible == not expectedHistory.is_empty())
+	assert(emptyHistoryLabel.visible == expectedHistory.is_empty())
+	for index in expectedHistory.size():
+		var expectedItem: Dictionary = expectedHistory[index]
+		var itemButton := historyGrid.get_child(index) as Button
+		assert(itemButton != null)
+		var itemTitle := itemButton.find_child("clipboardItemTitle", true, false) as Label
+		var itemDetails := itemButton.find_child("clipboardItemDetails", true, false) as Label
+		var preview := itemButton.find_child("clipboardPreview", true, false) as Control
+		assert(itemTitle != null)
+		assert(itemDetails != null)
+		assert(preview != null)
+		assert(itemButton.toggle_mode)
+		assert(itemButton.button_pressed == (index == expectedSelectedIndex))
+		assert(itemButton.size_flags_vertical == Control.SIZE_SHRINK_BEGIN)
+		assert(itemButton.custom_minimum_size.y <= 120.0)
+		assert(itemTitle.text == "Selection %d" % (index + 1))
+		var boundsSize: Vector2i = expectedItem.get("boundsSize", Vector2i.ZERO)
+		var tileCount := (expectedItem.get("tiles", []) as Array).size()
+		assert(itemDetails.text.contains("%d x %d" % [boundsSize.x, boundsSize.y]))
+		assert(itemDetails.text.contains("%d tiles" % tileCount))
+		assert(preview.custom_minimum_size.y <= 48.0)
 
 func sendCtrlShortcut(board: Node2D, keycode: Key) -> void:
 	var event := InputEventKey.new()
@@ -122,7 +136,33 @@ func sendCtrlShortcut(board: Node2D, keycode: Key) -> void:
 	event.keycode = keycode
 	board.call("handleKeyInput", event)
 
-func assertBoardEditingInteractions(board: Node2D) -> Dictionary:
+func assertPastePreviewAllowsCameraPan(board: Node2D, camera: Camera2D) -> void:
+	assert(board.has_method("updatePastePreviewAtPointer"))
+	var initialCameraPosition := camera.global_position
+	var pressEvent := InputEventMouseButton.new()
+	pressEvent.button_index = MOUSE_BUTTON_MIDDLE
+	pressEvent.pressed = true
+	pressEvent.position = Vector2(480, 300)
+	camera.call("_unhandled_input", pressEvent)
+	var motionEvent := InputEventMouseMotion.new()
+	motionEvent.position = Vector2(432, 300)
+	motionEvent.button_mask = MOUSE_BUTTON_MASK_MIDDLE
+	var pasteAnchorBefore: Vector2i = board.get("pasteAnchorCoordinates")
+	board.call("handleMouseMotion", motionEvent)
+	assert((board.get("pasteAnchorCoordinates") as Vector2i) == pasteAnchorBefore)
+	camera.call("_unhandled_input", motionEvent)
+	assert(not camera.global_position.is_equal_approx(initialCameraPosition))
+	var clipboardItem: Dictionary = board.call("getClipboardItem")
+	assert((board.get_node("PreviewTiles") as Node2D).get_child_count() == (clipboardItem.get("tiles", []) as Array).size())
+	var releaseEvent := InputEventMouseButton.new()
+	releaseEvent.button_index = MOUSE_BUTTON_MIDDLE
+	releaseEvent.pressed = false
+	releaseEvent.position = motionEvent.position
+	camera.call("_unhandled_input", releaseEvent)
+	camera.global_position = initialCameraPosition
+	camera.force_update_scroll()
+
+func assertBoardEditingInteractions(main: Control, board: Node2D, camera: Camera2D) -> Dictionary:
 	# Each direct sequence mirrors one pointer gesture and must create one command.
 	var strokeStart := Vector2i(-18, -12)
 	var strokeEnd := Vector2i(-15, -12)
@@ -167,15 +207,43 @@ func assertBoardEditingInteractions(board: Node2D) -> Dictionary:
 	board.call("setSelection", Rect2i(source, Vector2i(3, 1)))
 	var sourceSelection: Dictionary = board.call("getSelectionItem")
 	assert((sourceSelection.get("cells", []) as Array).size() == 2)
-	sendCtrlShortcut(board, KEY_C)
+	var historyBeforeCut := (board.get("undoStack") as Array).size()
+	sendCtrlShortcut(board, KEY_X)
 	var clipboard: Dictionary = board.call("getClipboardItem")
+	var clipboardHistoryAfterCut: Array = board.call("getClipboardHistory")
 	assert((clipboard.get("boundsSize", Vector2i.ZERO) as Vector2i) == Vector2i(3, 1))
 	assert((clipboard.get("tiles", []) as Array).size() == 2)
+	assert(clipboardHistoryAfterCut.size() == 1)
+	assert(int(board.call("getSelectedClipboardIndex")) == 0)
+	assert(not tileData.has(source))
+	assert(not tileData.has(sourceOther))
+	assert((board.get("undoStack") as Array).size() == historyBeforeCut + 1)
+	var clipboardDock := main.get("currentDock") as Control
+	assert(clipboardDock != null)
+	assert(String(clipboardDock.get("dockId")) == "clipboard")
+	sendCtrlShortcut(board, KEY_Z)
+	assert(tileData.has(source))
+	assert(tileData.has(sourceOther))
+	assert((board.get("undoStack") as Array).size() == historyBeforeCut)
+	assert(board.call("getClipboardItem") == clipboard)
+	assert(board.call("getClipboardHistory") == clipboardHistoryAfterCut)
+	sendCtrlShortcut(board, KEY_U)
+	assert(not tileData.has(source))
+	assert(not tileData.has(sourceOther))
+	assert((board.get("undoStack") as Array).size() == historyBeforeCut + 1)
+	assert(board.call("getClipboardItem") == clipboard)
+	assert(board.call("getClipboardHistory") == clipboardHistoryAfterCut)
+	sendCtrlShortcut(board, KEY_Z)
+	assert(tileData.has(source))
+	assert(tileData.has(sourceOther))
+	assert((board.get("undoStack") as Array).size() == historyBeforeCut)
 
 	var pasteAnchor := Vector2i(-12, -7)
 	sendCtrlShortcut(board, KEY_V)
 	board.call("updatePastePreview", pasteAnchor)
 	assert(bool(board.get("pastePreviewValid")))
+	assertPastePreviewAllowsCameraPan(board, camera)
+	board.call("updatePastePreview", pasteAnchor)
 	board.call("confirmPastePreview")
 	assert(tileData.has(pasteAnchor))
 	assert(tileData.has(pasteAnchor + Vector2i(2, 0)))
@@ -191,11 +259,15 @@ func assertBoardEditingInteractions(board: Node2D) -> Dictionary:
 	assert(tileData.size() == occupiedTileCount)
 	board.call("cancelPastePreview")
 
+	var moveStartInSelection := pasteAnchor + Vector2i(1, 0)
+	assert(not tileData.has(moveStartInSelection))
+	assert((pastedSelection.get("bounds", Rect2i()) as Rect2i).has_point(moveStartInSelection))
+	assert(board.call("canStartMoveAt", moveStartInSelection))
 	var collisionOffset := Vector2i(0, 2)
 	var collisionCoordinates := pasteAnchor + collisionOffset
 	assert(board.call("placeTile", collisionCoordinates, "nor"))
-	board.call("beginMove", pasteAnchor)
-	board.call("updateMovePreview", pasteAnchor + collisionOffset)
+	assert(board.call("beginMove", moveStartInSelection))
+	board.call("updateMovePreview", moveStartInSelection + collisionOffset)
 	assert(not bool(board.get("movePreviewValid")))
 	board.call("finishMove")
 	assert(tileData.has(pasteAnchor))
@@ -205,8 +277,8 @@ func assertBoardEditingInteractions(board: Node2D) -> Dictionary:
 	var movedPrimary := pasteAnchor + moveOffset
 	var movedOther := movedPrimary + Vector2i(2, 0)
 	var historyBeforeMove := (board.get("undoStack") as Array).size()
-	board.call("beginMove", pasteAnchor)
-	board.call("updateMovePreview", movedPrimary)
+	assert(board.call("beginMove", moveStartInSelection))
+	board.call("updateMovePreview", moveStartInSelection + moveOffset)
 	assert(bool(board.get("movePreviewValid")))
 	board.call("finishMove")
 	assert(not tileData.has(pasteAnchor))
@@ -221,14 +293,43 @@ func assertBoardEditingInteractions(board: Node2D) -> Dictionary:
 	assert(tileData.has(movedPrimary))
 	assert(tileData.has(movedOther))
 
-	# Leave only the visual-capture tiles in the board while retaining the clipboard item.
+	# Leave only the visual-capture tiles in the board, then fill the four-item clipboard history.
 	sendCtrlShortcut(board, KEY_Z)
 	sendCtrlShortcut(board, KEY_Z)
 	board.call("clearSelection")
 	for coordinates in [source, sourceOther, collisionCoordinates]:
 		board.call("removeTile", coordinates)
 	assert((board.get("undoStack") as Array).size() == historyStart)
-	return clipboard
+	var historySelections: Array[Rect2i] = [
+		Rect2i(Vector2i(1, 0), Vector2i(1, 1)),
+		Rect2i(Vector2i(0, 0), Vector2i(2, 1)),
+		Rect2i(Vector2i(-1, 1), Vector2i(1, 1)),
+		Rect2i(Vector2i(4, -2), Vector2i(1, 1)),
+	]
+	for bounds in historySelections:
+		board.call("setSelection", bounds)
+		sendCtrlShortcut(board, KEY_C)
+	var clipboardHistory: Array = board.call("getClipboardHistory")
+	assert(clipboardHistory.size() == 4)
+	assert(int(board.call("getSelectedClipboardIndex")) == 0)
+	for item in clipboardHistory:
+		assert((item.get("boundsSize", Vector2i.ZERO) as Vector2i) != Vector2i(3, 1))
+	assert((clipboardHistory[0].get("boundsSize", Vector2i.ZERO) as Vector2i) == Vector2i(1, 1))
+	assert((clipboardHistory[1].get("boundsSize", Vector2i.ZERO) as Vector2i) == Vector2i(1, 1))
+	assert((clipboardHistory[2].get("boundsSize", Vector2i.ZERO) as Vector2i) == Vector2i(2, 1))
+	assert((clipboardHistory[3].get("boundsSize", Vector2i.ZERO) as Vector2i) == Vector2i(1, 1))
+	assert((clipboardHistory[0].get("tiles", []) as Array).size() == 1)
+	assert((clipboardHistory[1].get("tiles", []) as Array).size() == 1)
+	assert((clipboardHistory[2].get("tiles", []) as Array).size() == 2)
+	assert((clipboardHistory[3].get("tiles", []) as Array).size() == 1)
+	assert(String((clipboardHistory[0].get("tiles", []) as Array)[0].get("toolId", "")) == "or")
+	assert(String((clipboardHistory[1].get("tiles", []) as Array)[0].get("toolId", "")) == "trace")
+	assert(String((clipboardHistory[2].get("tiles", []) as Array)[0].get("toolId", "")) == "xor")
+	assert(String((clipboardHistory[3].get("tiles", []) as Array)[0].get("toolId", "")) == "or")
+	return {
+		"history": clipboardHistory,
+		"selectedIndex": int(board.call("getSelectedClipboardIndex")),
+	}
 
 func captureBoard() -> void:
 	var captureViewportSize := Vector2i(
@@ -419,22 +520,42 @@ func captureBoard() -> void:
 	assert(secondMarkerIndex > firstMarkerIndex)
 	assert(eventLogText.find("HistoryMarkerOne", firstMarkerIndex + 1) == -1)
 	assert(eventLogText.find("HistoryMarkerTwo", secondMarkerIndex + 1) == -1)
-	var copiedClipboard := assertBoardEditingInteractions(board)
+	var clipboardState: Dictionary = assertBoardEditingInteractions(main, board, camera)
+	var clipboardHistory: Array = clipboardState.get("history", [])
+	var selectedClipboardIndex := int(clipboardState.get("selectedIndex", -1))
 	await process_frame
 	assert(dockHost.get_child_count() == 1)
 	var clipboardDock := main.get("currentDock") as Control
-	assertClipboardDock(dockHost, clipboardDock, copiedClipboard)
+	assertClipboardDock(dockHost, clipboardDock, clipboardHistory, selectedClipboardIndex)
 	assertCanvasViewIsStable(boardViewport, subViewport, camera, initialCanvasRect, initialSubViewportSize, initialCameraCenter, initialCameraZoom)
-	var clipboardItemButton := clipboardDock.find_child("clipboardItem", true, false) as Button
+	main.call("setDockWidth", 1.0)
+	await process_frame
+	assertClipboardDock(dockHost, clipboardDock, clipboardHistory, selectedClipboardIndex)
+	assertCanvasViewIsStable(boardViewport, subViewport, camera, initialCanvasRect, initialSubViewportSize, initialCameraCenter, initialCameraZoom)
+	main.call("setDockWidth", 272.0)
+	await process_frame
+	var clipboardHistoryGrid := clipboardDock.find_child("clipboardHistory", true, false) as GridContainer
+	assert(clipboardHistoryGrid != null)
+	var selectedHistoryIndex := 2
+	var clipboardItemButton := clipboardHistoryGrid.get_child(selectedHistoryIndex) as Button
+	assert(clipboardItemButton != null)
 	clipboardItemButton.emit_signal("pressed")
 	await process_frame
-	assertClipboardDock(dockHost, main.get("currentDock") as Control, copiedClipboard)
+	assert(int(board.call("getSelectedClipboardIndex")) == selectedHistoryIndex)
+	assert(board.call("getClipboardItem") == clipboardHistory[selectedHistoryIndex])
+	assertClipboardDock(dockHost, main.get("currentDock") as Control, clipboardHistory, selectedHistoryIndex)
+	sendCtrlShortcut(board, KEY_V)
+	var selectedHistoryPasteAnchor := Vector2i(10, 8)
+	board.call("updatePastePreview", selectedHistoryPasteAnchor)
+	assert(bool(board.get("pastePreviewValid")))
+	assert((board.get_node("PreviewTiles") as Node2D).get_child_count() == (clipboardHistory[selectedHistoryIndex].get("tiles", []) as Array).size())
+	board.call("cancelPastePreview")
 	main.call("activateDock", "eventLog")
 	await process_frame
 	main.call("activateDock", "clipboard")
 	await process_frame
 	clipboardDock = main.get("currentDock") as Control
-	assertClipboardDock(dockHost, clipboardDock, copiedClipboard)
+	assertClipboardDock(dockHost, clipboardDock, clipboardHistory, selectedHistoryIndex)
 	assertCanvasViewIsStable(boardViewport, subViewport, camera, initialCanvasRect, initialSubViewportSize, initialCameraCenter, initialCameraZoom)
 	var selector := board.get_node("Selector") as ColorRect
 	selector.visible = shouldCaptureSelector()
@@ -449,7 +570,8 @@ func captureBoard() -> void:
 		board.call("beginPastePreview")
 		board.call("updatePastePreview", Vector2i(5, 2))
 		assert(bool(board.get("pastePreviewValid")))
-		assert((board.get_node("PreviewTiles") as Node2D).get_child_count() == 2)
+		var selectedClipboard: Dictionary = board.call("getClipboardItem")
+		assert((board.get_node("PreviewTiles") as Node2D).get_child_count() == (selectedClipboard.get("tiles", []) as Array).size())
 	if shouldCaptureDefaultZoom():
 		camera.zoom = initialCameraZoom
 	else:

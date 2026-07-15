@@ -49,5 +49,8 @@ func _unhandled_input(event: InputEvent) -> void:
 		clampPosition()
 		lastMousePosition = event.position
 		force_update_scroll()
-		if board and board.has_method("updateSelectorPosition"):
-			board.call("updateSelectorPosition")
+		if board:
+			if board.has_method("updateSelectorPosition"):
+				board.call("updateSelectorPosition")
+			if board.has_method("updatePastePreviewAtPointer"):
+				board.call("updatePastePreviewAtPointer")

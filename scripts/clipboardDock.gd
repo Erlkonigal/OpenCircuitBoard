@@ -1,11 +1,12 @@
 extends "res://scripts/dockView.gd"
 
 signal dockMenuRequested(menuButton: Button)
-signal clipboardItemSelected(item: Dictionary)
+signal clipboardItemSelected(index: int)
 
 const InkRegistry := preload("res://scripts/inkRegistry.gd")
 const clipboardIcon := preload("res://assets/clipboard.svg")
 const dockIconSize := 16
+const maximumHistoryItems := 4
 const sidebarBackgroundColor := Color("131c28")
 const sectionBackgroundColor := Color("1a2432")
 const sectionBorderColor := Color("26364a")
@@ -28,7 +29,7 @@ class ClipboardPreview extends Control:
 	func _draw() -> void:
 		if previewTiles.is_empty():
 			return
-		var availableSize := size - Vector2(16.0, 16.0)
+		var availableSize := size - Vector2(8.0, 8.0)
 		var cellLength := minf(availableSize.x / float(dimensions.x), availableSize.y / float(dimensions.y))
 		cellLength = maxf(2.0, cellLength)
 		var previewSize := Vector2(dimensions) * cellLength
@@ -43,12 +44,12 @@ class ClipboardPreview extends Control:
 			draw_rect(tileRect.grow(-inset), Color("0b1119"), false, 1.0)
 		draw_rect(Rect2(previewOrigin, previewSize), sectionBorderColor, false, 1.0)
 
-var clipboardItem: Dictionary = {}
+var clipboardHistory: Array[Dictionary] = []
+var selectedClipboardIndex := -1
 var dockMenuButton: Button
-var itemButton: Button
-var itemTitle: Label
-var itemDetails: Label
-var preview: ClipboardPreview
+var historyGrid: GridContainer
+var emptyLabel: Label
+var historyButtons: Array[Button] = []
 
 func _init() -> void:
 	dockId = "clipboard"
@@ -58,11 +59,22 @@ func _init() -> void:
 
 func _ready() -> void:
 	buildDock()
-	refreshClipboardItem()
+	refreshClipboardHistory()
+
+func setClipboardHistory(history: Array[Dictionary], selectedIndex: int) -> void:
+	clipboardHistory.clear()
+	for item in history:
+		if clipboardHistory.size() >= maximumHistoryItems:
+			break
+		clipboardHistory.append(item.duplicate(true))
+	selectedClipboardIndex = selectedIndex if selectedIndex >= 0 and selectedIndex < clipboardHistory.size() else -1
+	refreshClipboardHistory()
 
 func setClipboardItem(item: Dictionary) -> void:
-	clipboardItem = item.duplicate(true)
-	refreshClipboardItem()
+	if item.is_empty():
+		setClipboardHistory([], -1)
+		return
+	setClipboardHistory([item], 0)
 
 func buildDock() -> void:
 	set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
@@ -124,7 +136,6 @@ func buildHeader() -> Control:
 func buildClipboardSection() -> Control:
 	var panel := PanelContainer.new()
 	panel.name = "clipboardSection"
-	panel.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	panel.add_theme_stylebox_override("panel", makeBox(sectionBackgroundColor, 5, sectionBorderColor))
 	var margin := MarginContainer.new()
 	margin.add_theme_constant_override("margin_left", 6)
@@ -136,72 +147,103 @@ func buildClipboardSection() -> Control:
 	content.add_theme_constant_override("separation", 5)
 	margin.add_child(content)
 	var sectionTitle := Label.new()
-	sectionTitle.text = "Clipboard"
+	sectionTitle.text = "History"
 	sectionTitle.add_theme_color_override("font_color", primaryTextColor)
 	sectionTitle.add_theme_font_size_override("font_size", 16)
 	content.add_child(sectionTitle)
 
-	itemButton = Button.new()
-	itemButton.name = "clipboardItem"
+	emptyLabel = Label.new()
+	emptyLabel.name = "emptyClipboardHistory"
+	emptyLabel.text = "NoClipboardItems"
+	emptyLabel.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	emptyLabel.add_theme_color_override("font_color", mutedTextColor)
+	emptyLabel.add_theme_font_size_override("font_size", 15)
+	emptyLabel.custom_minimum_size = Vector2(0, 48)
+	emptyLabel.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	content.add_child(emptyLabel)
+
+	historyGrid = GridContainer.new()
+	historyGrid.name = "clipboardHistory"
+	historyGrid.columns = 2
+	historyGrid.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	historyGrid.add_theme_constant_override("h_separation", 4)
+	historyGrid.add_theme_constant_override("v_separation", 4)
+	content.add_child(historyGrid)
+	return panel
+
+func refreshClipboardHistory() -> void:
+	if historyGrid == null or emptyLabel == null:
+		return
+	for child in historyGrid.get_children():
+		child.queue_free()
+	historyButtons.clear()
+	emptyLabel.visible = clipboardHistory.is_empty()
+	historyGrid.visible = not clipboardHistory.is_empty()
+	for index in clipboardHistory.size():
+		var itemButton := buildHistoryItem(index, clipboardHistory[index])
+		historyButtons.append(itemButton)
+		historyGrid.add_child(itemButton)
+
+func buildHistoryItem(index: int, item: Dictionary) -> Button:
+	var itemButton := Button.new()
+	itemButton.name = "clipboardItem%d" % index
 	itemButton.toggle_mode = true
-	itemButton.custom_minimum_size = Vector2(0, 146)
-	itemButton.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	itemButton.custom_minimum_size = Vector2(84, 120)
+	itemButton.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	itemButton.size_flags_vertical = Control.SIZE_SHRINK_BEGIN
 	itemButton.add_theme_stylebox_override("normal", makeBox(fieldBackgroundColor, 4, sectionBorderColor))
 	itemButton.add_theme_stylebox_override("hover", makeBox(controlHoverColor, 4, sectionBorderColor))
 	itemButton.add_theme_stylebox_override("pressed", makeBox(fieldBackgroundColor, 4, activeAccentColor))
 	itemButton.add_theme_stylebox_override("hover_pressed", makeBox(controlHoverColor, 4, activeAccentColor))
-	itemButton.pressed.connect(selectClipboardItem)
-	content.add_child(itemButton)
+	itemButton.set_pressed_no_signal(index == selectedClipboardIndex)
+	itemButton.pressed.connect(selectClipboardItem.bind(index))
 
 	var itemMargin := MarginContainer.new()
 	itemMargin.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	itemMargin.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	itemMargin.add_theme_constant_override("margin_left", 7)
-	itemMargin.add_theme_constant_override("margin_top", 6)
-	itemMargin.add_theme_constant_override("margin_right", 7)
-	itemMargin.add_theme_constant_override("margin_bottom", 6)
+	itemMargin.add_theme_constant_override("margin_left", 5)
+	itemMargin.add_theme_constant_override("margin_top", 5)
+	itemMargin.add_theme_constant_override("margin_right", 5)
+	itemMargin.add_theme_constant_override("margin_bottom", 5)
 	itemButton.add_child(itemMargin)
 	var itemContent := VBoxContainer.new()
 	itemContent.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	itemContent.add_theme_constant_override("separation", 3)
+	itemContent.add_theme_constant_override("separation", 2)
 	itemMargin.add_child(itemContent)
-	itemTitle = Label.new()
+	var itemTitle := Label.new()
 	itemTitle.name = "clipboardItemTitle"
+	itemTitle.text = "Selection %d" % (index + 1)
 	itemTitle.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	itemTitle.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	itemTitle.add_theme_color_override("font_color", primaryTextColor)
-	itemTitle.add_theme_font_size_override("font_size", 16)
+	itemTitle.add_theme_font_size_override("font_size", 14)
 	itemContent.add_child(itemTitle)
-	itemDetails = Label.new()
+	var tiles := getPreviewTiles(item)
+	var dimensions := getClipboardDimensions(item, tiles)
+	var itemDetails := Label.new()
 	itemDetails.name = "clipboardItemDetails"
+	itemDetails.text = "%d x %d\n%d tiles" % [dimensions.x, dimensions.y, tiles.size()]
 	itemDetails.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	itemDetails.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	itemDetails.add_theme_color_override("font_color", mutedTextColor)
-	itemDetails.add_theme_font_size_override("font_size", 15)
+	itemDetails.add_theme_font_size_override("font_size", 13)
 	itemContent.add_child(itemDetails)
-	preview = ClipboardPreview.new()
+	var preview := ClipboardPreview.new()
 	preview.name = "clipboardPreview"
-	preview.custom_minimum_size = Vector2(0, 86)
-	preview.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	preview.custom_minimum_size = Vector2(0, 48)
+	preview.size_flags_vertical = Control.SIZE_SHRINK_END
 	preview.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	itemContent.add_child(preview)
-	return panel
-
-func refreshClipboardItem() -> void:
-	if itemButton == null or itemTitle == null or itemDetails == null or preview == null:
-		return
-	var tiles := getPreviewTiles(clipboardItem)
-	var dimensions := getClipboardDimensions(clipboardItem, tiles)
-	var hasItem := not clipboardItem.is_empty() and not tiles.is_empty()
-	itemButton.disabled = not hasItem
-	itemButton.set_pressed_no_signal(hasItem)
-	itemTitle.text = "Selection" if hasItem else "NoClipboardItem"
-	itemDetails.text = "%d x %d | %d tiles" % [dimensions.x, dimensions.y, tiles.size()] if hasItem else "0 x 0 | 0 tiles"
 	preview.setPreview(tiles, dimensions)
+	itemContent.add_child(preview)
+	return itemButton
 
-func selectClipboardItem() -> void:
-	if clipboardItem.is_empty():
+func selectClipboardItem(index: int) -> void:
+	if index < 0 or index >= clipboardHistory.size():
 		return
-	itemButton.set_pressed_no_signal(true)
-	clipboardItemSelected.emit(clipboardItem.duplicate(true))
+	selectedClipboardIndex = index
+	for buttonIndex in historyButtons.size():
+		historyButtons[buttonIndex].set_pressed_no_signal(buttonIndex == selectedClipboardIndex)
+	clipboardItemSelected.emit(selectedClipboardIndex)
 
 func getClipboardDimensions(item: Dictionary, tiles: Array[Dictionary]) -> Vector2i:
 	var bounds: Variant = item.get("bounds", null)

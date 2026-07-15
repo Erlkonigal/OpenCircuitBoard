@@ -4,6 +4,7 @@ const InkRegistry := preload("res://scripts/inkRegistry.gd")
 const SelectionOverlay := preload("res://scripts/selectionOverlay.gd")
 const selectionHoldMilliseconds := 350
 const dragThresholdPixels := 6.0
+const clipboardHistoryLimit := 4
 
 enum InteractionMode {
 	IDLE,
@@ -15,8 +16,8 @@ enum InteractionMode {
 	PASTING,
 }
 
-signal clipboardChanged(item: Dictionary)
-signal clipboardCopied(item: Dictionary)
+signal clipboardChanged(history: Array[Dictionary], selectedIndex: int)
+signal clipboardCopied(history: Array[Dictionary], selectedIndex: int)
 signal selectionChanged(item: Dictionary)
 
 @export_group("Board")
@@ -56,7 +57,8 @@ var activeChanges: Dictionary[Vector2i, Dictionary] = {}
 var activeSelectionBefore: Dictionary = {}
 var selectedCells: Dictionary[Vector2i, bool] = {}
 var selectionBounds := Rect2i()
-var clipboardItem: Dictionary = {}
+var clipboardHistory: Array[Dictionary] = []
+var selectedClipboardIndex := -1
 var undoStack: Array[Dictionary] = []
 var redoStack: Array[Dictionary] = []
 var selectionOverlay: Node2D
@@ -147,6 +149,8 @@ func handleKeyInput(event: InputEventKey) -> void:
 	match event.keycode:
 		KEY_C:
 			copySelection()
+		KEY_X:
+			cutSelection()
 		KEY_V:
 			beginPastePreview()
 		KEY_Z:
@@ -181,7 +185,7 @@ func handleMouseButton(event: InputEventMouseButton) -> void:
 		var coordinates := getGridCoordinates(get_global_mouse_position())
 		if not isCoordinateValid(coordinates):
 			return
-		if selectedCells.has(coordinates):
+		if canStartMoveAt(coordinates):
 			beginMove(coordinates)
 		else:
 			beginLeftPending(event.position, coordinates)
@@ -200,6 +204,8 @@ func handleMouseButton(event: InputEventMouseButton) -> void:
 	get_viewport().set_input_as_handled()
 
 func handleMouseMotion(event: InputEventMouseMotion) -> void:
+	if interactionMode == InteractionMode.PASTING and event.button_mask & MOUSE_BUTTON_MASK_MIDDLE:
+		return
 	var coordinates := getGridCoordinates(get_global_mouse_position())
 	match interactionMode:
 		InteractionMode.LEFT_PENDING:
@@ -236,16 +242,36 @@ func removeTile(coordinates: Vector2i) -> bool:
 	return removed
 
 func getClipboardItem() -> Dictionary:
-	return clipboardItem.duplicate(true)
+	if selectedClipboardIndex < 0 or selectedClipboardIndex >= clipboardHistory.size():
+		return {}
+	return clipboardHistory[selectedClipboardIndex].duplicate(true)
 
-func selectClipboardItem(item: Dictionary) -> void:
-	if item.is_empty():
-		return
-	clipboardItem = item.duplicate(true)
-	clipboardChanged.emit(getClipboardItem())
+func getClipboardHistory() -> Array[Dictionary]:
+	var history: Array[Dictionary] = []
+	for item in clipboardHistory:
+		history.append(item.duplicate(true))
+	return history
+
+func getSelectedClipboardIndex() -> int:
+	return selectedClipboardIndex
+
+func selectClipboardItem(index: int) -> bool:
+	if index < 0 or index >= clipboardHistory.size():
+		return false
+	selectedClipboardIndex = index
+	if interactionMode == InteractionMode.PASTING:
+		updatePastePreview(pasteAnchorCoordinates)
+	emitClipboardChanged()
+	return true
+
+func emitClipboardChanged() -> void:
+	clipboardChanged.emit(getClipboardHistory(), selectedClipboardIndex)
 
 func getSelectionItem() -> Dictionary:
 	return getSelectionSnapshot()
+
+func canStartMoveAt(coordinates: Vector2i) -> bool:
+	return not selectedCells.is_empty() and selectionBounds.has_point(coordinates)
 
 func beginLeftPending(mousePosition: Vector2, coordinates: Vector2i) -> void:
 	interactionMode = InteractionMode.LEFT_PENDING
@@ -317,12 +343,15 @@ func finishSelection() -> void:
 	setSelection(makeGridRect(selectionStartCoordinates, coordinates))
 	interactionMode = InteractionMode.IDLE
 
-func beginMove(coordinates: Vector2i) -> void:
+func beginMove(coordinates: Vector2i) -> bool:
+	if not canStartMoveAt(coordinates):
+		return false
 	interactionMode = InteractionMode.MOVING
 	moveStartCoordinates = coordinates
 	moveOffset = Vector2i.ZERO
 	movePreviewValid = false
 	clearPreviewTiles()
+	return true
 
 func updateMovePreview(coordinates: Vector2i) -> void:
 	moveOffset = coordinates - moveStartCoordinates
@@ -384,9 +413,9 @@ func getMovedSelectionSnapshot(offset: Vector2i) -> Dictionary:
 		"cells": cells,
 	}
 
-func copySelection() -> void:
+func copySelection() -> bool:
 	if selectedCells.is_empty():
-		return
+		return false
 	var tiles: Array[Dictionary] = []
 	for coordinates in getSortedCoordinates(selectedCells.keys()):
 		if tileData.has(coordinates):
@@ -394,21 +423,43 @@ func copySelection() -> void:
 			"offset": coordinates - selectionBounds.position,
 			"toolId": tileData[coordinates],
 		})
-	clipboardItem = {
+	var clipboardItem := {
 		"bounds": Rect2i(Vector2i.ZERO, selectionBounds.size),
 		"boundsSize": selectionBounds.size,
 		"tiles": tiles,
 	}
-	clipboardChanged.emit(getClipboardItem())
-	clipboardCopied.emit(getClipboardItem())
+	clipboardHistory.push_front(clipboardItem)
+	while clipboardHistory.size() > clipboardHistoryLimit:
+		clipboardHistory.pop_back()
+	selectedClipboardIndex = 0
+	emitClipboardChanged()
+	clipboardCopied.emit(getClipboardHistory(), selectedClipboardIndex)
+	return true
+
+func cutSelection() -> void:
+	if selectedCells.is_empty():
+		return
+	var selectionBefore := getSelectionSnapshot()
+	if not copySelection():
+		return
+	var targetValues: Dictionary[Vector2i, String] = {}
+	for coordinates in selectedCells:
+		targetValues[coordinates as Vector2i] = ""
+	var changes := makeChangesForTargetValues(targetValues)
+	if changes.is_empty():
+		return
+	applyChanges(changes, true)
+	clearSelection()
+	pushHistory(changes, selectionBefore, getSelectionSnapshot())
 
 func beginPastePreview() -> void:
-	if clipboardItem.is_empty():
+	if getClipboardItem().is_empty():
 		return
 	interactionMode = InteractionMode.PASTING
 	updatePastePreview(getGridCoordinates(get_global_mouse_position()))
 
 func updatePastePreview(anchor: Vector2i) -> void:
+	var clipboardItem := getClipboardItem()
 	if clipboardItem.is_empty():
 		return
 	pasteAnchorCoordinates = anchor
@@ -418,8 +469,15 @@ func updatePastePreview(anchor: Vector2i) -> void:
 	var boundsSize: Vector2i = clipboardItem.get("boundsSize", Vector2i.ONE)
 	selectionOverlay.call("showGridRect", Rect2i(anchor, boundsSize), float(cellSize), true, pastePreviewValid)
 
+func updatePastePreviewAtPointer() -> void:
+	if interactionMode == InteractionMode.PASTING:
+		updatePastePreview(getGridCoordinates(get_global_mouse_position()))
+
 func confirmPastePreview() -> void:
 	if interactionMode != InteractionMode.PASTING or not pastePreviewValid:
+		return
+	var clipboardItem := getClipboardItem()
+	if clipboardItem.is_empty():
 		return
 	var targetValues := getPasteTileMap(pasteAnchorCoordinates)
 	var changes := makeChangesForTargetValues(targetValues)
@@ -443,6 +501,7 @@ func cancelPastePreview(clearSelectionOverlay := true) -> void:
 
 func getPasteTileMap(anchor: Vector2i) -> Dictionary[Vector2i, String]:
 	var tiles: Dictionary[Vector2i, String] = {}
+	var clipboardItem := getClipboardItem()
 	for entryVariant in clipboardItem.get("tiles", []):
 		var entry := entryVariant as Dictionary
 		var offset: Vector2i = entry.get("offset", entry.get("position", Vector2i.ZERO))
