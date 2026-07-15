@@ -11,10 +11,10 @@ Run `scripts/visualCapture.gd` to produce a representative board image at `user:
 
 1. Read `.codex/skills/platform-shell/SKILL.md` and select the required `targetPlatform` shell.
 2. Build the selected target with `make build targetPlatform=<linux|windows>`.
-3. Run the selected target's Godot executable headlessly:
+3. Run the selected target's Godot executable with a real rendering backend. Do not pass `--headless`: it uses the dummy renderer, which cannot read the `SubViewport` texture needed for capture.
 
 ```bash
-"build/tools/godot-4.7/Godot_v4.7-stable_<platform-executable>" --headless --path . --script scripts/visualCapture.gd
+"build/tools/godot-4.7/Godot_v4.7-stable_<platform-executable>" --rendering-method gl_compatibility --path . --script scripts/visualCapture.gd
 ```
 
 Use `linux.x86_64` for Linux and `win64.exe` for Windows. The script prints the Godot user-data directory; open `<user-data-directory>/capture.png` with the image viewer.
@@ -31,4 +31,3 @@ Run one additional capture before image inspection when the changed surface requ
 - For selector captures, check its visibility, placement, and relationship to the selected tile.
 - For board-edge captures, check that the board remains framed correctly at its boundary.
 - Compare the image directly against the changed visual behavior; report observed defects or state that the applicable checks passed.
-

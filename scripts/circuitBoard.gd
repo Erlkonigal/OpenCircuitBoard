@@ -3,15 +3,12 @@ extends Node2D
 const InkRegistry := preload("res://scripts/inkRegistry.gd")
 const SelectionOverlay := preload("res://scripts/selectionOverlay.gd")
 const CircuitTile := preload("res://scripts/circuitTile.gd")
-const selectionHoldMilliseconds := 250
-const dragThresholdPixels := 6.0
 const clipboardHistoryLimit := 4
 const previewBuildBatchSize := 64
 const previewBuildThreshold := 128
 
 enum InteractionMode {
 	IDLE,
-	LEFT_PENDING,
 	PAINTING,
 	DELETING,
 	SELECTING,
@@ -45,9 +42,6 @@ var tileData: Dictionary[Vector2i, String] = {}
 var selectedTool := "or"
 var toolRegistry: Dictionary = {}
 var interactionMode := InteractionMode.IDLE
-var pendingMousePosition := Vector2.ZERO
-var pendingCoordinates := Vector2i.ZERO
-var pendingStartMilliseconds := 0
 var selectionStartCoordinates := Vector2i.ZERO
 var moveStartCoordinates := Vector2i.ZERO
 var moveOffset := Vector2i.ZERO
@@ -128,8 +122,6 @@ func createPreviewTiles() -> Node2D:
 	return tiles
 
 func _process(_delta: float) -> void:
-	if interactionMode == InteractionMode.LEFT_PENDING and Time.get_ticks_msec() - pendingStartMilliseconds >= selectionHoldMilliseconds:
-		beginSelection()
 	updateSelectorPosition()
 
 func _unhandled_input(event: InputEvent) -> void:
@@ -195,15 +187,13 @@ func handleMouseButton(event: InputEventMouseButton) -> void:
 		return
 	if event.pressed:
 		var coordinates := getGridCoordinates(get_global_mouse_position())
-		if handleLeftButtonPress(event.position, coordinates):
+		if handleLeftButtonPress(coordinates, event.shift_pressed):
 			get_viewport().set_input_as_handled()
 		return
-	if interactionMode == InteractionMode.LEFT_PENDING:
-		placeSingleTile()
-	elif interactionMode == InteractionMode.PAINTING:
+	if interactionMode == InteractionMode.PAINTING:
 		finishStroke()
 	elif interactionMode == InteractionMode.SELECTING:
-		finishSelection()
+		finishSelection(getGridCoordinates(get_global_mouse_position()))
 	elif interactionMode == InteractionMode.MOVING:
 		finishMove()
 	else:
@@ -215,10 +205,6 @@ func handleMouseMotion(event: InputEventMouseMotion) -> void:
 		return
 	var coordinates := getGridCoordinates(get_global_mouse_position())
 	match interactionMode:
-		InteractionMode.LEFT_PENDING:
-			if event.position.distance_to(pendingMousePosition) >= dragThresholdPixels:
-				beginStroke(pendingCoordinates, true)
-				appendStrokeTo(coordinates)
 		InteractionMode.PAINTING, InteractionMode.DELETING:
 			appendStrokeTo(coordinates)
 		InteractionMode.SELECTING:
@@ -288,15 +274,17 @@ func getSelectionItem() -> Dictionary:
 func canStartMoveAt(coordinates: Vector2i) -> bool:
 	return not selectedCells.is_empty() and selectionBounds.has_point(coordinates)
 
-func handleLeftButtonPress(mousePosition: Vector2, coordinates: Vector2i) -> bool:
-	if canStartMoveAt(coordinates):
-		beginMove(coordinates)
-	elif not selectedCells.is_empty():
-		clearSelection()
-	elif not isCoordinateValid(coordinates):
+func handleLeftButtonPress(coordinates: Vector2i, isSelectionModifierPressed: bool) -> bool:
+	if not isCoordinateValid(coordinates):
 		return false
+	if isSelectionModifierPressed:
+		beginSelection(coordinates)
+	elif canStartMoveAt(coordinates):
+		beginMove(coordinates)
 	else:
-		beginLeftPending(mousePosition, coordinates)
+		if not selectedCells.is_empty():
+			clearSelection()
+		beginStroke(coordinates, true)
 	return true
 
 func handleRightButtonPress(coordinates: Vector2i) -> bool:
@@ -307,20 +295,6 @@ func handleRightButtonPress(coordinates: Vector2i) -> bool:
 	else:
 		beginStroke(coordinates, false)
 	return true
-
-func beginLeftPending(mousePosition: Vector2, coordinates: Vector2i) -> void:
-	interactionMode = InteractionMode.LEFT_PENDING
-	pendingMousePosition = mousePosition
-	pendingCoordinates = coordinates
-	pendingStartMilliseconds = Time.get_ticks_msec()
-
-func placeSingleTile() -> void:
-	var selectionBefore := getSelectionSnapshot()
-	var changes := makeChangesForTargetValues({pendingCoordinates: selectedTool})
-	if not changes.is_empty():
-		applyChanges(changes, true)
-		pushHistory(changes, selectionBefore, selectionBefore)
-	interactionMode = InteractionMode.IDLE
 
 func beginStroke(coordinates: Vector2i, shouldPlace: bool) -> void:
 	interactionMode = InteractionMode.PAINTING if shouldPlace else InteractionMode.DELETING
@@ -364,17 +338,16 @@ func finishStroke() -> void:
 	hasLastStrokeCoordinates = false
 	interactionMode = InteractionMode.IDLE
 
-func beginSelection() -> void:
+func beginSelection(coordinates: Vector2i) -> void:
 	interactionMode = InteractionMode.SELECTING
-	selectionStartCoordinates = pendingCoordinates
-	updateSelectionMarquee(pendingCoordinates)
+	selectionStartCoordinates = coordinates
+	updateSelectionMarquee(coordinates)
 
 func updateSelectionMarquee(coordinates: Vector2i) -> void:
 	var bounds := makeGridRect(selectionStartCoordinates, coordinates)
 	selectionOverlay.call("showGridRect", bounds, float(cellSize), false, true)
 
-func finishSelection() -> void:
-	var coordinates := getGridCoordinates(get_global_mouse_position())
+func finishSelection(coordinates: Vector2i) -> void:
 	setSelection(makeGridRect(selectionStartCoordinates, coordinates))
 	interactionMode = InteractionMode.IDLE
 
