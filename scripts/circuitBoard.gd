@@ -187,8 +187,7 @@ func handleMouseButton(event: InputEventMouseButton) -> void:
 	if event.button_index == MOUSE_BUTTON_RIGHT:
 		if event.pressed:
 			var deleteCoordinates := getGridCoordinates(get_global_mouse_position())
-			if isCoordinateValid(deleteCoordinates):
-				beginStroke(deleteCoordinates, false)
+			if handleRightButtonPress(deleteCoordinates):
 				get_viewport().set_input_as_handled()
 		elif interactionMode == InteractionMode.DELETING:
 			finishStroke()
@@ -298,6 +297,15 @@ func handleLeftButtonPress(mousePosition: Vector2, coordinates: Vector2i) -> boo
 		return false
 	else:
 		beginLeftPending(mousePosition, coordinates)
+	return true
+
+func handleRightButtonPress(coordinates: Vector2i) -> bool:
+	if not isCoordinateValid(coordinates):
+		return false
+	if canStartMoveAt(coordinates):
+		deleteSelection()
+	else:
+		beginStroke(coordinates, false)
 	return true
 
 func beginLeftPending(mousePosition: Vector2, coordinates: Vector2i) -> void:
@@ -474,6 +482,21 @@ func cutSelection() -> void:
 		targetValues[coordinates as Vector2i] = ""
 	var changes := makeChangesForTargetValues(targetValues)
 	if changes.is_empty():
+		return
+	applyChanges(changes, true)
+	clearSelection()
+	pushHistory(changes, selectionBefore, getSelectionSnapshot())
+
+func deleteSelection() -> void:
+	if selectedCells.is_empty():
+		return
+	var selectionBefore := getSelectionSnapshot()
+	var targetValues: Dictionary[Vector2i, String] = {}
+	for coordinates in selectedCells:
+		targetValues[coordinates as Vector2i] = ""
+	var changes := makeChangesForTargetValues(targetValues)
+	if changes.is_empty():
+		clearSelection()
 		return
 	applyChanges(changes, true)
 	clearSelection()
