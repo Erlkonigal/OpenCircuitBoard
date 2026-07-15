@@ -4,6 +4,7 @@ signal dockMenuRequested(menuButton: Button)
 signal clipboardItemSelected(index: int)
 
 const InkRegistry := preload("res://scripts/inkRegistry.gd")
+const CircuitTile := preload("res://scripts/circuitTile.gd")
 const clipboardIcon := preload("res://assets/clipboard.svg")
 const dockIconSize := 16
 const maximumHistoryItems := 4
@@ -307,11 +308,13 @@ func getVector2i(value: Variant) -> Vector2i:
 
 func getTileColor(tile: Dictionary) -> Color:
 	var color: Variant = tile.get("color", null)
+	var toolId := String(tile.get("toolId", ""))
+	var defaultIsOn := InkRegistry.getDefaultIsOn(toolId)
 	if color is Color:
-		return color
-	var ink := InkRegistry.getInk(String(tile.get("toolId", "")))
+		return CircuitTile.getTopColor(color, bool(tile.get("isOn", defaultIsOn)))
+	var ink := InkRegistry.getInk(toolId)
 	if not ink.is_empty():
-		return ink.color
+		return CircuitTile.getTopColor(ink.color, bool(tile.get("isOn", defaultIsOn)))
 	return mutedTextColor
 
 func makeBox(color: Color, radius: int, borderColor: Color) -> StyleBoxFlat:

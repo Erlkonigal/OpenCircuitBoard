@@ -1,6 +1,7 @@
 extends SceneTree
 
 const InkRegistry := preload("res://scripts/inkRegistry.gd")
+const CircuitTile := preload("res://scripts/circuitTile.gd")
 
 func _init() -> void:
 	call_deferred("captureBoard")
@@ -38,6 +39,9 @@ func shouldCapturePastePreview() -> bool:
 
 func shouldCapturePastedLayering() -> bool:
 	return OS.get_cmdline_user_args().has("--capturePastedLayering")
+
+func shouldCaptureInkStates() -> bool:
+	return OS.get_cmdline_user_args().has("--captureInkStates")
 
 func shouldCaptureDockMenu() -> bool:
 	return OS.get_cmdline_user_args().has("--captureDockMenu")
@@ -242,7 +246,7 @@ func assertInkButton(button: Button, ink: Dictionary, isSelected: bool) -> void:
 		assert(indicatorRect.end.x <= buttonRect.end.x + 0.5)
 		assert(indicatorRect.end.y <= buttonRect.end.y + 0.5)
 
-func assertTileIcon(tile: Node2D, ink: Dictionary, cellSize: float) -> void:
+func assertTileIcon(tile: Node2D, ink: Dictionary, cellSize: float, isOn := true) -> void:
 	var iconRect := tile.get_node("Icon") as TextureRect
 	var expectedIcon := ink.get("icon") as Texture2D
 	var inkColor: Color = ink.get("color", Color.WHITE)
@@ -253,7 +257,15 @@ func assertTileIcon(tile: Node2D, ink: Dictionary, cellSize: float) -> void:
 	assert(iconRect.size.is_equal_approx(Vector2.ONE * cellSize))
 	assert(iconRect.position.is_equal_approx(-iconRect.size / 2.0))
 	assert(iconRect.stretch_mode == TextureRect.STRETCH_SCALE)
-	assert(iconRect.modulate.is_equal_approx(inkColor.darkened(0.45)))
+	assert(bool(tile.get("isOn")) == isOn)
+	assert(iconRect.modulate.is_equal_approx(CircuitTile.getIconColor(inkColor, isOn)))
+	var baseBlock := tile.get_node("BaseBlock") as TextureRect
+	var baseMaterial := baseBlock.material as ShaderMaterial
+	assert(baseMaterial != null)
+	var topColor: Color = baseMaterial.get_shader_parameter("topColor")
+	var sideShadowColor: Color = baseMaterial.get_shader_parameter("sideShadowColor")
+	assert(topColor.is_equal_approx(CircuitTile.getTopColor(inkColor, isOn)))
+	assert(sideShadowColor.is_equal_approx(CircuitTile.getSideShadowColor(inkColor, isOn)))
 
 func assertSharedTileGeometry(firstTile: Node2D, secondTile: Node2D) -> void:
 	var firstBase := firstTile.get_node("BaseBlock") as TextureRect
@@ -357,6 +369,7 @@ func assertBoardEditingInteractions(main: Control, board: Node2D, camera: Camera
 	assert(board.call("handleLeftButtonPress", strokeStart, false))
 	var tileData: Dictionary = board.get("tileData")
 	assert(tileData.has(strokeStart))
+	assert(bool(board.call("getTileState", strokeStart)))
 	assert((board.get("undoStack") as Array).size() == historyStart)
 	board.call("appendStrokeTo", strokeEnd)
 	board.call("finishStroke")
@@ -387,6 +400,32 @@ func assertBoardEditingInteractions(main: Control, board: Node2D, camera: Camera
 	sendCtrlShortcut(board, KEY_Z)
 	sendCtrlShortcut(board, KEY_Z)
 	assert((board.get("undoStack") as Array).size() == historyStart)
+
+	var stateOnCoordinates := Vector2i(-13, -14)
+	var stateOffCoordinates := Vector2i(-11, -14)
+	assert(board.call("placeTile", stateOnCoordinates, "latchOn"))
+	assert(board.call("placeTile", stateOffCoordinates, "latchOff"))
+	assert(bool(board.call("getTileState", stateOnCoordinates)))
+	assert(not bool(board.call("getTileState", stateOffCoordinates)))
+	var stateHistoryBeforeUpdate := (board.get("undoStack") as Array).size()
+	assert(board.call("setTileState", stateOnCoordinates, false))
+	assert(not bool(board.call("getTileState", stateOnCoordinates)))
+	assert((board.get("undoStack") as Array).size() == stateHistoryBeforeUpdate)
+	board.call("applyTileStates", [
+		{"coordinates": stateOnCoordinates, "isOn": true},
+		{"coordinates": stateOffCoordinates, "isOn": true},
+	])
+	assert(bool(board.call("getTileState", stateOnCoordinates)))
+	assert(bool(board.call("getTileState", stateOffCoordinates)))
+	var simulationTiles: Array = board.call("getSimulationTiles")
+	var capturedStates := {}
+	for simulationTileVariant in simulationTiles:
+		var simulationTile := simulationTileVariant as Dictionary
+		capturedStates[simulationTile.get("coordinates", Vector2i.ZERO)] = bool(simulationTile.get("isOn", false))
+	assert(bool(capturedStates.get(stateOnCoordinates, false)))
+	assert(bool(capturedStates.get(stateOffCoordinates, false)))
+	board.call("removeTile", stateOnCoordinates)
+	board.call("removeTile", stateOffCoordinates)
 
 	var marqueeStart := Vector2i(-6, -12)
 	var marqueeEnd := marqueeStart + Vector2i(1, 1)
@@ -455,6 +494,8 @@ func assertBoardEditingInteractions(main: Control, board: Node2D, camera: Camera
 	var sourceOther := source + Vector2i(2, 0)
 	assert(board.call("placeTile", source, "or"))
 	assert(board.call("placeTile", sourceOther, "xor"))
+	assert(board.call("setTileState", sourceOther, false))
+	assert(not bool(board.call("getTileState", sourceOther)))
 	board.call("setSelection", Rect2i(source, Vector2i(3, 1)))
 	var sourceSelection: Dictionary = board.call("getSelectionItem")
 	assert((sourceSelection.get("cells", []) as Array).size() == 2)
@@ -464,13 +505,13 @@ func assertBoardEditingInteractions(main: Control, board: Node2D, camera: Camera
 	assert(board.call("handleLeftButtonPress", outsideSelection, false))
 	var clearedSelection: Dictionary = board.call("getSelectionItem")
 	assert((clearedSelection.get("cells", []) as Array).is_empty())
-	assert(String(tileData[outsideSelection]) == "nor")
+	assert(String((tileData[outsideSelection] as Dictionary).get("toolId", "")) == "nor")
 	assert((board.get("undoStack") as Array).size() == historyBeforeLeftSelectionCancel)
 	board.call("setSelection", Rect2i(source, Vector2i(3, 1)))
 	var historyBeforeRightSelectionCancel := (board.get("undoStack") as Array).size()
 	assert(board.call("handleRightButtonPress", outsideSelection))
 	assert((board.call("getSelectionItem").get("cells", []) as Array).is_empty())
-	assert(String(tileData[outsideSelection]) == "nor")
+	assert(String((tileData[outsideSelection] as Dictionary).get("toolId", "")) == "nor")
 	assert((board.get("undoStack") as Array).size() == historyBeforeRightSelectionCancel)
 	board.call("removeTile", outsideSelection)
 	board.call("setSelection", Rect2i(source, Vector2i(3, 1)))
@@ -485,6 +526,7 @@ func assertBoardEditingInteractions(main: Control, board: Node2D, camera: Camera
 	var clipboardHistoryAfterCut: Array = board.call("getClipboardHistory")
 	assert((clipboard.get("boundsSize", Vector2i.ZERO) as Vector2i) == Vector2i(3, 1))
 	assert((clipboard.get("tiles", []) as Array).size() == 2)
+	assert(not bool(((clipboard.get("tiles", []) as Array)[1] as Dictionary).get("isOn", true)))
 	assert(clipboardHistoryAfterCut.size() == 1)
 	assert(int(board.call("getSelectedClipboardIndex")) == 0)
 	assert(not tileData.has(source))
@@ -499,6 +541,7 @@ func assertBoardEditingInteractions(main: Control, board: Node2D, camera: Camera
 	sendCtrlShortcut(board, KEY_Z)
 	assert(tileData.has(source))
 	assert(tileData.has(sourceOther))
+	assert(not bool(board.call("getTileState", sourceOther)))
 	assert((board.get("undoStack") as Array).size() == historyBeforeCut)
 	assert(board.call("getClipboardItem") == clipboard)
 	assert(board.call("getClipboardHistory") == clipboardHistoryAfterCut)
@@ -541,6 +584,7 @@ func assertBoardEditingInteractions(main: Control, board: Node2D, camera: Camera
 	board.call("confirmPastePreview")
 	assert(tileData.has(pasteAnchor))
 	assert(tileData.has(pasteAnchor + Vector2i(2, 0)))
+	assert(not bool(board.call("getTileState", pasteAnchor + Vector2i(2, 0))))
 	var placedTiles := board.get_node("PlacedTiles") as Node2D
 	assert(placedTiles != null)
 	assert(placedTiles.y_sort_enabled)
@@ -608,13 +652,16 @@ func assertBoardEditingInteractions(main: Control, board: Node2D, camera: Camera
 	assert(not tileData.has(pasteAnchor + Vector2i(2, 0)))
 	assert(tileData.has(movedPrimary))
 	assert(tileData.has(movedOther))
+	assert(not bool(board.call("getTileState", movedOther)))
 	assert((board.get("undoStack") as Array).size() == historyBeforeMove + 1)
 	sendCtrlShortcut(board, KEY_Z)
 	assert(tileData.has(pasteAnchor))
 	assert(tileData.has(pasteAnchor + Vector2i(2, 0)))
+	assert(not bool(board.call("getTileState", pasteAnchor + Vector2i(2, 0))))
 	sendCtrlShortcut(board, KEY_U)
 	assert(tileData.has(movedPrimary))
 	assert(tileData.has(movedOther))
+	assert(not bool(board.call("getTileState", movedOther)))
 
 	# Leave only the visual-capture tiles in the board, then fill the four-item clipboard history.
 	sendCtrlShortcut(board, KEY_Z)
@@ -824,6 +871,9 @@ func captureBoard() -> void:
 		assert(toolIcon != null)
 		assert(toolIcon.get_size() == Vector2(64, 64))
 		assert(InkRegistry.getInk(toolId).get("icon") == toolIcon)
+		var expectedDefaultIsOn: bool = String(toolId) != "latchOff"
+		assert(bool(toolAttributes.get("defaultIsOn", true)) == expectedDefaultIsOn)
+		assert(bool(InkRegistry.getInk(toolId).get("defaultIsOn", true)) == expectedDefaultIsOn)
 	assert(InkRegistry.getPaletteInks().size() == 19)
 	assert(InkRegistry.getComponentInks().size() == 29)
 	assert(InkRegistry.getInkVariants("trace").size() == 6)
@@ -933,9 +983,9 @@ func captureBoard() -> void:
 	board.call("selectTool", "traceRed")
 	board.call("placeTile", Vector2i(-2, 1))
 	var tileData: Dictionary = board.get("tileData")
-	assert(String(tileData[Vector2i(-3, 1)]) == "busMagenta")
-	assert(String(tileData[Vector2i(-1, 1)]) == "traceBlue")
-	assert(String(tileData[Vector2i(-2, 1)]) == "traceRed")
+	assert(String((tileData[Vector2i(-3, 1)] as Dictionary).get("toolId", "")) == "busMagenta")
+	assert(String((tileData[Vector2i(-1, 1)] as Dictionary).get("toolId", "")) == "traceBlue")
+	assert(String((tileData[Vector2i(-2, 1)] as Dictionary).get("toolId", "")) == "traceRed")
 	# Keep an isolated tile in view to inspect the full shadow silhouette.
 	board.call("selectTool", "or")
 	board.call("placeTile", Vector2i(4, -2))
@@ -1077,6 +1127,26 @@ func captureBoard() -> void:
 		assert(board.call("handleLeftButtonPress", captureBelowPaste, false))
 		assert(tileData.has(captureBelowPaste))
 		board.call("finishStroke")
+	if shouldCaptureInkStates():
+		board.call("clearSelection")
+		var capturedTileData := board.get("tileData") as Dictionary
+		for coordinatesVariant in capturedTileData.keys():
+			board.call("removeTile", coordinatesVariant as Vector2i)
+		var onLatchOn := Vector2i(-2, -2)
+		var onLatchOff := Vector2i(1, -2)
+		var offLatchOn := Vector2i(-2, 1)
+		var offLatchOff := Vector2i(1, 1)
+		assert(board.call("placeTile", onLatchOn, "latchOn"))
+		assert(board.call("placeTile", onLatchOff, "latchOff"))
+		assert(board.call("placeTile", offLatchOn, "latchOn"))
+		assert(board.call("placeTile", offLatchOff, "latchOff"))
+		assert(board.call("setTileState", onLatchOff, true))
+		assert(board.call("setTileState", offLatchOn, false))
+		var stateOccupancy := board.get("occupancy") as Dictionary
+		assertTileIcon(stateOccupancy[onLatchOn] as Node2D, InkRegistry.getInk("latchOn"), float(board.get("cellSize")), true)
+		assertTileIcon(stateOccupancy[onLatchOff] as Node2D, InkRegistry.getInk("latchOff"), float(board.get("cellSize")), true)
+		assertTileIcon(stateOccupancy[offLatchOn] as Node2D, InkRegistry.getInk("latchOn"), float(board.get("cellSize")), false)
+		assertTileIcon(stateOccupancy[offLatchOff] as Node2D, InkRegistry.getInk("latchOff"), float(board.get("cellSize")), false)
 	if shouldCaptureDefaultZoom():
 		camera.zoom = initialCameraZoom
 	else:

@@ -53,7 +53,7 @@ static func getPaletteInks() -> Array[Dictionary]:
 		makeInk("nor", "Nor", "Gates", Color("46d8e5")),
 		makeInk("xnor", "Xnor", "Gates", Color("bf58ee")),
 		makeInk("latchOn", "LatchOn", "General Components", Color("43ec90")),
-		makeInk("latchOff", "LatchOff", "General Components", Color("67d9a2")),
+		makeInk("latchOff", "LatchOff", "General Components", Color("67d9a2"), "", false, false),
 		makeInk("clock", "Clock", "General Components", Color("f05b70")),
 		makeInk("led", "Led", "General Components", Color("e6edf8")),
 	]
@@ -90,6 +90,7 @@ static func getBoardToolRegistry() -> Dictionary:
 			"paletteToolId": getPaletteToolId(ink),
 			"color": ink.color,
 			"icon": ink.icon,
+			"defaultIsOn": bool(ink.get("defaultIsOn", true)),
 		}
 	return toolRegistry
 
@@ -108,13 +109,18 @@ static func getPaletteToolId(ink: Dictionary) -> String:
 static func getInkIcon(componentId: String) -> Texture2D:
 	return iconByComponentId[componentId] as Texture2D
 
+static func getDefaultIsOn(componentId: String) -> bool:
+	var ink := getInk(componentId)
+	return bool(ink.get("defaultIsOn", true))
+
 static func makeInk(
 	toolId: String,
 	title: String,
 	category: String,
 	color: Color,
 	paletteToolId := "",
-	isExpandable := false
+	isExpandable := false,
+	defaultIsOn := true
 ) -> Dictionary:
 	var resolvedPaletteToolId := paletteToolId if not paletteToolId.is_empty() else toolId
 	return {
@@ -126,4 +132,5 @@ static func makeInk(
 		"color": color,
 		"icon": getInkIcon(toolId),
 		"isExpandable": isExpandable,
+		"defaultIsOn": defaultIsOn,
 	}

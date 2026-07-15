@@ -38,7 +38,7 @@ signal selectionChanged(item: Dictionary)
 
 var validRect := Rect2()
 var occupancy: Dictionary[Vector2i, Node2D] = {}
-var tileData: Dictionary[Vector2i, String] = {}
+var tileData: Dictionary[Vector2i, Dictionary] = {}
 var selectedTool := "or"
 var toolRegistry: Dictionary = {}
 var interactionMode := InteractionMode.IDLE
@@ -48,7 +48,7 @@ var moveOffset := Vector2i.ZERO
 var movePreviewValid := false
 var pasteAnchorCoordinates := Vector2i.ZERO
 var pastePreviewValid := false
-var pastePreviewValues: Dictionary[Vector2i, String] = {}
+var pastePreviewValues: Dictionary[Vector2i, Dictionary] = {}
 var lastStrokeCoordinates := Vector2i.ZERO
 var hasLastStrokeCoordinates := false
 var activeChanges: Dictionary[Vector2i, Dictionary] = {}
@@ -237,7 +237,37 @@ func removeTile(coordinates: Vector2i) -> bool:
 func getInkAt(coordinates: Vector2i) -> Dictionary:
 	if not isCoordinateValid(coordinates) or not tileData.has(coordinates):
 		return {}
-	return InkRegistry.getInk(String(tileData[coordinates]))
+	return InkRegistry.getInk(getToolIdAt(coordinates))
+
+func getTileState(coordinates: Vector2i) -> bool:
+	return bool(getTileValueAt(coordinates).get("isOn", false))
+
+func setTileState(coordinates: Vector2i, isOn: bool) -> bool:
+	var tileValue := getTileValueAt(coordinates)
+	if tileValue.is_empty() or bool(tileValue.get("isOn", false)) == isOn:
+		return false
+	tileValue["isOn"] = isOn
+	return setTileValue(coordinates, tileValue)
+
+func applyTileStates(updates: Array) -> void:
+	for updateVariant in updates:
+		if not (updateVariant is Dictionary):
+			continue
+		var update := updateVariant as Dictionary
+		var rawCoordinates: Variant = update.get("coordinates", null)
+		if rawCoordinates is Vector2i and update.has("isOn"):
+			setTileState(rawCoordinates as Vector2i, bool(update["isOn"]))
+
+func getSimulationTiles() -> Array[Dictionary]:
+	var tiles: Array[Dictionary] = []
+	for coordinates in getSortedCoordinates(tileData.keys()):
+		var tileValue := getTileValueAt(coordinates)
+		tiles.append({
+			"coordinates": coordinates,
+			"toolId": String(tileValue.get("toolId", "")),
+			"isOn": bool(tileValue.get("isOn", false)),
+		})
+	return tiles
 
 func getClipboardItem() -> Dictionary:
 	return getSelectedClipboardItem().duplicate(true)
@@ -330,9 +360,9 @@ func applyStrokeAt(coordinates: Vector2i, shouldPlace: bool) -> void:
 	var beforeToolId := getToolIdAt(coordinates)
 	if beforeToolId == afterToolId:
 		return
-	var change := makeChange(coordinates, beforeToolId, afterToolId)
+	var change := makeChange(coordinates, getTileValueAt(coordinates), makeTileValue(afterToolId))
 	activeChanges[coordinates] = change
-	setTileTool(coordinates, afterToolId)
+	setTileValue(coordinates, change["afterTile"])
 
 func finishStroke() -> void:
 	var changes := getActiveChanges()
@@ -389,25 +419,25 @@ func finishMove() -> void:
 		interactionMode = InteractionMode.IDLE
 		refreshSelectionOverlay()
 
-func getMovedTileMap(offset: Vector2i) -> Dictionary[Vector2i, String]:
-	var tiles: Dictionary[Vector2i, String] = {}
+func getMovedTileMap(offset: Vector2i) -> Dictionary[Vector2i, Dictionary]:
+	var tiles: Dictionary[Vector2i, Dictionary] = {}
 	for coordinates in selectedCells:
 		var source := coordinates as Vector2i
 		if tileData.has(source):
-			tiles[source + offset] = tileData[source]
+			tiles[source + offset] = getTileValueAt(source)
 	return tiles
 
-func getMoveTargetValues(offset: Vector2i) -> Dictionary[Vector2i, String]:
-	var targetValues: Dictionary[Vector2i, String] = {}
+func getMoveTargetValues(offset: Vector2i) -> Dictionary[Vector2i, Dictionary]:
+	var targetValues: Dictionary[Vector2i, Dictionary] = {}
 	for coordinates in selectedCells:
-		targetValues[coordinates as Vector2i] = ""
+		targetValues[coordinates as Vector2i] = {}
 	for coordinates in selectedCells:
 		var source := coordinates as Vector2i
 		if tileData.has(source):
-			targetValues[source + offset] = tileData[source]
+			targetValues[source + offset] = getTileValueAt(source)
 	return targetValues
 
-func isMoveValid(targetTiles: Dictionary[Vector2i, String]) -> bool:
+func isMoveValid(targetTiles: Dictionary[Vector2i, Dictionary]) -> bool:
 	if targetTiles.is_empty():
 		return false
 	for coordinates in targetTiles:
@@ -433,9 +463,11 @@ func copySelection() -> bool:
 	var tiles: Array[Dictionary] = []
 	for coordinates in getSortedCoordinates(selectedCells.keys()):
 		if tileData.has(coordinates):
+			var tileValue := getTileValueAt(coordinates)
 			tiles.append({
 			"offset": coordinates - selectionBounds.position,
-			"toolId": tileData[coordinates],
+			"toolId": tileValue["toolId"],
+			"isOn": tileValue["isOn"],
 		})
 	var clipboardItem := {
 		"bounds": Rect2i(Vector2i.ZERO, selectionBounds.size),
@@ -456,9 +488,9 @@ func cutSelection() -> void:
 	var selectionBefore := getSelectionSnapshot()
 	if not copySelection():
 		return
-	var targetValues: Dictionary[Vector2i, String] = {}
+	var targetValues: Dictionary[Vector2i, Dictionary] = {}
 	for coordinates in selectedCells:
-		targetValues[coordinates as Vector2i] = ""
+		targetValues[coordinates as Vector2i] = {}
 	var changes := makeChangesForTargetValues(targetValues)
 	if changes.is_empty():
 		return
@@ -470,9 +502,9 @@ func deleteSelection() -> void:
 	if selectedCells.is_empty():
 		return
 	var selectionBefore := getSelectionSnapshot()
-	var targetValues: Dictionary[Vector2i, String] = {}
+	var targetValues: Dictionary[Vector2i, Dictionary] = {}
 	for coordinates in selectedCells:
-		targetValues[coordinates as Vector2i] = ""
+		targetValues[coordinates as Vector2i] = {}
 	var changes := makeChangesForTargetValues(targetValues)
 	if changes.is_empty():
 		clearSelection()
@@ -538,15 +570,15 @@ func cancelPastePreview(clearSelectionOverlay := true) -> void:
 	if clearSelectionOverlay:
 		refreshSelectionOverlay()
 
-func getPasteTileMap(anchor: Vector2i, clipboardItem: Dictionary = {}) -> Dictionary[Vector2i, String]:
-	var tiles: Dictionary[Vector2i, String] = {}
+func getPasteTileMap(anchor: Vector2i, clipboardItem: Dictionary = {}) -> Dictionary[Vector2i, Dictionary]:
+	var tiles: Dictionary[Vector2i, Dictionary] = {}
 	for entryVariant in clipboardItem.get("tiles", []):
 		var entry := entryVariant as Dictionary
 		var offset: Vector2i = entry.get("offset", entry.get("position", Vector2i.ZERO))
-		tiles[anchor + offset] = String(entry.get("toolId", ""))
+		tiles[anchor + offset] = makeTileValue(String(entry.get("toolId", "")), entry.get("isOn", null))
 	return tiles
 
-func isPasteValid(targetTiles: Dictionary[Vector2i, String]) -> bool:
+func isPasteValid(targetTiles: Dictionary[Vector2i, Dictionary]) -> bool:
 	if targetTiles.is_empty():
 		return false
 	for coordinates in targetTiles:
@@ -591,7 +623,7 @@ func cancelActiveInteraction() -> void:
 
 func rollbackActiveChanges() -> void:
 	for change in getActiveChanges():
-		setTileTool(change["coordinates"], String(change["beforeToolId"]))
+		setTileValue(change["coordinates"], change["beforeTile"])
 
 func setSelection(bounds: Rect2i) -> void:
 	selectedCells.clear()
@@ -653,7 +685,7 @@ func refreshSelectionOverlay() -> void:
 		return
 	selectionOverlay.call("showGridRect", selectionBounds, float(cellSize), true, true)
 
-func showPreviewTiles(tiles: Dictionary[Vector2i, String], isValid: bool) -> void:
+func showPreviewTiles(tiles: Dictionary[Vector2i, Dictionary], isValid: bool) -> void:
 	if tileScene == null:
 		clearPreviewTiles()
 		return
@@ -662,47 +694,51 @@ func showPreviewTiles(tiles: Dictionary[Vector2i, String], isValid: bool) -> voi
 	isPastePreviewBuilding = false
 	var previewColor := Color(1.0, 1.0, 1.0, 0.5) if isValid else Color(1.0, 0.44, 0.52, 0.58)
 	var previewCoordinates: Array[Vector2i] = []
-	var previewToolIds: Array[String] = []
+	var previewValues: Array[Dictionary] = []
 	for coordinates in getSortedCoordinates(tiles.keys()):
-		var toolId: String = tiles[coordinates]
+		var tileValue := normalizeTileValue(tiles[coordinates])
+		var toolId := String(tileValue.get("toolId", ""))
 		if toolRegistry.has(toolId):
 			previewCoordinates.append(coordinates)
-			previewToolIds.append(toolId)
+			previewValues.append(tileValue)
 	var existingTiles := previewTiles.get_children()
 	previewTileByCoordinates.clear()
 	var reusedCount := mini(existingTiles.size(), previewCoordinates.size())
 	for index in reusedCount:
-		configurePreviewTile(existingTiles[index] as Node2D, previewCoordinates[index], previewToolIds[index], previewColor, false)
+		configurePreviewTile(existingTiles[index] as Node2D, previewCoordinates[index], previewValues[index], previewColor, false)
 	var createdCount := previewCoordinates.size()
 	if interactionMode == InteractionMode.PASTING and previewCoordinates.size() > previewBuildThreshold and reusedCount < previewCoordinates.size():
 		createdCount = mini(reusedCount + previewBuildBatchSize, previewCoordinates.size())
 	for index in range(reusedCount, createdCount):
 		var tile := tileScene.instantiate() as Node2D
 		previewTiles.add_child(tile)
-		configurePreviewTile(tile, previewCoordinates[index], previewToolIds[index], previewColor, true)
+		configurePreviewTile(tile, previewCoordinates[index], previewValues[index], previewColor, true)
 	for index in range(createdCount, existingTiles.size()):
 		(existingTiles[index] as Node2D).hide()
 	if createdCount < previewCoordinates.size():
 		previewBuildState = {
 			"coordinates": previewCoordinates,
-			"toolIds": previewToolIds,
+			"values": previewValues,
 			"previewColor": previewColor,
 			"nextIndex": createdCount,
 		}
 		isPastePreviewBuilding = true
 		schedulePastePreviewBatch(previewBuildGeneration)
 
-func configurePreviewTile(tile: Node2D, coordinates: Vector2i, toolId: String, previewColor: Color, isNew: bool) -> void:
+func configurePreviewTile(tile: Node2D, coordinates: Vector2i, tileValue: Dictionary, previewColor: Color, isNew: bool) -> void:
 	if isNew:
 		tile.call("setup", self, coordinates, float(cellSize))
 	else:
 		tile.show()
 		tile.call("updateGridCoordinates", self, coordinates)
 	tile.position = Vector2(coordinates * cellSize) + Vector2.ONE * cellSize / 2.0
-	if String(tile.get_meta("previewToolId", "")) != toolId:
+	var toolId := String(tileValue.get("toolId", ""))
+	var isOn := bool(tileValue.get("isOn", false))
+	if String(tile.get_meta("previewToolId", "")) != toolId or bool(tile.get_meta("previewIsOn", false)) != isOn:
 		var attributes: Dictionary = toolRegistry[toolId]
-		tile.call("setAttributes", attributes["icon"], attributes["color"])
+		tile.call("setAttributes", attributes["icon"], attributes["color"], isOn)
 		tile.set_meta("previewToolId", toolId)
+		tile.set_meta("previewIsOn", isOn)
 	tile.modulate = previewColor
 	previewTileByCoordinates[coordinates] = tile
 
@@ -713,14 +749,14 @@ func buildPastePreviewBatch(generation: int) -> void:
 	if generation != previewBuildGeneration or previewBuildState.is_empty() or tileScene == null:
 		return
 	var previewCoordinates: Array = previewBuildState["coordinates"]
-	var previewToolIds: Array = previewBuildState["toolIds"]
+	var previewValues: Array = previewBuildState["values"]
 	var previewColor: Color = previewBuildState["previewColor"]
 	var startIndex := int(previewBuildState["nextIndex"])
 	var endIndex := mini(startIndex + previewBuildBatchSize, previewCoordinates.size())
 	for index in range(startIndex, endIndex):
 		var tile := tileScene.instantiate() as Node2D
 		previewTiles.add_child(tile)
-		configurePreviewTile(tile, previewCoordinates[index] as Vector2i, String(previewToolIds[index]), previewColor, true)
+		configurePreviewTile(tile, previewCoordinates[index] as Vector2i, previewValues[index] as Dictionary, previewColor, true)
 	previewBuildState["nextIndex"] = endIndex
 	if endIndex >= previewCoordinates.size():
 		previewBuildState.clear()
@@ -741,24 +777,24 @@ func clearPreviewTiles() -> void:
 func makeChangesForTargetValues(targetValues: Dictionary) -> Array[Dictionary]:
 	var changes: Array[Dictionary] = []
 	for coordinates in getSortedCoordinates(targetValues.keys()):
-		var afterToolId := String(targetValues[coordinates])
-		var beforeToolId := getToolIdAt(coordinates)
-		if beforeToolId != afterToolId:
-			changes.append(makeChange(coordinates, beforeToolId, afterToolId))
+		var afterTile := normalizeTileValue(targetValues[coordinates])
+		var beforeTile := getTileValueAt(coordinates)
+		if beforeTile != afterTile:
+			changes.append(makeChange(coordinates, beforeTile, afterTile))
 	return changes
 
-func makeChange(coordinates: Vector2i, beforeToolId: String, afterToolId: String) -> Dictionary:
+func makeChange(coordinates: Vector2i, beforeTile: Dictionary, afterTile: Dictionary) -> Dictionary:
 	return {
 		"coordinates": coordinates,
-		"beforeToolId": beforeToolId,
-		"afterToolId": afterToolId,
+		"beforeTile": beforeTile.duplicate(true),
+		"afterTile": afterTile.duplicate(true),
 	}
 
 func applyChanges(changes: Array, applyAfter: bool) -> void:
 	for changeVariant in changes:
 		var change := changeVariant as Dictionary
-		var toolId := String(change["afterToolId"] if applyAfter else change["beforeToolId"])
-		setTileTool(change["coordinates"], toolId)
+		var tileValue: Dictionary = (change["afterTile"] if applyAfter else change["beforeTile"]) as Dictionary
+		setTileValue(change["coordinates"], tileValue)
 
 func applyPasteChanges(changes: Array) -> void:
 	if canPromotePastePreview(changes):
@@ -767,15 +803,16 @@ func applyPasteChanges(changes: Array) -> void:
 	for changeVariant in changes:
 		var change := changeVariant as Dictionary
 		var coordinates: Vector2i = change["coordinates"]
-		var toolId := String(change["afterToolId"])
+		var tileValue := change["afterTile"] as Dictionary
+		var toolId := String(tileValue.get("toolId", ""))
 		var previewTile := previewTileByCoordinates.get(coordinates) as Node2D
 		if previewTile and previewTile.get_parent() == previewTiles and not toolId.is_empty() and not occupancy.has(coordinates):
 			previewTile.reparent(placedTiles)
 			previewTile.modulate = Color.WHITE
 			occupancy[coordinates] = previewTile
-			tileData[coordinates] = toolId
+			tileData[coordinates] = tileValue.duplicate(true)
 		else:
-			setTileTool(coordinates, toolId)
+			setTileValue(coordinates, tileValue)
 	previewTileByCoordinates.clear()
 
 func canPromotePastePreview(changes: Array) -> bool:
@@ -784,7 +821,8 @@ func canPromotePastePreview(changes: Array) -> bool:
 	for changeVariant in changes:
 		var change := changeVariant as Dictionary
 		var coordinates: Vector2i = change["coordinates"]
-		var toolId := String(change["afterToolId"])
+		var tileValue := change["afterTile"] as Dictionary
+		var toolId := String(tileValue.get("toolId", ""))
 		var previewTile := previewTileByCoordinates.get(coordinates) as Node2D
 		if previewTile == null or previewTile.get_parent() != previewTiles or toolId.is_empty() or occupancy.has(coordinates):
 			return false
@@ -802,7 +840,7 @@ func promotePreviewTiles(changes: Array) -> void:
 		previewTile.reparent(placedTiles)
 		previewTile.modulate = Color.WHITE
 		occupancy[coordinates] = previewTile
-		tileData[coordinates] = String(change["afterToolId"])
+		tileData[coordinates] = (change["afterTile"] as Dictionary).duplicate(true)
 	previewTileByCoordinates.clear()
 
 func pushHistory(changes: Array[Dictionary], selectionBefore: Dictionary, selectionAfter: Dictionary) -> void:
@@ -824,16 +862,47 @@ func makeChangesForActiveMap(changeMap: Dictionary) -> Array[Dictionary]:
 		changes.append(changeMap[coordinates])
 	return changes
 
-func setTileTool(coordinates: Vector2i, toolId: String) -> bool:
+func makeTileValue(toolId: String, isOn: Variant = null) -> Dictionary:
 	if toolId.is_empty():
-		if not occupancy.has(coordinates):
+		return {}
+	var resolvedIsOn := InkRegistry.getDefaultIsOn(toolId) if isOn == null else bool(isOn)
+	return {
+		"toolId": toolId,
+		"isOn": resolvedIsOn,
+	}
+
+func normalizeTileValue(rawValue: Variant) -> Dictionary:
+	if rawValue is Dictionary:
+		var tileValue := rawValue as Dictionary
+		return makeTileValue(String(tileValue.get("toolId", "")), tileValue.get("isOn", null))
+	if rawValue is String:
+		return makeTileValue(String(rawValue))
+	return {}
+
+func getTileValueAt(coordinates: Vector2i) -> Dictionary:
+	return normalizeTileValue(tileData.get(coordinates, {}))
+
+func setTileTool(coordinates: Vector2i, toolId: String) -> bool:
+	return setTileValue(coordinates, makeTileValue(toolId))
+
+func setTileValue(coordinates: Vector2i, rawValue: Variant) -> bool:
+	var tileValue := normalizeTileValue(rawValue)
+	var toolId := String(tileValue.get("toolId", ""))
+	if toolId.is_empty():
+		if not tileData.has(coordinates) and not occupancy.has(coordinates):
 			return false
-		occupancy[coordinates].queue_free()
-		occupancy.erase(coordinates)
+		if occupancy.has(coordinates):
+			occupancy[coordinates].queue_free()
+			occupancy.erase(coordinates)
 		tileData.erase(coordinates)
 		return true
 	if not isCoordinateValid(coordinates) or tileScene == null or not toolRegistry.has(toolId):
 		return false
+	var isOn := bool(tileValue.get("isOn", false))
+	if occupancy.has(coordinates) and getToolIdAt(coordinates) == toolId:
+		tileData[coordinates] = tileValue.duplicate(true)
+		occupancy[coordinates].call("setInkState", isOn)
+		return true
 	if occupancy.has(coordinates):
 		occupancy[coordinates].queue_free()
 		occupancy.erase(coordinates)
@@ -842,13 +911,13 @@ func setTileTool(coordinates: Vector2i, toolId: String) -> bool:
 	tile.position = Vector2(coordinates * cellSize) + Vector2.ONE * cellSize / 2.0
 	tile.call("setup", self, coordinates, float(cellSize))
 	var attributes: Dictionary = toolRegistry[toolId]
-	tile.call("setAttributes", attributes["icon"], attributes["color"])
+	tile.call("setAttributes", attributes["icon"], attributes["color"], isOn)
 	occupancy[coordinates] = tile
-	tileData[coordinates] = toolId
+	tileData[coordinates] = tileValue.duplicate(true)
 	return true
 
 func getToolIdAt(coordinates: Vector2i) -> String:
-	return String(tileData.get(coordinates, ""))
+	return String(getTileValueAt(coordinates).get("toolId", ""))
 
 func isCoordinateValid(coordinates: Vector2i) -> bool:
 	var cellCenter := Vector2(coordinates * cellSize) + Vector2.ONE * cellSize * 0.5

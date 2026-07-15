@@ -2,6 +2,12 @@ extends Node2D
 
 static var geometryBySize: Dictionary[Vector2i, Dictionary] = {}
 
+const onIconDarkening := 0.45
+const onSideDarkening := 0.55
+const offTopColor := Color("263a3c")
+const offSideShadowColor := Color("101c25")
+const offIconColor := Color("46645f")
+
 @onready var baseBlock: TextureRect = $BaseBlock
 @onready var shadowBlock: TextureRect = $ShadowBlock
 @onready var iconRect: TextureRect = $Icon
@@ -9,6 +15,8 @@ static var geometryBySize: Dictionary[Vector2i, Dictionary] = {}
 var gridCoordinates := Vector2i.ZERO
 var cellSize := 64.0
 var extrusionDepth := 32.0
+var inkColor := Color.WHITE
+var isOn := true
 
 func setup(board: Node2D, coordinates: Vector2i, size: float) -> void:
 	cellSize = size
@@ -69,14 +77,30 @@ static func getGeometry(size: float, depth: float) -> Dictionary:
 static func warmGeometry(size: float) -> void:
 	getGeometry(size, size * 0.5)
 
-func setAttributes(icon: Texture2D, baseColor: Color) -> void:
+static func getTopColor(baseColor: Color, nextIsOn: bool) -> Color:
+	return baseColor if nextIsOn else offTopColor
+
+static func getSideShadowColor(baseColor: Color, nextIsOn: bool) -> Color:
+	return baseColor.darkened(onSideDarkening) if nextIsOn else offSideShadowColor
+
+static func getIconColor(baseColor: Color, nextIsOn: bool) -> Color:
+	return baseColor.darkened(onIconDarkening) if nextIsOn else offIconColor
+
+func setAttributes(icon: Texture2D, baseColor: Color, nextIsOn := true) -> void:
+	inkColor = baseColor
+	iconRect.texture = icon
+	iconRect.visible = icon != null
+	setInkState(nextIsOn)
+
+func setInkState(nextIsOn: bool) -> void:
+	isOn = nextIsOn
+	var topColor := getTopColor(inkColor, isOn)
+	var sideShadowColor := getSideShadowColor(inkColor, isOn)
 	for block in [baseBlock, shadowBlock]:
 		var material := block.material as ShaderMaterial
 		if material:
-			material.set_shader_parameter("topColor", baseColor)
-			material.set_shader_parameter("sideShadowColor", baseColor.darkened(0.55))
+			material.set_shader_parameter("topColor", topColor)
+			material.set_shader_parameter("sideShadowColor", sideShadowColor)
 			material.set_shader_parameter("extrusionDepth", extrusionDepth)
-	iconRect.texture = icon
-	iconRect.visible = icon != null
-	if icon:
-		iconRect.modulate = baseColor.darkened(0.45)
+	if iconRect.texture:
+		iconRect.modulate = getIconColor(inkColor, isOn)
