@@ -1,0 +1,309 @@
+[gd_scene load_steps=10 format=3]
+
+[ext_resource type="Script" path="res://scripts/EditorUi.gd" id="1_editorUi"]
+[ext_resource type="Script" path="res://scripts/BoardCamera.gd" id="2_boardCamera"]
+[ext_resource type="Script" path="res://scripts/CircuitBoard.gd" id="3_circuitBoard"]
+[ext_resource type="PackedScene" path="res://scenes/CircuitTile.tscn" id="4_circuitTile"]
+[ext_resource type="Shader" path="res://shaders/BoardPattern.gdshader" id="5_boardPattern"]
+[ext_resource type="Shader" path="res://shaders/CanvasShadow.gdshader" id="6_canvasShadow"]
+
+[sub_resource type="ShaderMaterial" id="ShaderMaterial_boardPattern"]
+shader = ExtResource("5_boardPattern")
+shader_parameter/BaseColor = Color(0.09, 0.11, 0.15, 1)
+shader_parameter/Shade0 = 1.0
+shader_parameter/Shade1 = 0.97
+shader_parameter/Shade2 = 0.94
+shader_parameter/Shade3 = 0.91
+shader_parameter/Shade4 = 0.94
+shader_parameter/Shade5 = 0.97
+shader_parameter/PatternSize = 1024.0
+shader_parameter/BoardSize = Vector2(2560, 1792)
+shader_parameter/PatternOrigin = Vector2(0, 0)
+shader_parameter/CornerRadius = 64.0
+shader_parameter/EdgeSoftness = 1.0
+
+[sub_resource type="ShaderMaterial" id="ShaderMaterial_canvasPattern"]
+shader = ExtResource("5_boardPattern")
+shader_parameter/BaseColor = Color(0.09, 0.11, 0.15, 1)
+shader_parameter/Shade0 = 1.0
+shader_parameter/Shade1 = 0.97
+shader_parameter/Shade2 = 0.94
+shader_parameter/Shade3 = 0.91
+shader_parameter/Shade4 = 0.94
+shader_parameter/Shade5 = 0.97
+shader_parameter/PatternSize = 1024.0
+shader_parameter/BoardSize = Vector2(18944, 18176)
+shader_parameter/PatternOrigin = Vector2(-9472, -9088)
+shader_parameter/CornerRadius = 0.0
+shader_parameter/EdgeSoftness = 1.0
+
+[sub_resource type="ShaderMaterial" id="ShaderMaterial_canvasShadow"]
+shader = ExtResource("6_canvasShadow")
+shader_parameter/BoardSize = Vector2(2560, 1792)
+shader_parameter/FrameSize = Vector2(3072, 2304)
+shader_parameter/BoardOffset = Vector2(256, 256)
+shader_parameter/CornerRadius = 64.0
+shader_parameter/ShadowBlur = 192.0
+shader_parameter/ShadowColor = Color(0.005, 0.009, 0.017, 0.28)
+
+[node name="Main" type="Control"]
+layout_mode = 3
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+script = ExtResource("1_editorUi")
+
+[node name="BoardViewport" type="SubViewportContainer" parent="."]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+offset_left = 0.0
+offset_top = 62.0
+grow_horizontal = 2
+grow_vertical = 2
+stretch = true
+
+[node name="SubViewport" type="SubViewport" parent="BoardViewport"]
+handle_input_locally = false
+size = Vector2i(1280, 800)
+render_target_update_mode = 4
+
+[node name="BoardCamera" type="Camera2D" parent="BoardViewport/SubViewport" node_paths=PackedStringArray("Board")]
+position = Vector2(0, 0)
+zoom = Vector2(0.5, 0.5)
+script = ExtResource("2_boardCamera")
+Board = NodePath("../CircuitBoard")
+
+[node name="CircuitBoard" type="Node2D" parent="BoardViewport/SubViewport" node_paths=PackedStringArray("CanvasBackground", "CanvasShadow", "CanvasBoard", "BoardCamera")]
+script = ExtResource("3_circuitBoard")
+TileScene = ExtResource("4_circuitTile")
+CanvasBackground = NodePath("CanvasBackground")
+CanvasShadow = NodePath("CanvasShadow")
+CanvasBoard = NodePath("CanvasBoard")
+BoardCamera = NodePath("../BoardCamera")
+
+[node name="CanvasBackground" type="ColorRect" parent="BoardViewport/SubViewport/CircuitBoard"]
+z_index = -2
+material = SubResource("ShaderMaterial_canvasPattern")
+mouse_filter = 2
+color = Color(1, 1, 1, 1)
+
+[node name="CanvasShadow" type="ColorRect" parent="BoardViewport/SubViewport/CircuitBoard"]
+z_index = -1
+material = SubResource("ShaderMaterial_canvasShadow")
+mouse_filter = 2
+color = Color(1, 1, 1, 1)
+
+[node name="CanvasBoard" type="ColorRect" parent="BoardViewport/SubViewport/CircuitBoard"]
+material = SubResource("ShaderMaterial_boardPattern")
+mouse_filter = 2
+color = Color(1, 1, 1, 1)
+
+[node name="PlacedTiles" type="Node2D" parent="BoardViewport/SubViewport/CircuitBoard"]
+y_sort_enabled = true
+
+[node name="Selector" type="ColorRect" parent="BoardViewport/SubViewport/CircuitBoard"]
+z_index = 4096
+offset_right = 64.0
+offset_bottom = 64.0
+mouse_filter = 2
+color = Color(1, 1, 1, 0.22)
+
+[node name="Interface" type="CanvasLayer" parent="."]
+
+[node name="TopBar" type="Panel" parent="Interface"]
+layout_mode = 1
+anchors_preset = 10
+anchor_right = 1.0
+offset_bottom = 62.0
+grow_horizontal = 2
+mouse_filter = 0
+
+[node name="ProjectContent" type="HBoxContainer" parent="Interface/TopBar"]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+offset_left = 8.0
+offset_top = 3.0
+offset_right = -8.0
+offset_bottom = -31.0
+grow_horizontal = 2
+grow_vertical = 2
+theme_override_constants/separation = 7
+
+[node name="NewProjectButton" type="Button" parent="Interface/TopBar/ProjectContent"]
+layout_mode = 2
+custom_minimum_size = Vector2(24, 24)
+size_flags_vertical = 4
+tooltip_text = "NewProject"
+
+[node name="OpenProjectButton" type="Button" parent="Interface/TopBar/ProjectContent"]
+layout_mode = 2
+custom_minimum_size = Vector2(24, 24)
+size_flags_vertical = 4
+tooltip_text = "OpenProject"
+
+[node name="SaveProjectButton" type="Button" parent="Interface/TopBar/ProjectContent"]
+layout_mode = 2
+custom_minimum_size = Vector2(24, 24)
+size_flags_vertical = 4
+tooltip_text = "SaveProject"
+
+[node name="SaveAsProjectButton" type="Button" parent="Interface/TopBar/ProjectContent"]
+layout_mode = 2
+custom_minimum_size = Vector2(24, 24)
+size_flags_vertical = 4
+tooltip_text = "SaveProjectAs"
+
+[node name="RecentProjectsButton" type="Button" parent="Interface/TopBar/ProjectContent"]
+layout_mode = 2
+custom_minimum_size = Vector2(24, 24)
+size_flags_vertical = 4
+tooltip_text = "RecentProjects"
+
+[node name="ProjectSpacer" type="Control" parent="Interface/TopBar/ProjectContent"]
+layout_mode = 2
+size_flags_horizontal = 3
+
+[node name="RowSeparator" type="ColorRect" parent="Interface/TopBar"]
+layout_mode = 1
+anchors_preset = 10
+anchor_right = 1.0
+offset_top = 31.0
+offset_bottom = 32.0
+grow_horizontal = 2
+mouse_filter = 2
+
+[node name="Content" type="HBoxContainer" parent="Interface/TopBar"]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+offset_left = 8.0
+offset_top = 32.0
+offset_right = -8.0
+offset_bottom = -6.0
+grow_horizontal = 2
+grow_vertical = 2
+theme_override_constants/separation = 8
+
+[node name="LeftSidebarToggle" type="Button" parent="Interface/TopBar/Content"]
+layout_mode = 2
+custom_minimum_size = Vector2(24, 24)
+size_flags_vertical = 4
+toggle_mode = true
+button_pressed = true
+tooltip_text = "CloseLeftSidebar"
+
+[node name="SidebarSeparator" type="ColorRect" parent="Interface/TopBar/Content"]
+layout_mode = 2
+custom_minimum_size = Vector2(1, 22)
+size_flags_vertical = 4
+mouse_filter = 2
+
+[node name="RightSidebarToggle" type="Button" parent="Interface/TopBar/Content"]
+layout_mode = 2
+custom_minimum_size = Vector2(24, 24)
+size_flags_vertical = 4
+toggle_mode = true
+button_pressed = true
+tooltip_text = "CloseRightSidebar"
+
+[node name="SimulationModeButton" type="Button" parent="Interface/TopBar/Content"]
+layout_mode = 2
+custom_minimum_size = Vector2(108, 24)
+size_flags_vertical = 4
+text = "Simulate"
+tooltip_text = "EnterSimulation"
+
+[node name="PreviousTickButton" type="Button" parent="Interface/TopBar/Content"]
+layout_mode = 2
+custom_minimum_size = Vector2(24, 24)
+size_flags_vertical = 4
+tooltip_text = "PreviousTick"
+
+[node name="LoopStepButton" type="Button" parent="Interface/TopBar/Content"]
+layout_mode = 2
+custom_minimum_size = Vector2(24, 24)
+size_flags_vertical = 4
+tooltip_text = "SwitchToStepMode"
+
+[node name="NextTickButton" type="Button" parent="Interface/TopBar/Content"]
+layout_mode = 2
+custom_minimum_size = Vector2(24, 24)
+size_flags_vertical = 4
+tooltip_text = "NextTick"
+
+[node name="StepLengthControl" type="Button" parent="Interface/TopBar/Content"]
+layout_mode = 2
+custom_minimum_size = Vector2(42, 24)
+size_flags_vertical = 4
+text = "1"
+tooltip_text = "StepLength"
+
+[node name="LoopFrequencySlider" type="HSlider" parent="Interface/TopBar/Content"]
+layout_mode = 2
+custom_minimum_size = Vector2(96, 24)
+size_flags_vertical = 4
+min_value = 1.0
+max_value = 20.0
+step = 1.0
+value = 5.0
+tooltip_text = "LoopFrequency"
+
+[node name="SimulationStatus" type="Label" parent="Interface/TopBar/Content"]
+layout_mode = 2
+custom_minimum_size = Vector2(96, 24)
+size_flags_vertical = 4
+text = "~5 TPS"
+vertical_alignment = 1
+
+[node name="SimulationSpacer" type="Control" parent="Interface/TopBar/Content"]
+layout_mode = 2
+size_flags_horizontal = 3
+
+[node name="DockHost" type="Control" parent="Interface"]
+layout_mode = 3
+anchor_bottom = 1.0
+offset_top = 62.0
+offset_right = 272.0
+grow_vertical = 2
+mouse_filter = 0
+clip_contents = true
+
+[node name="DockResizeHandle" type="ColorRect" parent="Interface"]
+layout_mode = 3
+anchor_bottom = 1.0
+offset_left = 272.0
+offset_top = 62.0
+offset_right = 278.0
+grow_vertical = 2
+mouse_filter = 0
+
+[node name="RightDockHost" type="Control" parent="Interface"]
+layout_mode = 3
+anchor_left = 1.0
+anchor_right = 1.0
+anchor_bottom = 1.0
+offset_left = -272.0
+offset_top = 62.0
+grow_horizontal = 0
+grow_vertical = 2
+mouse_filter = 0
+clip_contents = true
+
+[node name="RightDockResizeHandle" type="ColorRect" parent="Interface"]
+layout_mode = 3
+anchor_left = 1.0
+anchor_right = 1.0
+anchor_bottom = 1.0
+offset_left = -278.0
+offset_top = 62.0
+offset_right = -272.0
+grow_horizontal = 0
+grow_vertical = 2
+mouse_filter = 0

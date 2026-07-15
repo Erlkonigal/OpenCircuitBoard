@@ -1,0 +1,6 @@
+[gd_scene load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://scripts/ClipboardDock.gd" id="1_clipboardDock"]
+
+[node name="ClipboardDock" type="Control"]
+script = ExtResource("1_clipboardDock")
