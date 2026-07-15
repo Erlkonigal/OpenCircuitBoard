@@ -2,7 +2,7 @@ extends Node2D
 
 const InkRegistry := preload("res://scripts/inkRegistry.gd")
 const SelectionOverlay := preload("res://scripts/selectionOverlay.gd")
-const selectionHoldMilliseconds := 350
+const selectionHoldMilliseconds := 250
 const dragThresholdPixels := 6.0
 const clipboardHistoryLimit := 4
 
@@ -183,13 +183,8 @@ func handleMouseButton(event: InputEventMouseButton) -> void:
 		return
 	if event.pressed:
 		var coordinates := getGridCoordinates(get_global_mouse_position())
-		if not isCoordinateValid(coordinates):
-			return
-		if canStartMoveAt(coordinates):
-			beginMove(coordinates)
-		else:
-			beginLeftPending(event.position, coordinates)
-		get_viewport().set_input_as_handled()
+		if handleLeftButtonPress(event.position, coordinates):
+			get_viewport().set_input_as_handled()
 		return
 	if interactionMode == InteractionMode.LEFT_PENDING:
 		placeSingleTile()
@@ -272,6 +267,17 @@ func getSelectionItem() -> Dictionary:
 
 func canStartMoveAt(coordinates: Vector2i) -> bool:
 	return not selectedCells.is_empty() and selectionBounds.has_point(coordinates)
+
+func handleLeftButtonPress(mousePosition: Vector2, coordinates: Vector2i) -> bool:
+	if canStartMoveAt(coordinates):
+		beginMove(coordinates)
+	elif not selectedCells.is_empty():
+		clearSelection()
+	elif not isCoordinateValid(coordinates):
+		return false
+	else:
+		beginLeftPending(mousePosition, coordinates)
+	return true
 
 func beginLeftPending(mousePosition: Vector2, coordinates: Vector2i) -> void:
 	interactionMode = InteractionMode.LEFT_PENDING

@@ -164,7 +164,7 @@ func buildClipboardSection() -> Control:
 
 	historyGrid = GridContainer.new()
 	historyGrid.name = "clipboardHistory"
-	historyGrid.columns = 2
+	historyGrid.columns = 1
 	historyGrid.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	historyGrid.add_theme_constant_override("h_separation", 4)
 	historyGrid.add_theme_constant_override("v_separation", 4)
@@ -188,7 +188,7 @@ func buildHistoryItem(index: int, item: Dictionary) -> Button:
 	var itemButton := Button.new()
 	itemButton.name = "clipboardItem%d" % index
 	itemButton.toggle_mode = true
-	itemButton.custom_minimum_size = Vector2(84, 120)
+	itemButton.custom_minimum_size = Vector2(0, 80)
 	itemButton.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	itemButton.size_flags_vertical = Control.SIZE_SHRINK_BEGIN
 	itemButton.add_theme_stylebox_override("normal", makeBox(fieldBackgroundColor, 4, sectionBorderColor))
@@ -206,35 +206,40 @@ func buildHistoryItem(index: int, item: Dictionary) -> Button:
 	itemMargin.add_theme_constant_override("margin_right", 5)
 	itemMargin.add_theme_constant_override("margin_bottom", 5)
 	itemButton.add_child(itemMargin)
-	var itemContent := VBoxContainer.new()
+	var itemContent := HBoxContainer.new()
 	itemContent.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	itemContent.add_theme_constant_override("separation", 2)
+	itemContent.add_theme_constant_override("separation", 7)
 	itemMargin.add_child(itemContent)
-	var itemTitle := Label.new()
-	itemTitle.name = "clipboardItemTitle"
-	itemTitle.text = "Selection %d" % (index + 1)
-	itemTitle.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	itemTitle.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	itemTitle.add_theme_color_override("font_color", primaryTextColor)
-	itemTitle.add_theme_font_size_override("font_size", 14)
-	itemContent.add_child(itemTitle)
 	var tiles := getPreviewTiles(item)
 	var dimensions := getClipboardDimensions(item, tiles)
-	var itemDetails := Label.new()
-	itemDetails.name = "clipboardItemDetails"
-	itemDetails.text = "%d x %d\n%d tiles" % [dimensions.x, dimensions.y, tiles.size()]
-	itemDetails.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	itemDetails.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	itemDetails.add_theme_color_override("font_color", mutedTextColor)
-	itemDetails.add_theme_font_size_override("font_size", 13)
-	itemContent.add_child(itemDetails)
 	var preview := ClipboardPreview.new()
 	preview.name = "clipboardPreview"
-	preview.custom_minimum_size = Vector2(0, 48)
-	preview.size_flags_vertical = Control.SIZE_SHRINK_END
+	preview.custom_minimum_size = Vector2(58, 58)
+	preview.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
+	preview.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 	preview.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	preview.setPreview(tiles, dimensions)
 	itemContent.add_child(preview)
+	var itemText := VBoxContainer.new()
+	itemText.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	itemText.alignment = BoxContainer.ALIGNMENT_CENTER
+	itemText.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	itemText.add_theme_constant_override("separation", 2)
+	itemContent.add_child(itemText)
+	var itemTitle := Label.new()
+	itemTitle.name = "clipboardItemTitle"
+	itemTitle.text = "Selection %d" % (index + 1)
+	itemTitle.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	itemTitle.add_theme_color_override("font_color", primaryTextColor)
+	itemTitle.add_theme_font_size_override("font_size", 14)
+	itemText.add_child(itemTitle)
+	var itemDetails := Label.new()
+	itemDetails.name = "clipboardItemDetails"
+	itemDetails.text = "%d x %d | %d tiles" % [dimensions.x, dimensions.y, tiles.size()]
+	itemDetails.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	itemDetails.add_theme_color_override("font_color", mutedTextColor)
+	itemDetails.add_theme_font_size_override("font_size", 13)
+	itemText.add_child(itemDetails)
 	return itemButton
 
 func selectClipboardItem(index: int) -> void:
