@@ -2,9 +2,11 @@ extends "res://scripts/dockView.gd"
 
 signal dockMenuRequested(menuButton: Button)
 signal inkSelected(ink: Dictionary)
+signal inkVariantMenuRequested(anchorButton: Button, paletteToolId: String)
 signal eventRecorded(eventText: String)
 
 const InkRegistry := preload("res://scripts/inkRegistry.gd")
+const InkButton := preload("res://scripts/inkButton.gd")
 const circuitEditorIcon := preload("res://assets/circuitEditor.svg")
 const dockIconSize := 16
 const sidebarBackgroundColor := Color("131c28")
@@ -22,7 +24,6 @@ var selectedInkId := "or"
 var hoveredInkLabel: Label
 var positionXLabel: Label
 var positionYLabel: Label
-var solidIcon: ImageTexture
 var dockMenuButton: Button
 
 func _init() -> void:
@@ -32,9 +33,8 @@ func _init() -> void:
 	dockIcon = circuitEditorIcon
 
 func _ready() -> void:
-	solidIcon = makeSolidIcon()
 	buildDock()
-	selectInk(InkRegistry.getInk(selectedInkId), false)
+	selectInk(InkRegistry.getInk(selectedInkId), false, false)
 
 func buildDock() -> void:
 	set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
@@ -122,7 +122,7 @@ func buildInksSection() -> Control:
 	var section := getSectionContent(panel)
 	section.add_child(makeSectionTitle("Inks"))
 	var lastCategory := ""
-	for ink in InkRegistry.getInks():
+	for ink in InkRegistry.getPaletteInks():
 		var category: String = ink.category
 		if category != lastCategory:
 			var categoryLabel := Label.new()
@@ -184,27 +184,15 @@ func makeSectionTitle(titleText: String) -> Label:
 	return title
 
 func makeInkButton(ink: Dictionary) -> Button:
-	var button := Button.new()
-	button.custom_minimum_size = Vector2(26, 22)
-	button.toggle_mode = true
-	button.tooltip_text = String(ink.title)
-	button.icon = solidIcon
-	button.expand_icon = false
-	button.icon_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	button.vertical_icon_alignment = VERTICAL_ALIGNMENT_CENTER
-	var accent: Color = ink.color
-	button.add_theme_color_override("icon_normal_color", accent)
-	button.add_theme_color_override("icon_hover_color", accent.lightened(0.15))
-	button.add_theme_color_override("icon_pressed_color", accent)
-	button.add_theme_color_override("icon_hover_pressed_color", accent.lightened(0.15))
-	button.add_theme_stylebox_override("normal", makeBox(fieldBackgroundColor, 3, Color.TRANSPARENT))
-	button.add_theme_stylebox_override("hover", makeBox(controlHoverColor, 3, Color.TRANSPARENT))
-	button.add_theme_stylebox_override("pressed", makeBox(fieldBackgroundColor, 3, accent))
-	button.add_theme_stylebox_override("hover_pressed", makeBox(controlHoverColor, 3, accent.lightened(0.15)))
-	button.pressed.connect(selectInk.bind(ink, true))
+	var button := InkButton.new() as Button
+	button.call("configure", ink)
+	button.pressed.connect(selectInk.bind(ink))
 	button.mouse_entered.connect(setHoveredInk.bind(String(ink.title)))
 	button.mouse_exited.connect(clearHoveredInk)
-	inkButtons[String(ink.toolId)] = button
+	var paletteToolId := InkRegistry.getPaletteToolId(ink)
+	if bool(ink.get("isExpandable", false)):
+		button.gui_input.connect(handleInkButtonInput.bind(button, paletteToolId))
+	inkButtons[paletteToolId] = button
 	return button
 
 func makeInfoLabel(labelText: String) -> Label:
@@ -271,15 +259,39 @@ func makeArrayValueField(labelText: String, value: float, minimum: float, maximu
 	field.add_child(makeSpinBox(value, minimum, maximum))
 	return field
 
-func selectInk(ink: Dictionary, shouldRecordEvent := true) -> void:
+func selectInk(ink: Dictionary, shouldRecordEvent := true, shouldEmit := true) -> void:
 	if ink.is_empty():
 		return
-	selectedInkId = String(ink.toolId)
-	for toolId in inkButtons:
-		inkButtons[toolId].set_pressed_no_signal(toolId == selectedInkId)
+	selectedInkId = InkRegistry.getComponentId(ink)
+	updateInkButtonStates()
 	if shouldRecordEvent:
 		recordEvent("Selected%s" % ink.title)
-	inkSelected.emit(ink)
+	if shouldEmit:
+		inkSelected.emit(ink)
+
+func syncSelectedInk(toolId: String) -> void:
+	selectInk(InkRegistry.getInk(toolId), false, false)
+
+func getSelectedInkId() -> String:
+	return selectedInkId
+
+func updateInkButtonStates() -> void:
+	var selectedInk := InkRegistry.getInk(selectedInkId)
+	for paletteToolId in inkButtons:
+		var button := inkButtons[paletteToolId]
+		var paletteInk := InkRegistry.getInk(String(paletteToolId))
+		var isSelected := InkRegistry.getPaletteToolId(selectedInk) == paletteToolId
+		var displayedInk: Dictionary = selectedInk if isSelected else paletteInk
+		button.set_pressed_no_signal(isSelected)
+		button.call("setInkAppearance", displayedInk.get("color", Color.WHITE), isSelected)
+
+func handleInkButtonInput(event: InputEvent, anchorButton: Button, paletteToolId: String) -> void:
+	var mouseButton := event as InputEventMouseButton
+	if mouseButton == null or mouseButton.button_index != MOUSE_BUTTON_RIGHT:
+		return
+	if mouseButton.pressed:
+		inkVariantMenuRequested.emit(anchorButton, paletteToolId)
+	accept_event()
 
 func setHoveredInk(titleText: String) -> void:
 	if hoveredInkLabel:
@@ -321,8 +333,3 @@ func makeFieldBox(borderColor: Color) -> StyleBoxFlat:
 	box.content_margin_right = 5
 	box.content_margin_bottom = 1
 	return box
-
-func makeSolidIcon() -> ImageTexture:
-	var image := Image.create(16, 16, false, Image.FORMAT_RGBA8)
-	image.fill(Color.WHITE)
-	return ImageTexture.create_from_image(image)

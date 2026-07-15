@@ -1,6 +1,8 @@
 extends Control
 
 const DockRegistry := preload("res://scripts/dockRegistry.gd")
+const InkRegistry := preload("res://scripts/inkRegistry.gd")
+const InkButton := preload("res://scripts/inkButton.gd")
 const panelLeftCloseIcon := preload("res://assets/panelLeftClose.svg")
 const panelLeftOpenIcon := preload("res://assets/panelLeftOpen.svg")
 const panelRightCloseIcon := preload("res://assets/panelRightClose.svg")
@@ -11,6 +13,10 @@ const topBarFontSize := 16
 const dockMenuButtonSize := 28
 const dockMenuSeparation := 5
 const dockMenuPadding := 14
+const inkVariantMenuColumns := 3
+const inkVariantMenuButtonSize := Vector2i(28, 24)
+const inkVariantMenuSeparation := 4
+const inkVariantMenuPadding := 14
 const leftDockSide := "left"
 const rightDockSide := "right"
 
@@ -30,6 +36,10 @@ var rightCurrentDock: Control
 var dockMenu: PopupPanel
 var dockMenuColumns := 1
 var dockMenuTargetSide := leftDockSide
+var inkVariantMenu: PopupPanel
+var inkVariantMenuGrid: GridContainer
+var inkVariantMenuDock: Control
+var inkVariantButtons: Dictionary[String, Button] = {}
 var dockWidth := 272.0
 var rightDockWidth := 272.0
 var eventHistory: Array[String] = []
@@ -64,6 +74,7 @@ func _ready() -> void:
 		push_error("NoDockRegistered")
 		return
 	buildDockMenu()
+	buildInkVariantMenu()
 	var initialLeftDockId := String(dockDefinitions[0].dockId)
 	activateDock(initialLeftDockId, leftDockSide)
 	var initialRightDockId := getInitialRightDockId(initialLeftDockId)
@@ -204,6 +215,8 @@ func setDockForSide(definition: Dictionary, dockSide: String) -> void:
 		return
 	var previousDock := getDockForSide(dockSide)
 	if previousDock:
+		if inkVariantMenuDock == previousDock:
+			hideInkVariantMenu()
 		previousDock.free()
 	var dockScene := definition.scene as PackedScene
 	var nextDock := dockScene.instantiate() as Control
@@ -227,10 +240,14 @@ func connectDockSignals(dock: Control, dockSide: String) -> void:
 		dock.connect("dockMenuRequested", showDockMenu.bind(dockSide))
 	if dock.has_signal("inkSelected"):
 		dock.connect("inkSelected", selectInk)
+	if dock.has_signal("inkVariantMenuRequested"):
+		dock.connect("inkVariantMenuRequested", showInkVariantMenu.bind(dock))
 	if dock.has_signal("eventRecorded"):
 		dock.connect("eventRecorded", recordEvent)
 	if dock.has_signal("clipboardItemSelected"):
 		dock.connect("clipboardItemSelected", selectClipboardItem)
+	if dock.has_method("syncSelectedInk"):
+		dock.call("syncSelectedInk", String(board.get("selectedTool")))
 
 func recordEvent(eventText: String) -> void:
 	eventHistory.append(eventText)
@@ -252,8 +269,79 @@ func showDockMenu(menuButton: Button, dockSide: String) -> void:
 	popupPosition.y = clampi(popupPosition.y, 0, maxi(0, int(viewportSize.y) - menuSize.y))
 	dockMenu.popup(Rect2i(popupPosition, menuSize))
 
+func buildInkVariantMenu() -> void:
+	inkVariantMenu = PopupPanel.new()
+	inkVariantMenu.transparent_bg = true
+	inkVariantMenu.add_theme_stylebox_override("panel", makeMenuBox())
+	$Interface.add_child(inkVariantMenu)
+	inkVariantMenuGrid = GridContainer.new()
+	inkVariantMenuGrid.name = "inkVariantMenuGrid"
+	inkVariantMenuGrid.columns = inkVariantMenuColumns
+	inkVariantMenuGrid.add_theme_constant_override("h_separation", inkVariantMenuSeparation)
+	inkVariantMenuGrid.add_theme_constant_override("v_separation", inkVariantMenuSeparation)
+	inkVariantMenu.add_child(inkVariantMenuGrid)
+	inkVariantMenu.popup_hide.connect(func() -> void: inkVariantMenuDock = null)
+
+func showInkVariantMenu(anchorButton: Button, paletteToolId: String, dock: Control) -> void:
+	var variants := InkRegistry.getInkVariants(paletteToolId)
+	if variants.size() < 2:
+		return
+	inkVariantMenuDock = dock
+	populateInkVariantMenu(variants)
+	var menuRows := ceili(float(variants.size()) / float(inkVariantMenuColumns))
+	var menuSize := Vector2i(
+		inkVariantMenuPadding + inkVariantMenuColumns * inkVariantMenuButtonSize.x + (inkVariantMenuColumns - 1) * inkVariantMenuSeparation,
+		inkVariantMenuPadding + menuRows * inkVariantMenuButtonSize.y + (menuRows - 1) * inkVariantMenuSeparation
+	)
+	var anchorRect := anchorButton.get_global_rect()
+	var popupPosition := Vector2i(anchorRect.position + Vector2(anchorRect.size.x + 4.0, 0.0))
+	var viewportSize := get_viewport_rect().size
+	if popupPosition.x + menuSize.x > int(viewportSize.x):
+		popupPosition.x = int(anchorRect.position.x) - menuSize.x - 4
+	if popupPosition.y + menuSize.y > int(viewportSize.y):
+		popupPosition.y = int(anchorRect.end.y) - menuSize.y
+	popupPosition.x = clampi(popupPosition.x, 0, maxi(0, int(viewportSize.x) - menuSize.x))
+	popupPosition.y = clampi(popupPosition.y, 0, maxi(0, int(viewportSize.y) - menuSize.y))
+	inkVariantMenu.popup(Rect2i(popupPosition, menuSize))
+
+func populateInkVariantMenu(variants: Array[Dictionary]) -> void:
+	for child in inkVariantMenuGrid.get_children():
+		child.free()
+	inkVariantButtons.clear()
+	for ink in variants:
+		var button := InkButton.new() as Button
+		button.call("configure", ink)
+		button.pressed.connect(selectInkVariant.bind(ink))
+		inkVariantMenuGrid.add_child(button)
+		inkVariantButtons[InkRegistry.getComponentId(ink)] = button
+	refreshInkVariantButtons()
+
+func selectInkVariant(ink: Dictionary) -> void:
+	if inkVariantMenuDock and inkVariantMenuDock.has_method("selectInk"):
+		inkVariantMenuDock.call("selectInk", ink)
+	hideInkVariantMenu()
+
+func hideInkVariantMenu() -> void:
+	if inkVariantMenu:
+		inkVariantMenu.hide()
+	inkVariantMenuDock = null
+
+func refreshInkVariantButtons() -> void:
+	if inkVariantMenuDock == null:
+		return
+	var selectedInkId := ""
+	if inkVariantMenuDock.has_method("getSelectedInkId"):
+		selectedInkId = String(inkVariantMenuDock.call("getSelectedInkId"))
+	for componentId in inkVariantButtons:
+		var button := inkVariantButtons[componentId]
+		var ink := InkRegistry.getInk(String(componentId))
+		var isSelected := componentId == selectedInkId
+		button.set_pressed_no_signal(isSelected)
+		button.call("setInkAppearance", ink.get("color", Color.WHITE), isSelected)
+
 func selectInk(ink: Dictionary) -> void:
-	board.call("selectTool", String(ink.toolId))
+	board.call("selectTool", InkRegistry.getComponentId(ink))
+	refreshInkVariantButtons()
 
 func updateClipboardHistory(history: Array[Dictionary], selectedIndex: int) -> void:
 	for dock in getActiveDocks():

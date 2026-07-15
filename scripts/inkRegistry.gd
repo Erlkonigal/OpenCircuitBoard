@@ -1,36 +1,88 @@
 extends RefCounted
 
 static func getInks() -> Array[Dictionary]:
+	return getPaletteInks()
+
+static func getPaletteInks() -> Array[Dictionary]:
 	return [
-		{"toolId": "cross", "title": "Cross", "category": "Space Optimization", "color": Color("8da8cf")},
-		{"toolId": "tunnel", "title": "Tunnel", "category": "Space Optimization", "color": Color("7483a1")},
-		{"toolId": "mesh", "title": "Mesh", "category": "Space Optimization", "color": Color("91a66c")},
-		{"toolId": "bus", "title": "Bus", "category": "Space Optimization", "color": Color("2378f4")},
-		{"toolId": "read", "title": "Read", "category": "Trace", "color": Color("f04f68")},
-		{"toolId": "write", "title": "Write", "category": "Trace", "color": Color("4ca8ef")},
-		{"toolId": "trace", "title": "Trace", "category": "Trace", "color": Color("f4df35")},
-		{"toolId": "buffer", "title": "Buffer", "category": "Gates", "color": Color("55ed91")},
-		{"toolId": "and", "title": "And", "category": "Gates", "color": Color("f3c46e")},
-		{"toolId": "or", "title": "Or", "category": "Gates", "color": Color("55dfeb")},
-		{"toolId": "xor", "title": "Xor", "category": "Gates", "color": Color("a977ed")},
-		{"toolId": "not", "title": "Not", "category": "Gates", "color": Color("ef5b78")},
-		{"toolId": "nand", "title": "Nand", "category": "Gates", "color": Color("f59d35")},
-		{"toolId": "nor", "title": "Nor", "category": "Gates", "color": Color("46d8e5")},
-		{"toolId": "xnor", "title": "Xnor", "category": "Gates", "color": Color("bf58ee")},
-		{"toolId": "latchOn", "title": "LatchOn", "category": "General Components", "color": Color("43ec90")},
-		{"toolId": "latchOff", "title": "LatchOff", "category": "General Components", "color": Color("67d9a2")},
-		{"toolId": "clock", "title": "Clock", "category": "General Components", "color": Color("f05b70")},
-		{"toolId": "led", "title": "Led", "category": "General Components", "color": Color("e6edf8")},
+		makeInk("cross", "Cross", "Space Optimization", Color("8da8cf")),
+		makeInk("tunnel", "Tunnel", "Space Optimization", Color("7483a1")),
+		makeInk("mesh", "Mesh", "Space Optimization", Color("91a66c")),
+		makeInk("bus", "Bus", "Space Optimization", Color("2378f4")),
+		makeInk("read", "Read", "Trace", Color("f04f68")),
+		makeInk("write", "Write", "Trace", Color("4ca8ef")),
+		makeInk("trace", "Trace", "Trace", Color("f4df35"), "trace", true),
+		makeInk("buffer", "Buffer", "Gates", Color("55ed91")),
+		makeInk("and", "And", "Gates", Color("f3c46e")),
+		makeInk("or", "Or", "Gates", Color("55dfeb")),
+		makeInk("xor", "Xor", "Gates", Color("a977ed")),
+		makeInk("not", "Not", "Gates", Color("ef5b78")),
+		makeInk("nand", "Nand", "Gates", Color("f59d35")),
+		makeInk("nor", "Nor", "Gates", Color("46d8e5")),
+		makeInk("xnor", "Xnor", "Gates", Color("bf58ee")),
+		makeInk("latchOn", "LatchOn", "General Components", Color("43ec90")),
+		makeInk("latchOff", "LatchOff", "General Components", Color("67d9a2")),
+		makeInk("clock", "Clock", "General Components", Color("f05b70")),
+		makeInk("led", "Led", "General Components", Color("e6edf8")),
 	]
+
+static func getComponentInks() -> Array[Dictionary]:
+	var componentInks := getPaletteInks()
+	componentInks.append_array([
+		makeInk("traceRed", "Trace Red", "Trace", Color("ff4d4d"), "trace"),
+		makeInk("traceGreen", "Trace Green", "Trace", Color("71f06b"), "trace"),
+		makeInk("traceBlue", "Trace Blue", "Trace", Color("2378f4"), "trace"),
+		makeInk("traceCyan", "Trace Cyan", "Trace", Color("55dfeb"), "trace"),
+		makeInk("traceMagenta", "Trace Magenta", "Trace", Color("c66af6"), "trace"),
+	])
+	return componentInks
+
+static func getInkVariants(paletteToolId: String) -> Array[Dictionary]:
+	var variants: Array[Dictionary] = []
+	for ink in getComponentInks():
+		if getPaletteToolId(ink) == paletteToolId:
+			variants.append(ink)
+	return variants
 
 static func getBoardToolRegistry() -> Dictionary:
 	var toolRegistry := {}
-	for ink in getInks():
-		toolRegistry[ink.toolId] = {"color": ink.color, "icon": null}
+	for ink in getComponentInks():
+		var componentId := getComponentId(ink)
+		toolRegistry[componentId] = {
+			"componentId": componentId,
+			"paletteToolId": getPaletteToolId(ink),
+			"color": ink.color,
+			"icon": null,
+		}
 	return toolRegistry
 
 static func getInk(toolId: String) -> Dictionary:
-	for ink in getInks():
-		if ink.toolId == toolId:
+	for ink in getComponentInks():
+		if getComponentId(ink) == toolId:
 			return ink
 	return {}
+
+static func getComponentId(ink: Dictionary) -> String:
+	return String(ink.get("componentId", ink.get("toolId", "")))
+
+static func getPaletteToolId(ink: Dictionary) -> String:
+	return String(ink.get("paletteToolId", getComponentId(ink)))
+
+static func makeInk(
+	toolId: String,
+	title: String,
+	category: String,
+	color: Color,
+	paletteToolId := "",
+	isExpandable := false
+) -> Dictionary:
+	var resolvedPaletteToolId := paletteToolId if not paletteToolId.is_empty() else toolId
+	return {
+		"toolId": toolId,
+		"componentId": toolId,
+		"paletteToolId": resolvedPaletteToolId,
+		"title": title,
+		"category": category,
+		"color": color,
+		"isExpandable": isExpandable,
+	}

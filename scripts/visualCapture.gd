@@ -1,5 +1,7 @@
 extends SceneTree
 
+const InkRegistry := preload("res://scripts/inkRegistry.gd")
+
 func _init() -> void:
 	call_deferred("captureBoard")
 
@@ -42,6 +44,9 @@ func shouldCaptureDefaultZoom() -> bool:
 
 func shouldCaptureDualDock() -> bool:
 	return OS.get_cmdline_user_args().has("--captureDualDock")
+
+func shouldCaptureTraceColorMenu() -> bool:
+	return OS.get_cmdline_user_args().has("--captureTraceColorMenu")
 
 func getDockForSide(main: Control, dockSide: String) -> Control:
 	assert(main.has_method("getDockForSide"))
@@ -195,6 +200,21 @@ func assertIconButton(button: Button) -> void:
 	assert(button.icon_alignment == HORIZONTAL_ALIGNMENT_CENTER)
 	assert(button.vertical_icon_alignment == VERTICAL_ALIGNMENT_CENTER)
 	assert(button.icon.get_size() == Vector2(16, 16))
+
+func assertInkButton(button: Button, ink: Dictionary, isSelected: bool) -> void:
+	assert(button != null)
+	assert(button.icon == null)
+	assert(button.toggle_mode)
+	assert(button.button_pressed == isSelected)
+	var inkColor: Color = ink.get("color", Color.WHITE)
+	var pressedStyle := button.get_theme_stylebox("pressed") as StyleBoxFlat
+	assert(pressedStyle != null)
+	assert(pressedStyle.bg_color.is_equal_approx(inkColor))
+	var glyph := button.get_node("glyph") as Control
+	assert(glyph != null)
+	var expectedGlyphColor: Color = Color("111a26") if isSelected else inkColor
+	var actualGlyphColor: Color = glyph.get("glyphColor")
+	assert(actualGlyphColor.is_equal_approx(expectedGlyphColor))
 
 func assertClipboardDock(dockHost: Control, clipboardDock: Control, expectedHistory: Array, expectedSelectedIndex: int) -> void:
 	assert(String(clipboardDock.get("dockId")) == "clipboard")
@@ -426,7 +446,7 @@ func assertBoardEditingInteractions(main: Control, board: Node2D, camera: Camera
 	var historySelections: Array[Rect2i] = [
 		Rect2i(Vector2i(1, 0), Vector2i(1, 1)),
 		Rect2i(Vector2i(0, 0), Vector2i(2, 1)),
-		Rect2i(Vector2i(-1, 1), Vector2i(1, 1)),
+		Rect2i(Vector2i(-2, 1), Vector2i(2, 1)),
 		Rect2i(Vector2i(4, -2), Vector2i(1, 1)),
 	]
 	for bounds in historySelections:
@@ -438,15 +458,16 @@ func assertBoardEditingInteractions(main: Control, board: Node2D, camera: Camera
 	for item in clipboardHistory:
 		assert((item.get("boundsSize", Vector2i.ZERO) as Vector2i) != Vector2i(3, 1))
 	assert((clipboardHistory[0].get("boundsSize", Vector2i.ZERO) as Vector2i) == Vector2i(1, 1))
-	assert((clipboardHistory[1].get("boundsSize", Vector2i.ZERO) as Vector2i) == Vector2i(1, 1))
+	assert((clipboardHistory[1].get("boundsSize", Vector2i.ZERO) as Vector2i) == Vector2i(2, 1))
 	assert((clipboardHistory[2].get("boundsSize", Vector2i.ZERO) as Vector2i) == Vector2i(2, 1))
 	assert((clipboardHistory[3].get("boundsSize", Vector2i.ZERO) as Vector2i) == Vector2i(1, 1))
 	assert((clipboardHistory[0].get("tiles", []) as Array).size() == 1)
-	assert((clipboardHistory[1].get("tiles", []) as Array).size() == 1)
+	assert((clipboardHistory[1].get("tiles", []) as Array).size() == 2)
 	assert((clipboardHistory[2].get("tiles", []) as Array).size() == 2)
 	assert((clipboardHistory[3].get("tiles", []) as Array).size() == 1)
 	assert(String((clipboardHistory[0].get("tiles", []) as Array)[0].get("toolId", "")) == "or")
-	assert(String((clipboardHistory[1].get("tiles", []) as Array)[0].get("toolId", "")) == "trace")
+	assert(String((clipboardHistory[1].get("tiles", []) as Array)[0].get("toolId", "")) == "traceRed")
+	assert(String((clipboardHistory[1].get("tiles", []) as Array)[1].get("toolId", "")) == "traceBlue")
 	assert(String((clipboardHistory[2].get("tiles", []) as Array)[0].get("toolId", "")) == "xor")
 	assert(String((clipboardHistory[3].get("tiles", []) as Array)[0].get("toolId", "")) == "or")
 	return {
@@ -600,9 +621,43 @@ func captureBoard() -> void:
 	var inkButtons: Dictionary = circuitEditorDock.get("inkButtons")
 	assert(inkButtons.size() == 19)
 	var toolRegistry: Dictionary = board.get("toolRegistry")
-	assert(toolRegistry.size() == 19)
-	for toolId in ["cross", "tunnel", "mesh", "bus", "read", "write", "trace", "buffer", "and", "or", "xor", "not", "nand", "nor", "xnor", "latchOn", "latchOff", "clock", "led"]:
+	assert(toolRegistry.size() == 24)
+	for toolId in ["cross", "tunnel", "mesh", "bus", "read", "write", "trace", "traceRed", "traceGreen", "traceBlue", "traceCyan", "traceMagenta", "buffer", "and", "or", "xor", "not", "nand", "nor", "xnor", "latchOn", "latchOff", "clock", "led"]:
 		assert(toolRegistry.has(toolId))
+	assert(InkRegistry.getPaletteInks().size() == 19)
+	assert(InkRegistry.getComponentInks().size() == 24)
+	assert(InkRegistry.getInkVariants("trace").size() == 6)
+	var orButton := inkButtons.get("or") as Button
+	assertInkButton(orButton, InkRegistry.getInk("or"), true)
+	var traceButton := inkButtons.get("trace") as Button
+	assertInkButton(traceButton, InkRegistry.getInk("trace"), false)
+	var traceRightClick := InputEventMouseButton.new()
+	traceRightClick.button_index = MOUSE_BUTTON_RIGHT
+	traceRightClick.pressed = true
+	traceButton.emit_signal("gui_input", traceRightClick)
+	await process_frame
+	var inkVariantMenu := main.get("inkVariantMenu") as PopupPanel
+	var inkVariantMenuGrid := main.get("inkVariantMenuGrid") as GridContainer
+	var inkVariantButtons: Dictionary = main.get("inkVariantButtons")
+	assert(inkVariantMenu != null)
+	assert(inkVariantMenu.visible)
+	assert(inkVariantMenuGrid.get_child_count() == 6)
+	assert(inkVariantButtons.size() == 6)
+	assert(inkVariantMenu.position.x >= 0)
+	assert(inkVariantMenu.position.y >= 0)
+	assert(inkVariantMenu.position.x + inkVariantMenu.size.x <= root.size.x)
+	assert(inkVariantMenu.position.y + inkVariantMenu.size.y <= root.size.y)
+	var traceBlueButton := inkVariantButtons.get("traceBlue") as Button
+	assertInkButton(traceBlueButton, InkRegistry.getInk("traceBlue"), false)
+	traceBlueButton.emit_signal("pressed")
+	await process_frame
+	assert(String(board.get("selectedTool")) == "traceBlue")
+	assert(String(circuitEditorDock.call("getSelectedInkId")) == "traceBlue")
+	assert(not inkVariantMenu.visible)
+	assertInkButton(traceButton, InkRegistry.getInk("traceBlue"), true)
+	circuitEditorDock.call("selectInk", InkRegistry.getInk("or"), false)
+	assert(String(board.get("selectedTool")) == "or")
+	assertInkButton(orButton, InkRegistry.getInk("or"), true)
 	var boardBounds: Rect2 = board.get("validRect")
 	board.set_process(false)
 	# Place the right tile first so the capture verifies X-based depth ordering.
@@ -610,8 +665,13 @@ func captureBoard() -> void:
 	board.call("selectTool", "xor")
 	board.call("placeTile", Vector2i(0, 0))
 	assertHoveredInkForCanvasTile(board, circuitEditorDock, Vector2i(0, 0))
-	board.call("selectTool", "trace")
+	board.call("selectTool", "traceBlue")
 	board.call("placeTile", Vector2i(-1, 1))
+	board.call("selectTool", "traceRed")
+	board.call("placeTile", Vector2i(-2, 1))
+	var tileData: Dictionary = board.get("tileData")
+	assert(String(tileData[Vector2i(-1, 1)]) == "traceBlue")
+	assert(String(tileData[Vector2i(-2, 1)]) == "traceRed")
 	# Keep an isolated tile in view to inspect the full shadow silhouette.
 	board.call("selectTool", "or")
 	board.call("placeTile", Vector2i(4, -2))
@@ -758,7 +818,7 @@ func captureBoard() -> void:
 		main.call("setLeftSidebarOpen", false, false)
 		for frame in 2:
 			await process_frame
-	if shouldCaptureSidebar() or shouldCaptureDockMenu():
+	if shouldCaptureSidebar() or shouldCaptureDockMenu() or shouldCaptureTraceColorMenu():
 		main.call("activateDock", "circuitEditor")
 		await process_frame
 	if shouldCaptureEventLogDock():
@@ -776,7 +836,7 @@ func captureBoard() -> void:
 		var dualCircuitEditorDock := dualDockState.get("leftDock") as Control
 		assert(String(dualCircuitEditorDock.get("dockId")) == "circuitEditor")
 		assert(String((dualDockState.get("rightDock") as Control).get("dockId")) == "clipboard")
-	if shouldCaptureSidebar() or shouldCaptureEventLogDock() or shouldCaptureClipboardDock() or shouldCaptureDockMenu() or shouldCaptureDualDock():
+	if shouldCaptureSidebar() or shouldCaptureEventLogDock() or shouldCaptureClipboardDock() or shouldCaptureDockMenu() or shouldCaptureDualDock() or shouldCaptureTraceColorMenu():
 		main.call("setLeftSidebarOpen", true, false)
 		main.call("setRightSidebarOpen", true, false)
 		for frame in 2:
@@ -785,6 +845,17 @@ func captureBoard() -> void:
 		var activeDock := getDockForSide(main, "left")
 		var activeDockMenuButton := activeDock.get("dockMenuButton") as Button
 		activeDockMenuButton.emit_signal("pressed")
+		await process_frame
+	if shouldCaptureTraceColorMenu():
+		var traceCaptureDock := getDockForSide(main, "left") as Control
+		var traceCaptureButtons: Dictionary = traceCaptureDock.get("inkButtons")
+		var traceCaptureButton := traceCaptureButtons.get("trace") as Button
+		traceCaptureDock.call("selectInk", InkRegistry.getInk("traceBlue"), false)
+		await process_frame
+		var traceCaptureRightClick := InputEventMouseButton.new()
+		traceCaptureRightClick.button_index = MOUSE_BUTTON_RIGHT
+		traceCaptureRightClick.pressed = true
+		traceCaptureButton.emit_signal("gui_input", traceCaptureRightClick)
 		await process_frame
 	if shouldCaptureDualDock():
 		var captureCircuitEditorState := getActiveDockState(main, "circuitEditor")
@@ -805,7 +876,7 @@ func captureBoard() -> void:
 	var outputPath := "user://capture.png"
 	var error := image.save_png(outputPath)
 	print("capture=", outputPath, " error=", error, " data=", OS.get_user_data_dir())
-	if shouldCaptureInterface() or shouldCaptureSidebar() or shouldCaptureEventLogDock() or shouldCaptureClipboardDock() or shouldCaptureDockMenu() or shouldCaptureDualDock():
+	if shouldCaptureInterface() or shouldCaptureSidebar() or shouldCaptureEventLogDock() or shouldCaptureClipboardDock() or shouldCaptureDockMenu() or shouldCaptureDualDock() or shouldCaptureTraceColorMenu():
 		var interfaceImage := main.get_viewport().get_texture().get_image()
 		if shouldCaptureInterface():
 			var interfaceError := interfaceImage.save_png("user://interfaceCapture.png")
@@ -825,4 +896,7 @@ func captureBoard() -> void:
 		if shouldCaptureDualDock():
 			var dualDockError := interfaceImage.save_png("user://dualDockCapture.png")
 			print("dualDockCapture=user://dualDockCapture.png error=", dualDockError)
+		if shouldCaptureTraceColorMenu():
+			var traceColorMenuError := interfaceImage.save_png("user://traceColorMenuCapture.png")
+			print("traceColorMenuCapture=user://traceColorMenuCapture.png error=", traceColorMenuError)
 	quit(error)
