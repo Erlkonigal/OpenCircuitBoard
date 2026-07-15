@@ -41,6 +41,7 @@ var occupancy: Dictionary[Vector2i, Node2D] = {}
 var tileData: Dictionary[Vector2i, Dictionary] = {}
 var selectedTool := "or"
 var toolRegistry: Dictionary = {}
+var editorInputEnabled := true
 var interactionMode := InteractionMode.IDLE
 var selectionStartCoordinates := Vector2i.ZERO
 var moveStartCoordinates := Vector2i.ZERO
@@ -125,6 +126,8 @@ func _process(_delta: float) -> void:
 	updateSelectorPosition()
 
 func _unhandled_input(event: InputEvent) -> void:
+	if not editorInputEnabled:
+		return
 	var keyEvent := event as InputEventKey
 	if keyEvent:
 		handleKeyInput(keyEvent)
@@ -268,6 +271,71 @@ func getSimulationTiles() -> Array[Dictionary]:
 			"isOn": bool(tileValue.get("isOn", false)),
 		})
 	return tiles
+
+func exportProjectData() -> Dictionary:
+	var tiles: Array[Dictionary] = []
+	for coordinates in getSortedCoordinates(tileData.keys()):
+		var tileValue := getTileValueAt(coordinates)
+		tiles.append({
+			"x": coordinates.x,
+			"y": coordinates.y,
+			"toolId": String(tileValue.get("toolId", "")),
+			"isOn": bool(tileValue.get("isOn", false)),
+		})
+	return {
+		"selectedTool": selectedTool,
+		"tiles": tiles,
+	}
+
+func importProjectData(projectData: Dictionary) -> bool:
+	var rawTiles: Variant = projectData.get("tiles", [])
+	if not (rawTiles is Array):
+		return false
+	var nextTiles: Dictionary[Vector2i, Dictionary] = {}
+	for rawTileVariant in rawTiles:
+		if not (rawTileVariant is Dictionary):
+			return false
+		var rawTile := rawTileVariant as Dictionary
+		if not rawTile.has("x") or not rawTile.has("y") or not rawTile.has("toolId"):
+			return false
+		var coordinates := Vector2i(int(rawTile["x"]), int(rawTile["y"]))
+		var toolId := String(rawTile["toolId"])
+		if nextTiles.has(coordinates) or not isCoordinateValid(coordinates) or not toolRegistry.has(toolId):
+			return false
+		nextTiles[coordinates] = makeTileValue(toolId, rawTile.get("isOn", null))
+	var requestedTool := String(projectData.get("selectedTool", "or"))
+	if not toolRegistry.has(requestedTool):
+		requestedTool = "or"
+	cancelActiveInteraction()
+	clearPreviewTiles()
+	for tile in placedTiles.get_children():
+		tile.free()
+	occupancy.clear()
+	tileData.clear()
+	for coordinates in getSortedCoordinates(nextTiles.keys()):
+		if not setTileValue(coordinates, nextTiles[coordinates]):
+			return false
+	selectedTool = requestedTool
+	undoStack.clear()
+	redoStack.clear()
+	selectedCells.clear()
+	selectionBounds = Rect2i()
+	clipboardHistory.clear()
+	selectedClipboardIndex = -1
+	refreshSelectionOverlay()
+	selectionChanged.emit(getSelectionSnapshot())
+	emitClipboardChanged()
+	return true
+
+func clearProjectData() -> void:
+	importProjectData({"selectedTool": "or", "tiles": []})
+
+func setEditorInputEnabled(isEnabled: bool) -> void:
+	if editorInputEnabled == isEnabled:
+		return
+	editorInputEnabled = isEnabled
+	if not editorInputEnabled:
+		cancelActiveInteraction()
 
 func getClipboardItem() -> Dictionary:
 	return getSelectedClipboardItem().duplicate(true)

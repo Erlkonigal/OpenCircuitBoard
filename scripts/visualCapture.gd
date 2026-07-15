@@ -2,6 +2,7 @@ extends SceneTree
 
 const InkRegistry := preload("res://scripts/inkRegistry.gd")
 const CircuitTile := preload("res://scripts/circuitTile.gd")
+const ProjectManager := preload("res://scripts/projectManager.gd")
 
 func _init() -> void:
 	call_deferred("captureBoard")
@@ -21,6 +22,12 @@ func shouldCaptureBoardEdge() -> bool:
 
 func shouldCaptureInterface() -> bool:
 	return OS.get_cmdline_user_args().has("--captureInterface")
+
+func shouldCaptureSimulationLoop() -> bool:
+	return OS.get_cmdline_user_args().has("--captureSimulationLoop")
+
+func shouldCaptureSimulationStep() -> bool:
+	return OS.get_cmdline_user_args().has("--captureSimulationStep")
 
 func shouldCaptureSidebar() -> bool:
 	return OS.get_cmdline_user_args().has("--captureSidebar")
@@ -210,6 +217,50 @@ func assertIconButton(button: Button) -> void:
 	assert(button.icon_alignment == HORIZONTAL_ALIGNMENT_CENTER)
 	assert(button.vertical_icon_alignment == VERTICAL_ALIGNMENT_CENTER)
 	assert(button.icon.get_size() == Vector2(16, 16))
+
+func assertTopBarIconButtonStyle(button: Button) -> void:
+	assertIconButton(button)
+	var normalStyle := button.get_theme_stylebox("normal") as StyleBoxFlat
+	var hoverStyle := button.get_theme_stylebox("hover") as StyleBoxFlat
+	var pressedStyle := button.get_theme_stylebox("pressed") as StyleBoxFlat
+	var hoverPressedStyle := button.get_theme_stylebox("hover_pressed") as StyleBoxFlat
+	assert(normalStyle != null)
+	assert(hoverStyle != null)
+	assert(pressedStyle != null)
+	assert(hoverPressedStyle != null)
+	assert(pressedStyle.bg_color.is_equal_approx(Color.TRANSPARENT))
+	assert(hoverPressedStyle.bg_color.is_equal_approx(hoverStyle.bg_color))
+	assert(is_equal_approx(normalStyle.content_margin_left, pressedStyle.content_margin_left))
+	assert(is_equal_approx(normalStyle.content_margin_top, pressedStyle.content_margin_top))
+	assert(is_equal_approx(normalStyle.content_margin_right, pressedStyle.content_margin_right))
+	assert(is_equal_approx(normalStyle.content_margin_bottom, pressedStyle.content_margin_bottom))
+	assert(button.get_theme_color("icon_pressed_color").is_equal_approx(Color("f2c94c")))
+	assert(button.get_theme_color("icon_hover_pressed_color").is_equal_approx(Color("f2c94c")))
+
+func assertProjectRoundTrip(board: Node2D) -> void:
+	var projectPath := "user://visualCaptureProject.ocb"
+	var recentProjectsPath := "user://recentProjects.cfg"
+	var hadRecentProjects := FileAccess.file_exists(recentProjectsPath)
+	var previousRecentProjects := PackedByteArray()
+	if hadRecentProjects:
+		previousRecentProjects = FileAccess.get_file_as_bytes(recentProjectsPath)
+	var projectData := board.call("exportProjectData") as Dictionary
+	var projectManager := ProjectManager.new()
+	var saveResult: Dictionary = projectManager.saveProjectAs(board, projectPath)
+	assert(bool(saveResult.get("ok", false)))
+	board.call("clearProjectData")
+	assert((board.call("getSimulationTiles") as Array).is_empty())
+	var loadResult: Dictionary = projectManager.loadProject(board, projectPath)
+	assert(bool(loadResult.get("ok", false)))
+	var restoredProjectData := board.call("exportProjectData") as Dictionary
+	assert(JSON.stringify(restoredProjectData) == JSON.stringify(projectData))
+	DirAccess.remove_absolute(ProjectSettings.globalize_path(projectPath))
+	if hadRecentProjects:
+		var recentProjectsFile := FileAccess.open(recentProjectsPath, FileAccess.WRITE)
+		assert(recentProjectsFile != null)
+		recentProjectsFile.store_buffer(previousRecentProjects)
+	else:
+		DirAccess.remove_absolute(ProjectSettings.globalize_path(recentProjectsPath))
 
 func assertInkButton(button: Button, ink: Dictionary, isSelected: bool) -> void:
 	assert(button != null)
@@ -739,15 +790,37 @@ func captureBoard() -> void:
 	assert(String(rightDock.get("dockId")) == "eventLog")
 	var dockContentRoot := circuitEditorDock.get_node("background/contentFrame/contentRoot") as VBoxContainer
 	var topBar := main.get_node("Interface/TopBar") as Control
-	var topBarTitle := main.get_node("Interface/TopBar/Content/Title") as Label
+	var projectContent := main.get_node("Interface/TopBar/ProjectContent") as Control
+	var topBarContent := main.get_node("Interface/TopBar/Content") as Control
+	var simulationModeButton := main.get_node("Interface/TopBar/Content/simulationModeButton") as Button
+	var previousTickButton := main.get_node("Interface/TopBar/Content/previousTickButton") as Button
+	var loopStepButton := main.get_node("Interface/TopBar/Content/loopStepButton") as Button
+	var nextTickButton := main.get_node("Interface/TopBar/Content/nextTickButton") as Button
+	var stepLengthControl := main.get_node("Interface/TopBar/Content/stepLengthControl") as Button
+	var loopFrequencySlider := main.get_node("Interface/TopBar/Content/loopFrequencySlider") as HSlider
+	var simulationStatus := main.get_node("Interface/TopBar/Content/simulationStatus") as Label
 	var configuredMinimumHeight := int(ProjectSettings.get_setting("display/window/size/min_height"))
 	assert(configuredMinimumHeight >= ceili(topBar.size.y + dockContentRoot.get_combined_minimum_size().y))
-	assert(topBarTitle.get_theme_font_size("font_size") == 16)
-	for topBarChild in (main.get_node("Interface/TopBar/Content") as Control).get_children():
-		var topBarButton := topBarChild as Button
-		if topBarButton == null:
-			continue
+	assert(is_equal_approx(topBar.size.y, 62.0))
+	for projectButtonName in ["newProjectButton", "openProjectButton", "saveProjectButton", "saveAsProjectButton", "recentProjectsButton"]:
+		assertIconButton(projectContent.get_node(projectButtonName) as Button)
+	for topBarButton in [
+		topBarContent.get_node("leftSidebarToggle") as Button,
+		topBarContent.get_node("rightSidebarToggle") as Button,
+		previousTickButton,
+		loopStepButton,
+		nextTickButton,
+	]:
 		assertIconButton(topBarButton)
+	assert(simulationModeButton.text == "Simulate")
+	assert(simulationModeButton.get_theme_font_size("font_size") == 16)
+	assert(previousTickButton.disabled)
+	assert(loopStepButton.disabled)
+	assert(nextTickButton.disabled)
+	assert(stepLengthControl.disabled)
+	assert(stepLengthControl.text == "1")
+	assert(is_equal_approx(loopFrequencySlider.value, 5.0))
+	assert(not simulationStatus.visible)
 	var dockRect := dockHost.get_global_rect()
 	assert(is_equal_approx(dockRect.size.x, 272.0))
 	assert(is_equal_approx(rightDockHost.get_global_rect().size.x, 272.0))
@@ -1150,6 +1223,39 @@ func captureBoard() -> void:
 		assertTileIcon(stateOccupancy[onLatchOff] as Node2D, InkRegistry.getInk("latchOff"), float(board.get("cellSize")), true)
 		assertTileIcon(stateOccupancy[offLatchOn] as Node2D, InkRegistry.getInk("latchOn"), float(board.get("cellSize")), false)
 		assertTileIcon(stateOccupancy[offLatchOff] as Node2D, InkRegistry.getInk("latchOff"), float(board.get("cellSize")), false)
+	main.call("enterSimulation")
+	assert(bool(main.get("isSimulating")))
+	assert(bool(main.get("isLooping")))
+	assert(not bool(board.get("editorInputEnabled")))
+	assert(simulationModeButton.text == "Edit")
+	assert(simulationStatus.text == "~5 TPS")
+	main.call("setLoopFrequency", 7.0)
+	assert(simulationStatus.text == "~7 TPS")
+	main.call("toggleLoopStepMode")
+	assert(not bool(main.get("isLooping")))
+	assert(simulationStatus.text == "Step Mode")
+	assert(previousTickButton.disabled)
+	assert(not nextTickButton.disabled)
+	main.call("setSimulationStepLength", 3)
+	assert(stepLengthControl.text == "3")
+	main.call("showNextSimulationTick")
+	assert(int(main.get("simulationTick")) == 3)
+	assert(not previousTickButton.disabled)
+	main.call("showPreviousSimulationTick")
+	assert(int(main.get("simulationTick")) == 0)
+	main.call("leaveSimulation")
+	assert(not bool(main.get("isSimulating")))
+	assert(bool(board.get("editorInputEnabled")))
+	assert(simulationModeButton.text == "Simulate")
+	main.call("setSimulationStepLength", 1)
+	assertProjectRoundTrip(board)
+	if shouldCaptureSimulationLoop():
+		main.call("enterSimulation")
+		main.call("setLoopFrequency", 5.0)
+	if shouldCaptureSimulationStep():
+		main.call("enterSimulation")
+		main.call("toggleLoopStepMode")
+		main.call("setSimulationStepLength", 3)
 	if shouldCaptureDefaultZoom():
 		camera.zoom = initialCameraZoom
 	else:
@@ -1162,27 +1268,25 @@ func captureBoard() -> void:
 		assert(is_equal_approx(camera.global_position.x, boardBounds.position.x))
 		assert(is_equal_approx(camera.global_position.y, boardBounds.position.y))
 	if shouldCaptureInterface():
-		var topBarContent := main.get_node("Interface/TopBar/Content") as Control
-		for child in topBarContent.get_children():
-			var topBarButton := child as Button
-			if topBarButton == null:
-				continue
-			var normalStyle := topBarButton.get_theme_stylebox("normal") as StyleBoxFlat
-			var hoverStyle := topBarButton.get_theme_stylebox("hover") as StyleBoxFlat
-			var pressedStyle := topBarButton.get_theme_stylebox("pressed") as StyleBoxFlat
-			var hoverPressedStyle := topBarButton.get_theme_stylebox("hover_pressed") as StyleBoxFlat
-			assert(normalStyle != null)
-			assert(hoverStyle != null)
-			assert(pressedStyle != null)
-			assert(hoverPressedStyle != null)
-			assert(pressedStyle.bg_color.is_equal_approx(Color.TRANSPARENT))
-			assert(hoverPressedStyle.bg_color.is_equal_approx(hoverStyle.bg_color))
-			assert(is_equal_approx(normalStyle.content_margin_left, pressedStyle.content_margin_left))
-			assert(is_equal_approx(normalStyle.content_margin_top, pressedStyle.content_margin_top))
-			assert(is_equal_approx(normalStyle.content_margin_right, pressedStyle.content_margin_right))
-			assert(is_equal_approx(normalStyle.content_margin_bottom, pressedStyle.content_margin_bottom))
-			assert(topBarButton.get_theme_color("icon_pressed_color").is_equal_approx(Color("f2c94c")))
-			assert(topBarButton.get_theme_color("icon_hover_pressed_color").is_equal_approx(Color("f2c94c")))
+		for child in projectContent.get_children():
+			var projectButton := child as Button
+			if projectButton:
+				assertTopBarIconButtonStyle(projectButton)
+		for topBarButton in [
+			topBarContent.get_node("leftSidebarToggle") as Button,
+			topBarContent.get_node("rightSidebarToggle") as Button,
+			previousTickButton,
+			loopStepButton,
+			nextTickButton,
+		]:
+			assertTopBarIconButtonStyle(topBarButton)
+		var simulationNormalStyle := simulationModeButton.get_theme_stylebox("normal") as StyleBoxFlat
+		var simulationHoverStyle := simulationModeButton.get_theme_stylebox("hover") as StyleBoxFlat
+		var stepLengthNormalStyle := stepLengthControl.get_theme_stylebox("normal") as StyleBoxFlat
+		assert(simulationNormalStyle.bg_color.is_equal_approx(Color("00c875")))
+		assert(simulationHoverStyle.bg_color.is_equal_approx(Color("18dd8a")))
+		assert(stepLengthNormalStyle.bg_color.is_equal_approx(Color("2a3548")))
+		assert(loopFrequencySlider.mouse_filter == Control.MOUSE_FILTER_IGNORE)
 		main.call("setLeftSidebarOpen", false, false)
 		for frame in 2:
 			await process_frame
@@ -1253,9 +1357,9 @@ func captureBoard() -> void:
 	var outputPath := "user://capture.png"
 	var error := image.save_png(outputPath)
 	print("capture=", outputPath, " error=", error, " data=", OS.get_user_data_dir())
-	if shouldCaptureInterface() or shouldCaptureSidebar() or shouldCaptureEventLogDock() or shouldCaptureClipboardDock() or shouldCaptureDockMenu() or shouldCaptureDualDock() or shouldCaptureTraceColorMenu() or shouldCaptureBusColorMenu():
+	if shouldCaptureInterface() or shouldCaptureSimulationLoop() or shouldCaptureSimulationStep() or shouldCaptureSidebar() or shouldCaptureEventLogDock() or shouldCaptureClipboardDock() or shouldCaptureDockMenu() or shouldCaptureDualDock() or shouldCaptureTraceColorMenu() or shouldCaptureBusColorMenu():
 		var interfaceImage := main.get_viewport().get_texture().get_image()
-		if shouldCaptureInterface():
+		if shouldCaptureInterface() or shouldCaptureSimulationLoop() or shouldCaptureSimulationStep():
 			var interfaceError := interfaceImage.save_png("user://interfaceCapture.png")
 			print("interfaceCapture=user://interfaceCapture.png error=", interfaceError)
 		if shouldCaptureSidebar():
