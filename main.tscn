@@ -173,41 +173,14 @@ offset_right = 278.0
 grow_vertical = 2
 mouse_filter = 0
 
-[node name="RightDock" type="Panel" parent="Interface"]
+[node name="RightDockHost" type="Control" parent="Interface"]
 layout_mode = 3
 anchor_left = 1.0
 anchor_right = 1.0
 anchor_bottom = 1.0
-offset_left = -300.0
+offset_left = -272.0
 offset_top = 38.0
 grow_horizontal = 0
 grow_vertical = 2
 mouse_filter = 0
-
-[node name="Margin" type="MarginContainer" parent="Interface/RightDock"]
-layout_mode = 1
-anchors_preset = 15
-anchor_right = 1.0
-anchor_bottom = 1.0
-offset_left = 10.0
-offset_top = 10.0
-offset_right = -10.0
-offset_bottom = -10.0
-grow_horizontal = 2
-grow_vertical = 2
-
-[node name="Content" type="VBoxContainer" parent="Interface/RightDock/Margin"]
-layout_mode = 2
-theme_override_constants/separation = 8
-
-[node name="Title" type="Label" parent="Interface/RightDock/Margin/Content"]
-layout_mode = 2
-text = "Inspector"
-
-[node name="SelectedLabel" type="Label" parent="Interface/RightDock/Margin/Content"]
-layout_mode = 2
-text = "SelectedInk"
-
-[node name="Selection" type="Label" parent="Interface/RightDock/Margin/Content"]
-layout_mode = 2
-text = "Or"
+clip_contents = true

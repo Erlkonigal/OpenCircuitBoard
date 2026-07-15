@@ -11,22 +11,26 @@ const topBarFontSize := 16
 const dockMenuButtonSize := 28
 const dockMenuSeparation := 5
 const dockMenuPadding := 14
+const leftDockSide := "left"
+const rightDockSide := "right"
 
 @onready var board: Node2D = $BoardViewport/SubViewport/CircuitBoard
+@onready var boardViewport: SubViewportContainer = $BoardViewport
 @onready var topBar: Panel = $Interface/TopBar
 @onready var leftSidebarToggle: Button = $Interface/TopBar/Content/leftSidebarToggle
 @onready var rightSidebarToggle: Button = $Interface/TopBar/Content/rightSidebarToggle
 @onready var dockHost: Control = $Interface/DockHost
 @onready var dockResizeHandle: ColorRect = $Interface/DockResizeHandle
-@onready var rightDock: Panel = $Interface/RightDock
-@onready var selectionLabel: Label = $Interface/RightDock/Margin/Content/Selection
+@onready var rightDockHost: Control = $Interface/RightDockHost
 
 var dockDefinitions: Array[Dictionary] = []
 var currentDock: Control
+var rightCurrentDock: Control
 var dockMenu: PopupPanel
 var dockMenuColumns := 1
+var dockMenuTargetSide := leftDockSide
 var dockWidth := 272.0
-var rightDockWidth := 300.0
+var rightDockWidth := 272.0
 var eventHistory: Array[String] = []
 var leftSidebarOpen := true
 var rightSidebarOpen := true
@@ -36,7 +40,6 @@ var rightSidebarTween: Tween
 
 func _ready() -> void:
 	configureTopBar()
-	configureRightDock()
 	board.connect("clipboardChanged", updateClipboardHistory)
 	board.connect("clipboardCopied", showClipboardDock)
 	leftSidebarToggle.toggled.connect(setLeftSidebarOpen)
@@ -53,17 +56,31 @@ func _ready() -> void:
 		push_error("NoDockRegistered")
 		return
 	buildDockMenu()
-	activateDock(String(dockDefinitions[0].dockId))
+	var initialLeftDockId := String(dockDefinitions[0].dockId)
+	activateDock(initialLeftDockId, leftDockSide)
+	var initialRightDockId := getInitialRightDockId(initialLeftDockId)
+	if not initialRightDockId.is_empty():
+		activateDock(initialRightDockId, rightDockSide)
 	setLeftSidebarOpen(leftSidebarToggle.button_pressed, false)
 	setRightSidebarOpen(rightSidebarToggle.button_pressed, false)
 
 func _process(_delta: float) -> void:
-	if currentDock == null or not currentDock.has_method("updateCursorInfo"):
+	if not isPointerOverCanvas():
 		return
 	var mousePosition := board.get_global_mouse_position()
 	var isValid: bool = board.validRect.has_point(mousePosition)
 	var coordinates: Vector2i = board.call("getGridCoordinates", mousePosition)
-	currentDock.call("updateCursorInfo", coordinates, isValid)
+	var hoveredInk: Dictionary = board.call("getInkAt", coordinates) if isValid else {}
+	var hoveredInkTitle := String(hoveredInk.get("title", "None"))
+	for dock in getActiveDocks():
+		if dock.has_method("updateCursorInfo"):
+			dock.call("updateCursorInfo", coordinates, isValid, hoveredInkTitle)
+
+func isPointerOverCanvas() -> bool:
+	var pointerPosition := get_viewport().get_mouse_position()
+	if not boardViewport.get_global_rect().has_point(pointerPosition):
+		return false
+	return not dockHost.get_global_rect().has_point(pointerPosition) and not rightDockHost.get_global_rect().has_point(pointerPosition)
 
 func buildDockMenu() -> void:
 	dockMenu = PopupPanel.new()
@@ -92,44 +109,129 @@ func buildDockMenu() -> void:
 		grid.add_child(button)
 
 func activateDockFromMenu(dockId: String) -> void:
-	activateDock(dockId)
+	activateDock(dockId, dockMenuTargetSide)
 	dockMenu.hide()
 
-func activateDock(dockId: String) -> void:
-	var definition: Dictionary = {}
-	for candidate in dockDefinitions:
-		if String(candidate.dockId) == dockId:
-			definition = candidate
-			break
+func activateDock(dockId: String, dockSide := leftDockSide) -> void:
+	if not isDockSideValid(dockSide):
+		push_error("DockSideInvalid")
+		return
+	var definition := getDockDefinition(dockId)
 	if definition.is_empty():
 		push_error("DockNotFound")
 		return
+	var currentDockId := getActiveDockId(dockSide)
+	if currentDockId == dockId:
+		return
+	var otherDockSide := getOtherDockSide(dockSide)
+	var otherDockId := getActiveDockId(otherDockSide)
+	if dockId == otherDockId:
+		if currentDockId.is_empty():
+			return
+		var currentDefinition := getDockDefinition(currentDockId)
+		setDockForSide(currentDefinition, otherDockSide)
+	setDockForSide(definition, dockSide)
+
+func getInitialRightDockId(initialLeftDockId: String) -> String:
+	var eventLogDefinition := getDockDefinition("eventLog")
+	if not eventLogDefinition.is_empty() and String(eventLogDefinition.dockId) != initialLeftDockId:
+		return String(eventLogDefinition.dockId)
+	for definition in dockDefinitions:
+		var dockId := String(definition.dockId)
+		if dockId != initialLeftDockId:
+			return dockId
+	return ""
+
+func getDockDefinition(dockId: String) -> Dictionary:
+	for candidate in dockDefinitions:
+		if String(candidate.dockId) == dockId:
+			return candidate
+	return {}
+
+func getActiveDocks() -> Array[Control]:
+	var docks: Array[Control] = []
 	if currentDock:
-		currentDock.queue_free()
+		docks.append(currentDock)
+	if rightCurrentDock:
+		docks.append(rightCurrentDock)
+	return docks
+
+func getActiveDockById(dockId: String) -> Control:
+	for dock in getActiveDocks():
+		if String(dock.get("dockId")) == dockId:
+			return dock
+	return null
+
+func getActiveDockId(dockSide: String) -> String:
+	var dock := getActiveDock(dockSide)
+	return String(dock.get("dockId")) if dock else ""
+
+func getActiveDock(dockSide: String) -> Control:
+	if not isDockSideValid(dockSide):
+		return null
+	return getDockForSide(dockSide)
+
+func getDockForSide(dockSide: String) -> Control:
+	if dockSide == leftDockSide:
+		return currentDock
+	if dockSide == rightDockSide:
+		return rightCurrentDock
+	return null
+
+func getDockHostForSide(dockSide: String) -> Control:
+	if dockSide == leftDockSide:
+		return dockHost
+	if dockSide == rightDockSide:
+		return rightDockHost
+	return null
+
+func getOtherDockSide(dockSide: String) -> String:
+	return rightDockSide if dockSide == leftDockSide else leftDockSide
+
+func isDockSideValid(dockSide: String) -> bool:
+	return dockSide == leftDockSide or dockSide == rightDockSide
+
+func setDockForSide(definition: Dictionary, dockSide: String) -> void:
+	if definition.is_empty():
+		return
+	var previousDock := getDockForSide(dockSide)
+	if previousDock:
+		previousDock.free()
 	var dockScene := definition.scene as PackedScene
-	currentDock = dockScene.instantiate() as Control
-	dockHost.add_child(currentDock)
-	currentDock.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
-	if currentDock.has_signal("dockMenuRequested"):
-		currentDock.connect("dockMenuRequested", showDockMenu)
-	if currentDock.has_signal("inkSelected"):
-		currentDock.connect("inkSelected", selectInk)
-	if currentDock.has_signal("eventRecorded"):
-		currentDock.connect("eventRecorded", recordEvent)
-	if currentDock.has_signal("clipboardItemSelected"):
-		currentDock.connect("clipboardItemSelected", selectClipboardItem)
-	if currentDock.has_method("setEventHistory"):
-		currentDock.call("setEventHistory", eventHistory)
-	if currentDock.has_method("setClipboardHistory"):
-		currentDock.call("setClipboardHistory", board.call("getClipboardHistory"), board.call("getSelectedClipboardIndex"))
-	setDockWidth(float(definition.dockWidth))
+	var nextDock := dockScene.instantiate() as Control
+	var host := getDockHostForSide(dockSide)
+	host.add_child(nextDock)
+	nextDock.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	if dockSide == leftDockSide:
+		currentDock = nextDock
+		setDockWidth(float(definition.dockWidth))
+	else:
+		rightCurrentDock = nextDock
+		setRightDockWidth(float(definition.dockWidth))
+	connectDockSignals(nextDock, dockSide)
+	if nextDock.has_method("setEventHistory"):
+		nextDock.call("setEventHistory", eventHistory)
+	if nextDock.has_method("setClipboardHistory"):
+		nextDock.call("setClipboardHistory", board.call("getClipboardHistory"), board.call("getSelectedClipboardIndex"))
+
+func connectDockSignals(dock: Control, dockSide: String) -> void:
+	if dock.has_signal("dockMenuRequested"):
+		dock.connect("dockMenuRequested", showDockMenu.bind(dockSide))
+	if dock.has_signal("inkSelected"):
+		dock.connect("inkSelected", selectInk)
+	if dock.has_signal("eventRecorded"):
+		dock.connect("eventRecorded", recordEvent)
+	if dock.has_signal("clipboardItemSelected"):
+		dock.connect("clipboardItemSelected", selectClipboardItem)
 
 func recordEvent(eventText: String) -> void:
 	eventHistory.append(eventText)
-	if currentDock and currentDock.has_method("appendEvent"):
-		currentDock.call("appendEvent", eventText)
+	for dock in getActiveDocks():
+		if dock.has_method("appendEvent"):
+			dock.call("appendEvent", eventText)
 
-func showDockMenu(menuButton: Button) -> void:
+func showDockMenu(menuButton: Button, dockSide: String) -> void:
+	dockMenuTargetSide = dockSide
 	var buttonPosition := menuButton.get_global_rect().position
 	var menuRows := ceili(float(dockDefinitions.size()) / float(dockMenuColumns))
 	var menuSize := Vector2i(
@@ -137,20 +239,26 @@ func showDockMenu(menuButton: Button) -> void:
 		dockMenuPadding + menuRows * dockMenuButtonSize + (menuRows - 1) * dockMenuSeparation
 	)
 	var popupPosition := Vector2i(buttonPosition + Vector2(4.0, menuButton.size.y))
+	var viewportSize := get_viewport_rect().size
+	popupPosition.x = clampi(popupPosition.x, 0, maxi(0, int(viewportSize.x) - menuSize.x))
+	popupPosition.y = clampi(popupPosition.y, 0, maxi(0, int(viewportSize.y) - menuSize.y))
 	dockMenu.popup(Rect2i(popupPosition, menuSize))
 
 func selectInk(ink: Dictionary) -> void:
 	board.call("selectTool", String(ink.toolId))
-	selectionLabel.text = String(ink.title)
 
 func updateClipboardHistory(history: Array[Dictionary], selectedIndex: int) -> void:
-	if currentDock and currentDock.has_method("setClipboardHistory"):
-		currentDock.call("setClipboardHistory", history, selectedIndex)
+	for dock in getActiveDocks():
+		if dock.has_method("setClipboardHistory"):
+			dock.call("setClipboardHistory", history, selectedIndex)
 
 func showClipboardDock(history: Array[Dictionary], selectedIndex: int) -> void:
-	activateDock("clipboard")
-	if currentDock and currentDock.has_method("setClipboardHistory"):
-		currentDock.call("setClipboardHistory", history, selectedIndex)
+	var clipboardDock := getActiveDockById("clipboard")
+	if clipboardDock == null:
+		activateDock("clipboard", leftDockSide)
+		clipboardDock = getActiveDockById("clipboard")
+	if clipboardDock and clipboardDock.has_method("setClipboardHistory"):
+		clipboardDock.call("setClipboardHistory", history, selectedIndex)
 
 func selectClipboardItem(index: int) -> void:
 	board.call("selectClipboardItem", index)
@@ -166,9 +274,16 @@ func setRightSidebarOpen(isOpen: bool, animate := true) -> void:
 	updateSidebarLayout(animate)
 
 func setDockWidth(requestedWidth: float) -> void:
-	var maximumWidth := maxf(208.0, minf(480.0, size.x * 0.5))
-	dockWidth = clampf(requestedWidth, 208.0, maximumWidth)
+	dockWidth = clampDockWidth(requestedWidth)
 	updateSidebarLayout(false)
+
+func setRightDockWidth(requestedWidth: float) -> void:
+	rightDockWidth = clampDockWidth(requestedWidth)
+	updateSidebarLayout(false)
+
+func clampDockWidth(requestedWidth: float) -> float:
+	var maximumWidth := maxf(208.0, minf(480.0, size.x * 0.5))
+	return clampf(requestedWidth, 208.0, maximumWidth)
 
 func updateSidebarLayout(animate: bool) -> void:
 	leftSidebarToggle.icon = panelLeftCloseIcon if leftSidebarOpen else panelLeftOpenIcon
@@ -188,14 +303,14 @@ func updateSidebarLayout(animate: bool) -> void:
 	if not animate:
 		dockHost.offset_left = leftStart
 		dockHost.offset_right = leftEnd
-		rightDock.offset_left = rightStart
-		rightDock.offset_right = rightEnd
+		rightDockHost.offset_left = rightStart
+		rightDockHost.offset_right = rightEnd
 		dockResizeHandle.offset_left = resizeStart
 		dockResizeHandle.offset_right = resizeEnd
 		dockResizeHandle.visible = leftSidebarOpen
 		return
 	dockHost.visible = true
-	rightDock.visible = true
+	rightDockHost.visible = true
 	dockResizeHandle.visible = true
 	leftSidebarTween = create_tween().set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
 	leftSidebarTween.tween_property(dockHost, "offset_left", leftStart, sidebarAnimationDuration)
@@ -204,8 +319,8 @@ func updateSidebarLayout(animate: bool) -> void:
 	leftSidebarTween.parallel().tween_property(dockResizeHandle, "offset_right", resizeEnd, sidebarAnimationDuration)
 	leftSidebarTween.chain().tween_callback(finishLeftSidebarTransition.bind(leftSidebarOpen))
 	rightSidebarTween = create_tween().set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
-	rightSidebarTween.tween_property(rightDock, "offset_left", rightStart, sidebarAnimationDuration)
-	rightSidebarTween.parallel().tween_property(rightDock, "offset_right", rightEnd, sidebarAnimationDuration)
+	rightSidebarTween.tween_property(rightDockHost, "offset_left", rightStart, sidebarAnimationDuration)
+	rightSidebarTween.parallel().tween_property(rightDockHost, "offset_right", rightEnd, sidebarAnimationDuration)
 	rightSidebarTween.chain().tween_callback(finishRightSidebarTransition.bind(rightSidebarOpen))
 
 func finishLeftSidebarTransition(isOpen: bool) -> void:
@@ -228,7 +343,9 @@ func handleDockResizeInput(event: InputEvent) -> void:
 		get_viewport().set_input_as_handled()
 
 func syncDockLayout() -> void:
-	setDockWidth(dockWidth)
+	dockWidth = clampDockWidth(dockWidth)
+	rightDockWidth = clampDockWidth(rightDockWidth)
+	updateSidebarLayout(false)
 
 func configureTopBar() -> void:
 	var topBarBox := StyleBoxFlat.new()
@@ -257,20 +374,6 @@ func configureTopBarButton(topBarButton: Button) -> void:
 	topBarButton.add_theme_stylebox_override("hover", makeMenuItemBox(Color("2b374a")))
 	topBarButton.add_theme_stylebox_override("pressed", makeMenuItemBox(Color.TRANSPARENT))
 	topBarButton.add_theme_stylebox_override("hover_pressed", makeMenuItemBox(Color("2b374a")))
-
-func configureRightDock() -> void:
-	var rightDockBox := StyleBoxFlat.new()
-	rightDockBox.bg_color = Color("151c27")
-	rightDockBox.border_width_left = 1
-	rightDockBox.border_color = Color("263346")
-	rightDock.add_theme_stylebox_override("panel", rightDockBox)
-	var title := $Interface/RightDock/Margin/Content/Title as Label
-	var selectedLabel := $Interface/RightDock/Margin/Content/SelectedLabel as Label
-	title.add_theme_color_override("font_color", Color("a4b0c5"))
-	title.add_theme_font_size_override("font_size", 16)
-	selectedLabel.add_theme_color_override("font_color", Color("68758a"))
-	selectionLabel.add_theme_color_override("font_color", Color("55dfeb"))
-	selectionLabel.add_theme_font_size_override("font_size", 20)
 
 func makeMenuBox() -> StyleBoxFlat:
 	var box := StyleBoxFlat.new()

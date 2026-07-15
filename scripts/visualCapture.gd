@@ -40,6 +40,112 @@ func shouldCaptureDockMenu() -> bool:
 func shouldCaptureDefaultZoom() -> bool:
 	return OS.get_cmdline_user_args().has("--captureDefaultZoom")
 
+func shouldCaptureDualDock() -> bool:
+	return OS.get_cmdline_user_args().has("--captureDualDock")
+
+func getDockForSide(main: Control, dockSide: String) -> Control:
+	assert(main.has_method("getDockForSide"))
+	var dock := main.call("getDockForSide", dockSide) as Control
+	assert(dock != null)
+	return dock
+
+func getDockHostForSide(main: Control, dockSide: String) -> Control:
+	assert(main.has_method("getDockHostForSide"))
+	var dockHost := main.call("getDockHostForSide", dockSide) as Control
+	assert(dockHost != null)
+	return dockHost
+
+func getActiveDockState(main: Control, dockId: String) -> Dictionary:
+	for dockSide in ["left", "right"]:
+		var dock := getDockForSide(main, dockSide)
+		if String(dock.get("dockId")) == dockId:
+			return {
+				"dock": dock,
+				"dockHost": getDockHostForSide(main, dockSide),
+				"dockSide": dockSide,
+			}
+	return {}
+
+func assertDualDockState(main: Control) -> Dictionary:
+	assert(main.get_node_or_null("Interface/RightDock") == null)
+	assert(main.get_node_or_null("Interface/RightDockHost") != null)
+	var leftDock := getDockForSide(main, "left")
+	var rightDock := getDockForSide(main, "right")
+	var leftDockHost := getDockHostForSide(main, "left")
+	var rightDockHost := getDockHostForSide(main, "right")
+	assert(leftDock != rightDock)
+	assert(not String(leftDock.get("dockId")).is_empty())
+	assert(not String(rightDock.get("dockId")).is_empty())
+	assert(String(leftDock.get("dockId")) != String(rightDock.get("dockId")))
+	assert(leftDockHost.get_child_count() == 1)
+	assert(rightDockHost.get_child_count() == 1)
+	assert(leftDockHost.get_child(0) == leftDock)
+	assert(rightDockHost.get_child(0) == rightDock)
+	assertDockLayout(leftDockHost, leftDock)
+	assertDockLayout(rightDockHost, rightDock)
+	return {
+		"leftDock": leftDock,
+		"rightDock": rightDock,
+		"leftDockHost": leftDockHost,
+		"rightDockHost": rightDockHost,
+	}
+
+func assertDockMenuFitsViewport(dockMenu: PopupPanel) -> void:
+	assert(dockMenu.visible)
+	assert(dockMenu.position.x >= 0)
+	assert(dockMenu.position.y >= 0)
+	assert(dockMenu.position.x + dockMenu.size.x <= root.size.x)
+	assert(dockMenu.position.y + dockMenu.size.y <= root.size.y)
+
+func assertDualDockSwap(main: Control, dockMenu: PopupPanel, dockMenuGrid: GridContainer) -> void:
+	main.call("activateDock", "circuitEditor", "left")
+	await process_frame
+	main.call("activateDock", "clipboard", "right")
+	await process_frame
+	var initialState := assertDualDockState(main)
+	assert(String((initialState.get("leftDock") as Control).get("dockId")) == "circuitEditor")
+	assert(String((initialState.get("rightDock") as Control).get("dockId")) == "clipboard")
+	var clipboardMenuButton := findDockMenuButton(dockMenuGrid, "Clipboard")
+	assert(clipboardMenuButton != null)
+
+	var leftDockMenuButton := (initialState.get("leftDock") as Control).get("dockMenuButton") as Button
+	assertIconButton(leftDockMenuButton)
+	leftDockMenuButton.emit_signal("pressed")
+	await process_frame
+	assertDockMenuFitsViewport(dockMenu)
+	assert(String(main.get("dockMenuTargetSide")) == "left")
+	clipboardMenuButton.emit_signal("pressed")
+	await process_frame
+	var swappedState := assertDualDockState(main)
+	assert(String((swappedState.get("leftDock") as Control).get("dockId")) == "clipboard")
+	assert(String((swappedState.get("rightDock") as Control).get("dockId")) == "circuitEditor")
+
+	var rightDockMenuButton := (swappedState.get("rightDock") as Control).get("dockMenuButton") as Button
+	assertIconButton(rightDockMenuButton)
+	rightDockMenuButton.emit_signal("pressed")
+	await process_frame
+	assertDockMenuFitsViewport(dockMenu)
+	assert(String(main.get("dockMenuTargetSide")) == "right")
+	clipboardMenuButton.emit_signal("pressed")
+	await process_frame
+	var restoredState := assertDualDockState(main)
+	assert(String((restoredState.get("leftDock") as Control).get("dockId")) == "circuitEditor")
+	assert(String((restoredState.get("rightDock") as Control).get("dockId")) == "clipboard")
+	dockMenu.hide()
+
+func assertHoveredInkForCanvasTile(board: Node2D, circuitEditorDock: Control, coordinates: Vector2i) -> void:
+	assert(board.has_method("getInkAt"))
+	assert(circuitEditorDock.has_method("updateCursorInfo"))
+	var hoveredInk := board.call("getInkAt", coordinates) as Dictionary
+	assert(String(hoveredInk.get("toolId", "")) == "xor")
+	assert(String(hoveredInk.get("title", "")) == "Xor")
+	circuitEditorDock.call("updateCursorInfo", coordinates, true, String(hoveredInk.get("title", "")))
+	var hoveredInkLabel := circuitEditorDock.get("hoveredInkLabel") as Label
+	assert(hoveredInkLabel != null)
+	assert(hoveredInkLabel.text == "Xor")
+	circuitEditorDock.call("updateCursorInfo", coordinates, false, String(hoveredInk.get("title", "")))
+	assert(hoveredInkLabel.text == "None")
+
 func assertCanvasViewIsStable(boardViewport: SubViewportContainer, subViewport: SubViewport, camera: Camera2D, expectedRect: Rect2, expectedSize: Vector2i, expectedCenter: Vector2, expectedZoom: Vector2) -> void:
 	var actualRect := boardViewport.get_global_rect()
 	assert(actualRect.position.is_equal_approx(expectedRect.position))
@@ -217,6 +323,11 @@ func assertBoardEditingInteractions(main: Control, board: Node2D, camera: Camera
 	assert(not tileData.has(outsideSelection))
 	board.call("setSelection", Rect2i(source, Vector2i(3, 1)))
 	var historyBeforeCut := (board.get("undoStack") as Array).size()
+	var clipboardDockStateBeforeCut := getActiveDockState(main, "clipboard")
+	var clipboardDockBeforeCut := clipboardDockStateBeforeCut.get("dock") as Control
+	var clipboardSideBeforeCut := String(clipboardDockStateBeforeCut.get("dockSide", ""))
+	assert(clipboardDockBeforeCut != null)
+	assert(not clipboardSideBeforeCut.is_empty())
 	sendCtrlShortcut(board, KEY_X)
 	var clipboard: Dictionary = board.call("getClipboardItem")
 	var clipboardHistoryAfterCut: Array = board.call("getClipboardHistory")
@@ -227,9 +338,12 @@ func assertBoardEditingInteractions(main: Control, board: Node2D, camera: Camera
 	assert(not tileData.has(source))
 	assert(not tileData.has(sourceOther))
 	assert((board.get("undoStack") as Array).size() == historyBeforeCut + 1)
-	var clipboardDock := main.get("currentDock") as Control
+	var clipboardDockState := getActiveDockState(main, "clipboard")
+	assert(not clipboardDockState.is_empty())
+	var clipboardDock := clipboardDockState.get("dock") as Control
 	assert(clipboardDock != null)
-	assert(String(clipboardDock.get("dockId")) == "clipboard")
+	assert(clipboardDock == clipboardDockBeforeCut)
+	assert(String(clipboardDockState.get("dockSide", "")) == clipboardSideBeforeCut)
 	sendCtrlShortcut(board, KEY_Z)
 	assert(tileData.has(source))
 	assert(tileData.has(sourceOther))
@@ -365,15 +479,17 @@ func captureBoard() -> void:
 	var initialCameraZoom := camera.zoom
 	var expectedDefaultZoom := Vector2(0.5, 0.5)
 	assert(initialCameraZoom.is_equal_approx(expectedDefaultZoom))
-	var dockHost := main.get_node("Interface/DockHost") as Control
-	assert(dockHost.get_child_count() == 1)
-	var circuitEditorDock := dockHost.get_child(0) as Control
-	assert(circuitEditorDock.get("dockId") == "circuitEditor")
+	var initialDockState := assertDualDockState(main)
+	var dockHost := initialDockState.get("leftDockHost") as Control
+	var rightDockHost := initialDockState.get("rightDockHost") as Control
+	var circuitEditorDock := initialDockState.get("leftDock") as Control
+	var rightDock := initialDockState.get("rightDock") as Control
+	assert(String(circuitEditorDock.get("dockId")) == "circuitEditor")
+	assert(String(rightDock.get("dockId")) == "eventLog")
 	var dockContentRoot := circuitEditorDock.get_node("background/contentFrame/contentRoot") as VBoxContainer
 	var topBar := main.get_node("Interface/TopBar") as Control
 	var topBarTitle := main.get_node("Interface/TopBar/Content/Title") as Label
 	var configuredMinimumHeight := int(ProjectSettings.get_setting("display/window/size/min_height"))
-	assertDockLayout(dockHost, circuitEditorDock)
 	assert(configuredMinimumHeight >= ceili(topBar.size.y + dockContentRoot.get_combined_minimum_size().y))
 	assert(topBarTitle.get_theme_font_size("font_size") == 16)
 	for topBarChild in (main.get_node("Interface/TopBar/Content") as Control).get_children():
@@ -383,6 +499,7 @@ func captureBoard() -> void:
 		assertIconButton(topBarButton)
 	var dockRect := dockHost.get_global_rect()
 	assert(is_equal_approx(dockRect.size.x, 272.0))
+	assert(is_equal_approx(rightDockHost.get_global_rect().size.x, 272.0))
 	assert(circuitEditorDock.find_children("*", "CheckBox", true, false).is_empty())
 	assert(circuitEditorDock.find_children("*", "SpinBox", true, false).size() == 4)
 	for labelNode in circuitEditorDock.find_children("*", "Label", true, false):
@@ -425,20 +542,29 @@ func captureBoard() -> void:
 	assert(eventLogMenuButton.icon == eventLogDefinition.get("dockIcon"))
 	dockMenuButton.emit_signal("pressed")
 	await process_frame
-	assert(dockMenu.visible)
-	assert(dockMenu.position.x >= 0)
-	assert(dockMenu.position.x + dockMenu.size.x <= root.size.x)
-	assert(dockMenu.position.y + dockMenu.size.y <= root.size.y)
+	assertDockMenuFitsViewport(dockMenu)
 	dockMenu.hide()
+	await assertDualDockSwap(main, dockMenu, dockMenuGrid)
+	circuitEditorDock = getDockForSide(main, "left")
+	rightDock = getDockForSide(main, "right")
+	dockMenuButton = circuitEditorDock.get("dockMenuButton") as Button
+	assert(String(circuitEditorDock.get("dockId")) == "circuitEditor")
+	assert(String(rightDock.get("dockId")) == "clipboard")
 	main.call("setDockWidth", 420.0)
 	assert(is_equal_approx(dockHost.offset_right, 420.0))
+	main.call("setRightDockWidth", 420.0)
+	assert(is_equal_approx(rightDockHost.offset_left, -420.0))
 	assertCanvasViewIsStable(boardViewport, subViewport, camera, initialCanvasRect, initialSubViewportSize, initialCameraCenter, initialCameraZoom)
 	main.call("setDockWidth", 1.0)
 	assert(is_equal_approx(dockHost.offset_right, 208.0))
+	main.call("setRightDockWidth", 1.0)
+	assert(is_equal_approx(rightDockHost.offset_left, -208.0))
 	await process_frame
 	assertDockLayout(dockHost, circuitEditorDock)
+	assertDockLayout(rightDockHost, rightDock)
 	assertCanvasViewIsStable(boardViewport, subViewport, camera, initialCanvasRect, initialSubViewportSize, initialCameraCenter, initialCameraZoom)
 	main.call("setDockWidth", 272.0)
+	main.call("setRightDockWidth", 272.0)
 	main.call("setLeftSidebarOpen", false)
 	await process_frame
 	assertCanvasViewIsStable(boardViewport, subViewport, camera, initialCanvasRect, initialSubViewportSize, initialCameraCenter, initialCameraZoom)
@@ -454,7 +580,7 @@ func captureBoard() -> void:
 	await process_frame
 	assertCanvasViewIsStable(boardViewport, subViewport, camera, initialCanvasRect, initialSubViewportSize, initialCameraCenter, initialCameraZoom)
 	await create_timer(0.25).timeout
-	assert(is_equal_approx((main.get_node("BoardViewport") as Control).offset_right, 0.0))
+	assert(is_equal_approx(rightDockHost.offset_left, 0.0))
 	assertCanvasViewIsStable(boardViewport, subViewport, camera, initialCanvasRect, initialSubViewportSize, initialCameraCenter, initialCameraZoom)
 	main.call("setRightSidebarOpen", true)
 	await process_frame
@@ -473,6 +599,7 @@ func captureBoard() -> void:
 	board.call("placeTile", Vector2i(1, 0))
 	board.call("selectTool", "xor")
 	board.call("placeTile", Vector2i(0, 0))
+	assertHoveredInkForCanvasTile(board, circuitEditorDock, Vector2i(0, 0))
 	board.call("selectTool", "trace")
 	board.call("placeTile", Vector2i(-1, 1))
 	# Keep an isolated tile in view to inspect the full shadow silhouette.
@@ -533,13 +660,15 @@ func captureBoard() -> void:
 	var clipboardHistory: Array = clipboardState.get("history", [])
 	var selectedClipboardIndex := int(clipboardState.get("selectedIndex", -1))
 	await process_frame
-	assert(dockHost.get_child_count() == 1)
-	var clipboardDock := main.get("currentDock") as Control
-	assertClipboardDock(dockHost, clipboardDock, clipboardHistory, selectedClipboardIndex)
+	var clipboardDockState := getActiveDockState(main, "clipboard")
+	assert(not clipboardDockState.is_empty())
+	var clipboardDock := clipboardDockState.get("dock") as Control
+	var clipboardDockHost := clipboardDockState.get("dockHost") as Control
+	assertClipboardDock(clipboardDockHost, clipboardDock, clipboardHistory, selectedClipboardIndex)
 	assertCanvasViewIsStable(boardViewport, subViewport, camera, initialCanvasRect, initialSubViewportSize, initialCameraCenter, initialCameraZoom)
 	main.call("setDockWidth", 1.0)
 	await process_frame
-	assertClipboardDock(dockHost, clipboardDock, clipboardHistory, selectedClipboardIndex)
+	assertClipboardDock(clipboardDockHost, clipboardDock, clipboardHistory, selectedClipboardIndex)
 	assertCanvasViewIsStable(boardViewport, subViewport, camera, initialCanvasRect, initialSubViewportSize, initialCameraCenter, initialCameraZoom)
 	main.call("setDockWidth", 272.0)
 	await process_frame
@@ -552,7 +681,7 @@ func captureBoard() -> void:
 	await process_frame
 	assert(int(board.call("getSelectedClipboardIndex")) == selectedHistoryIndex)
 	assert(board.call("getClipboardItem") == clipboardHistory[selectedHistoryIndex])
-	assertClipboardDock(dockHost, main.get("currentDock") as Control, clipboardHistory, selectedHistoryIndex)
+	assertClipboardDock(clipboardDockHost, clipboardDock, clipboardHistory, selectedHistoryIndex)
 	sendCtrlShortcut(board, KEY_V)
 	var selectedHistoryPasteAnchor := Vector2i(10, 8)
 	board.call("updatePastePreview", selectedHistoryPasteAnchor)
@@ -563,8 +692,10 @@ func captureBoard() -> void:
 	await process_frame
 	main.call("activateDock", "clipboard")
 	await process_frame
-	clipboardDock = main.get("currentDock") as Control
-	assertClipboardDock(dockHost, clipboardDock, clipboardHistory, selectedHistoryIndex)
+	clipboardDockState = getActiveDockState(main, "clipboard")
+	clipboardDock = clipboardDockState.get("dock") as Control
+	clipboardDockHost = clipboardDockState.get("dockHost") as Control
+	assertClipboardDock(clipboardDockHost, clipboardDock, clipboardHistory, selectedHistoryIndex)
 	assertCanvasViewIsStable(boardViewport, subViewport, camera, initialCanvasRect, initialSubViewportSize, initialCameraCenter, initialCameraZoom)
 	var selector := board.get_node("Selector") as ColorRect
 	selector.visible = shouldCaptureSelector()
@@ -626,15 +757,33 @@ func captureBoard() -> void:
 	if shouldCaptureClipboardDock():
 		main.call("activateDock", "clipboard")
 		await process_frame
-	if shouldCaptureSidebar() or shouldCaptureEventLogDock() or shouldCaptureClipboardDock() or shouldCaptureDockMenu():
+	if shouldCaptureDualDock():
+		main.call("activateDock", "circuitEditor", "left")
+		await process_frame
+		main.call("activateDock", "clipboard", "right")
+		await process_frame
+		var dualDockState := assertDualDockState(main)
+		var dualCircuitEditorDock := dualDockState.get("leftDock") as Control
+		assert(String(dualCircuitEditorDock.get("dockId")) == "circuitEditor")
+		assert(String((dualDockState.get("rightDock") as Control).get("dockId")) == "clipboard")
+	if shouldCaptureSidebar() or shouldCaptureEventLogDock() or shouldCaptureClipboardDock() or shouldCaptureDockMenu() or shouldCaptureDualDock():
 		main.call("setLeftSidebarOpen", true, false)
 		main.call("setRightSidebarOpen", true, false)
 		for frame in 2:
 			await process_frame
 	if shouldCaptureDockMenu():
-		var activeDock := main.get("currentDock") as Control
+		var activeDock := getDockForSide(main, "left")
 		var activeDockMenuButton := activeDock.get("dockMenuButton") as Button
 		activeDockMenuButton.emit_signal("pressed")
+		await process_frame
+	if shouldCaptureDualDock():
+		var captureCircuitEditorState := getActiveDockState(main, "circuitEditor")
+		assert(not captureCircuitEditorState.is_empty())
+		var captureCircuitEditorDock := captureCircuitEditorState.get("dock") as Control
+		assert(captureCircuitEditorDock != null)
+		var captureHoveredInk := board.call("getInkAt", Vector2i(0, 0)) as Dictionary
+		captureCircuitEditorDock.call("updateCursorInfo", Vector2i(0, 0), true, String(captureHoveredInk.get("title", "None")))
+		main.set_process(false)
 		await process_frame
 
 	var viewport := main.get_node("BoardViewport/SubViewport") as SubViewport
@@ -646,7 +795,7 @@ func captureBoard() -> void:
 	var outputPath := "user://capture.png"
 	var error := image.save_png(outputPath)
 	print("capture=", outputPath, " error=", error, " data=", OS.get_user_data_dir())
-	if shouldCaptureInterface() or shouldCaptureSidebar() or shouldCaptureEventLogDock() or shouldCaptureClipboardDock() or shouldCaptureDockMenu():
+	if shouldCaptureInterface() or shouldCaptureSidebar() or shouldCaptureEventLogDock() or shouldCaptureClipboardDock() or shouldCaptureDockMenu() or shouldCaptureDualDock():
 		var interfaceImage := main.get_viewport().get_texture().get_image()
 		if shouldCaptureInterface():
 			var interfaceError := interfaceImage.save_png("user://interfaceCapture.png")
@@ -663,4 +812,7 @@ func captureBoard() -> void:
 		if shouldCaptureDockMenu():
 			var dockMenuError := interfaceImage.save_png("user://dockMenuCapture.png")
 			print("dockMenuCapture=user://dockMenuCapture.png error=", dockMenuError)
+		if shouldCaptureDualDock():
+			var dualDockError := interfaceImage.save_png("user://dualDockCapture.png")
+			print("dualDockCapture=user://dualDockCapture.png error=", dualDockError)
 	quit(error)

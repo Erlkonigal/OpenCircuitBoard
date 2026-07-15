@@ -289,11 +289,12 @@ func clearHoveredInk() -> void:
 	if hoveredInkLabel:
 		hoveredInkLabel.text = "None"
 
-func updateCursorInfo(position: Vector2i, isValid: bool) -> void:
+func updateCursorInfo(position: Vector2i, isValid: bool, hoveredInkTitle := "None") -> void:
 	if positionXLabel == null or positionYLabel == null:
 		return
 	positionXLabel.text = str(position.x) if isValid else "0"
 	positionYLabel.text = str(position.y) if isValid else "0"
+	setHoveredInk(hoveredInkTitle if isValid else "None")
 
 func recordEvent(eventText: String) -> void:
 	eventRecorded.emit(eventText)

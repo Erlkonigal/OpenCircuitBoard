@@ -236,6 +236,11 @@ func removeTile(coordinates: Vector2i) -> bool:
 		pruneSelection()
 	return removed
 
+func getInkAt(coordinates: Vector2i) -> Dictionary:
+	if not isCoordinateValid(coordinates) or not tileData.has(coordinates):
+		return {}
+	return InkRegistry.getInk(String(tileData[coordinates]))
+
 func getClipboardItem() -> Dictionary:
 	if selectedClipboardIndex < 0 or selectedClipboardIndex >= clipboardHistory.size():
 		return {}
