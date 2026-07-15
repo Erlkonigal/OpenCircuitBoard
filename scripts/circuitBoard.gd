@@ -275,24 +275,30 @@ func canStartMoveAt(coordinates: Vector2i) -> bool:
 	return not selectedCells.is_empty() and selectionBounds.has_point(coordinates)
 
 func handleLeftButtonPress(coordinates: Vector2i, isSelectionModifierPressed: bool) -> bool:
-	if not isCoordinateValid(coordinates):
-		return false
 	if isSelectionModifierPressed:
+		if not isCoordinateValid(coordinates):
+			return false
 		beginSelection(coordinates)
-	elif canStartMoveAt(coordinates):
-		beginMove(coordinates)
-	else:
-		if not selectedCells.is_empty():
+	elif not selectedCells.is_empty():
+		if canStartMoveAt(coordinates):
+			beginMove(coordinates)
+		else:
 			clearSelection()
+	else:
+		if not isCoordinateValid(coordinates):
+			return false
 		beginStroke(coordinates, true)
 	return true
 
 func handleRightButtonPress(coordinates: Vector2i) -> bool:
-	if not isCoordinateValid(coordinates):
-		return false
-	if canStartMoveAt(coordinates):
-		deleteSelection()
+	if not selectedCells.is_empty():
+		if canStartMoveAt(coordinates):
+			deleteSelection()
+		else:
+			clearSelection()
 	else:
+		if not isCoordinateValid(coordinates):
+			return false
 		beginStroke(coordinates, false)
 	return true
 
@@ -785,22 +791,19 @@ func canPromotePastePreview(changes: Array) -> bool:
 	return true
 
 func promotePreviewTiles(changes: Array) -> void:
-	var completedPreviewTiles := previewTiles
-	for tile in completedPreviewTiles.get_children():
+	for tile in previewTiles.get_children():
 		if not tile.visible:
 			tile.free()
-	# Reparenting a large subtree stalls the frame, so completed previews stay on the board.
-	completedPreviewTiles.name = "PastedTiles"
-	completedPreviewTiles.z_index = 0
 	for changeVariant in changes:
 		var change := changeVariant as Dictionary
 		var coordinates: Vector2i = change["coordinates"]
 		var previewTile := previewTileByCoordinates[coordinates]
+		# Keep every committed tile in one Y-sorted tree so later placements interleave correctly.
+		previewTile.reparent(placedTiles)
 		previewTile.modulate = Color.WHITE
 		occupancy[coordinates] = previewTile
 		tileData[coordinates] = String(change["afterToolId"])
 	previewTileByCoordinates.clear()
-	previewTiles = createPreviewTiles()
 
 func pushHistory(changes: Array[Dictionary], selectionBefore: Dictionary, selectionAfter: Dictionary) -> void:
 	if changes.is_empty():

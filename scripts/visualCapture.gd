@@ -36,6 +36,9 @@ func shouldCaptureSelection() -> bool:
 func shouldCapturePastePreview() -> bool:
 	return OS.get_cmdline_user_args().has("--capturePastePreview")
 
+func shouldCapturePastedLayering() -> bool:
+	return OS.get_cmdline_user_args().has("--capturePastedLayering")
+
 func shouldCaptureDockMenu() -> bool:
 	return OS.get_cmdline_user_args().has("--captureDockMenu")
 
@@ -412,6 +415,11 @@ func assertBoardEditingInteractions(main: Control, board: Node2D, camera: Camera
 	var selectionBeforeDelete: Dictionary = board.call("getSelectionItem")
 	var clipboardHistoryBeforeDelete: Array = board.call("getClipboardHistory")
 	var historyBeforeSelectionDelete := (board.get("undoStack") as Array).size()
+	assert(board.call("handleLeftButtonPress", selectionDeleteGap, false))
+	assert((board.get("moveStartCoordinates") as Vector2i) == selectionDeleteGap)
+	assert((board.get("undoStack") as Array).size() == historyBeforeSelectionDelete)
+	board.call("finishMove")
+	assert(board.call("getSelectionItem") == selectionBeforeDelete)
 	assert(board.call("handleRightButtonPress", selectionDeleteGap))
 	assert(not tileData.has(selectionDeleteStart))
 	assert(not tileData.has(selectionDeleteOther))
@@ -451,14 +459,20 @@ func assertBoardEditingInteractions(main: Control, board: Node2D, camera: Camera
 	var sourceSelection: Dictionary = board.call("getSelectionItem")
 	assert((sourceSelection.get("cells", []) as Array).size() == 2)
 	var outsideSelection := source + Vector2i(0, 2)
-	assert(not tileData.has(outsideSelection))
+	assert(board.call("placeTile", outsideSelection, "nor"))
+	var historyBeforeLeftSelectionCancel := (board.get("undoStack") as Array).size()
 	assert(board.call("handleLeftButtonPress", outsideSelection, false))
 	var clearedSelection: Dictionary = board.call("getSelectionItem")
 	assert((clearedSelection.get("cells", []) as Array).is_empty())
-	assert(tileData.has(outsideSelection))
-	board.call("finishStroke")
-	sendCtrlShortcut(board, KEY_Z)
-	assert(not tileData.has(outsideSelection))
+	assert(String(tileData[outsideSelection]) == "nor")
+	assert((board.get("undoStack") as Array).size() == historyBeforeLeftSelectionCancel)
+	board.call("setSelection", Rect2i(source, Vector2i(3, 1)))
+	var historyBeforeRightSelectionCancel := (board.get("undoStack") as Array).size()
+	assert(board.call("handleRightButtonPress", outsideSelection))
+	assert((board.call("getSelectionItem").get("cells", []) as Array).is_empty())
+	assert(String(tileData[outsideSelection]) == "nor")
+	assert((board.get("undoStack") as Array).size() == historyBeforeRightSelectionCancel)
+	board.call("removeTile", outsideSelection)
 	board.call("setSelection", Rect2i(source, Vector2i(3, 1)))
 	var historyBeforeCut := (board.get("undoStack") as Array).size()
 	var clipboardDockStateBeforeCut := getActiveDockState(main, "clipboard")
@@ -527,13 +541,38 @@ func assertBoardEditingInteractions(main: Control, board: Node2D, camera: Camera
 	board.call("confirmPastePreview")
 	assert(tileData.has(pasteAnchor))
 	assert(tileData.has(pasteAnchor + Vector2i(2, 0)))
-	var pastedPreviewGroup := firstPreviewTile.get_parent() as Node2D
-	assert(pastedPreviewGroup.name == "PastedTiles")
-	assert(pastedPreviewGroup.get_parent() == board)
-	assert(pastedPreviewGroup != board.get("previewTiles"))
+	var placedTiles := board.get_node("PlacedTiles") as Node2D
+	assert(placedTiles != null)
+	assert(placedTiles.y_sort_enabled)
+	assert(firstPreviewTile.get_parent() == placedTiles)
+	assert(firstPreviewTile.get_parent() != board.get("previewTiles"))
+	var occupancy: Dictionary = board.get("occupancy")
+	for pastedCoordinates in [pasteAnchor, pasteAnchor + Vector2i(2, 0)]:
+		var pastedTile := occupancy[pastedCoordinates] as Node2D
+		assert(pastedTile.get_parent() == placedTiles)
 	var pastedSelection: Dictionary = board.call("getSelectionItem")
 	assert((pastedSelection.get("bounds", Rect2i()) as Rect2i).position == pasteAnchor)
 	assert((pastedSelection.get("cells", []) as Array).size() == 2)
+	var belowPaste := pasteAnchor + Vector2i(0, 1)
+	var historyBeforeBelowPaste := (board.get("undoStack") as Array).size()
+	assert(board.call("handleLeftButtonPress", belowPaste, false))
+	assert(not tileData.has(belowPaste))
+	assert((board.call("getSelectionItem").get("cells", []) as Array).is_empty())
+	assert(board.call("handleLeftButtonPress", belowPaste, false))
+	assert(tileData.has(belowPaste))
+	board.call("finishStroke")
+	var pastedPrimary := occupancy[pasteAnchor] as Node2D
+	var belowTile := occupancy[belowPaste] as Node2D
+	assert(belowTile.get_parent() == placedTiles)
+	assert(pastedPrimary.get_parent() == belowTile.get_parent())
+	assert(pastedPrimary.z_index == belowTile.z_index)
+	assert(pastedPrimary.position.y < belowTile.position.y)
+	assert((board.get("undoStack") as Array).size() == historyBeforeBelowPaste + 1)
+	sendCtrlShortcut(board, KEY_Z)
+	assert(not tileData.has(belowPaste))
+	assert((board.get("undoStack") as Array).size() == historyBeforeBelowPaste)
+	board.call("setSelection", pastedSelection.get("bounds", Rect2i()) as Rect2i)
+	assert(board.call("getSelectionItem") == pastedSelection)
 
 	var occupiedTileCount := tileData.size()
 	board.call("beginPastePreview")
@@ -1005,6 +1044,18 @@ func captureBoard() -> void:
 		assert(bool(board.get("pastePreviewValid")))
 		var selectedClipboard: Dictionary = board.call("getClipboardItem")
 		assert((board.get_node("PreviewTiles") as Node2D).get_child_count() == (selectedClipboard.get("tiles", []) as Array).size())
+	if shouldCapturePastedLayering():
+		var capturePasteAnchor := Vector2i(5, 2)
+		board.call("beginPastePreview")
+		board.call("updatePastePreview", capturePasteAnchor)
+		assert(bool(board.get("pastePreviewValid")))
+		board.call("confirmPastePreview")
+		var captureBelowPaste := capturePasteAnchor + Vector2i(0, 1)
+		assert(board.call("handleLeftButtonPress", captureBelowPaste, false))
+		assert((board.call("getSelectionItem").get("cells", []) as Array).is_empty())
+		assert(board.call("handleLeftButtonPress", captureBelowPaste, false))
+		assert(tileData.has(captureBelowPaste))
+		board.call("finishStroke")
 	if shouldCaptureDefaultZoom():
 		camera.zoom = initialCameraZoom
 	else:
