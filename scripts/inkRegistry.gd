@@ -8,7 +8,7 @@ static func getPaletteInks() -> Array[Dictionary]:
 		makeInk("cross", "Cross", "Space Optimization", Color("8da8cf")),
 		makeInk("tunnel", "Tunnel", "Space Optimization", Color("7483a1")),
 		makeInk("mesh", "Mesh", "Space Optimization", Color("91a66c")),
-		makeInk("bus", "Bus", "Space Optimization", Color("2378f4")),
+		makeInk("bus", "Bus", "Space Optimization", Color("2378f4"), "bus", true),
 		makeInk("read", "Read", "Trace", Color("f04f68")),
 		makeInk("write", "Write", "Trace", Color("4ca8ef")),
 		makeInk("trace", "Trace", "Trace", Color("f4df35"), "trace", true),
@@ -34,6 +34,11 @@ static func getComponentInks() -> Array[Dictionary]:
 		makeInk("traceBlue", "Trace Blue", "Trace", Color("2378f4"), "trace"),
 		makeInk("traceCyan", "Trace Cyan", "Trace", Color("55dfeb"), "trace"),
 		makeInk("traceMagenta", "Trace Magenta", "Trace", Color("c66af6"), "trace"),
+		makeInk("busRed", "Bus Red", "Space Optimization", Color("ff4d4d"), "bus"),
+		makeInk("busGreen", "Bus Green", "Space Optimization", Color("71f06b"), "bus"),
+		makeInk("busYellow", "Bus Yellow", "Space Optimization", Color("f4df35"), "bus"),
+		makeInk("busCyan", "Bus Cyan", "Space Optimization", Color("55dfeb"), "bus"),
+		makeInk("busMagenta", "Bus Magenta", "Space Optimization", Color("c66af6"), "bus"),
 	])
 	return componentInks
 

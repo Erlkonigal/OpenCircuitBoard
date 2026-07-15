@@ -87,8 +87,6 @@ func _draw() -> void:
 			draw_rect(bounds.grow(-lineWidth), glyphColor, false, lineWidth, true)
 
 func getGlyphFamily() -> String:
-	if glyphId.begins_with("trace"):
-		return "trace"
 	return glyphId
 
 func point(bounds: Rect2, x: float, y: float) -> Vector2:

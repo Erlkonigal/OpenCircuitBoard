@@ -9,7 +9,7 @@ var glyph: Control
 
 func configure(ink: Dictionary) -> void:
 	name = "%sButton" % String(ink.get("componentId", ink.get("toolId", "Ink")))
-	custom_minimum_size = Vector2(28, 24)
+	custom_minimum_size = Vector2(28, 28)
 	toggle_mode = true
 	tooltip_text = String(ink.get("title", ""))
 	expand_icon = false
@@ -20,7 +20,7 @@ func configure(ink: Dictionary) -> void:
 	add_child(glyphControl)
 	glyph = glyphControl
 	var inkColor: Color = ink.get("color", Color.WHITE)
-	setGlyph(String(ink.get("toolId", "")))
+	setGlyph(String(ink.get("paletteToolId", ink.get("toolId", ""))))
 	setInkAppearance(inkColor, false)
 
 func setGlyph(glyphId: String) -> void:
