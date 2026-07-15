@@ -264,6 +264,15 @@ func sendCtrlShortcut(board: Node2D, keycode: Key) -> void:
 	event.keycode = keycode
 	board.call("handleKeyInput", event)
 
+func makeMouseButtonEvent(target: Control, buttonIndex: MouseButton, isPressed: bool) -> InputEventMouseButton:
+	var event := InputEventMouseButton.new()
+	var pointerPosition := target.get_global_rect().get_center()
+	event.button_index = buttonIndex
+	event.pressed = isPressed
+	event.position = pointerPosition
+	event.global_position = pointerPosition
+	return event
+
 func assertPastePreviewAllowsCameraPan(board: Node2D, camera: Camera2D) -> void:
 	assert(board.has_method("updatePastePreviewAtPointer"))
 	var initialCameraPosition := camera.global_position
@@ -631,10 +640,8 @@ func captureBoard() -> void:
 	assertInkButton(orButton, InkRegistry.getInk("or"), true)
 	var traceButton := inkButtons.get("trace") as Button
 	assertInkButton(traceButton, InkRegistry.getInk("trace"), false)
-	var traceRightClick := InputEventMouseButton.new()
-	traceRightClick.button_index = MOUSE_BUTTON_RIGHT
-	traceRightClick.pressed = true
-	traceButton.emit_signal("gui_input", traceRightClick)
+	var interactionModeBeforeTraceMenu := int(board.get("interactionMode"))
+	root.push_input(makeMouseButtonEvent(traceButton, MOUSE_BUTTON_RIGHT, true))
 	await process_frame
 	var inkVariantMenu := main.get("inkVariantMenu") as PopupPanel
 	var inkVariantMenuGrid := main.get("inkVariantMenuGrid") as GridContainer
@@ -647,6 +654,10 @@ func captureBoard() -> void:
 	assert(inkVariantMenu.position.y >= 0)
 	assert(inkVariantMenu.position.x + inkVariantMenu.size.x <= root.size.x)
 	assert(inkVariantMenu.position.y + inkVariantMenu.size.y <= root.size.y)
+	assert(int(board.get("interactionMode")) == interactionModeBeforeTraceMenu)
+	root.push_input(makeMouseButtonEvent(traceButton, MOUSE_BUTTON_RIGHT, false))
+	await process_frame
+	assert(int(board.get("interactionMode")) == interactionModeBeforeTraceMenu)
 	var traceBlueButton := inkVariantButtons.get("traceBlue") as Button
 	assertInkButton(traceBlueButton, InkRegistry.getInk("traceBlue"), false)
 	traceBlueButton.emit_signal("pressed")
@@ -852,10 +863,9 @@ func captureBoard() -> void:
 		var traceCaptureButton := traceCaptureButtons.get("trace") as Button
 		traceCaptureDock.call("selectInk", InkRegistry.getInk("traceBlue"), false)
 		await process_frame
-		var traceCaptureRightClick := InputEventMouseButton.new()
-		traceCaptureRightClick.button_index = MOUSE_BUTTON_RIGHT
-		traceCaptureRightClick.pressed = true
-		traceCaptureButton.emit_signal("gui_input", traceCaptureRightClick)
+		root.push_input(makeMouseButtonEvent(traceCaptureButton, MOUSE_BUTTON_RIGHT, true))
+		await process_frame
+		root.push_input(makeMouseButtonEvent(traceCaptureButton, MOUSE_BUTTON_RIGHT, false))
 		await process_frame
 	if shouldCaptureDualDock():
 		var captureCircuitEditorState := getActiveDockState(main, "circuitEditor")
