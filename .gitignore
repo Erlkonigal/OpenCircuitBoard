@@ -5,6 +5,7 @@ build/
 *.so
 *.ocb
 *.dblite
+*.import
 *.uid
 ocbsimulation.gdextension
 thirdparty/godotcpp/bin/
