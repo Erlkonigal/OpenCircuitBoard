@@ -482,6 +482,8 @@ func captureBoard() -> void:
 	var initialDockState := assertDualDockState(main)
 	var dockHost := initialDockState.get("leftDockHost") as Control
 	var rightDockHost := initialDockState.get("rightDockHost") as Control
+	var dockResizeHandle := main.get_node("Interface/DockResizeHandle") as Control
+	var rightDockResizeHandle := main.get_node("Interface/RightDockResizeHandle") as Control
 	var circuitEditorDock := initialDockState.get("leftDock") as Control
 	var rightDock := initialDockState.get("rightDock") as Control
 	assert(String(circuitEditorDock.get("dockId")) == "circuitEditor")
@@ -500,6 +502,10 @@ func captureBoard() -> void:
 	var dockRect := dockHost.get_global_rect()
 	assert(is_equal_approx(dockRect.size.x, 272.0))
 	assert(is_equal_approx(rightDockHost.get_global_rect().size.x, 272.0))
+	assert(dockResizeHandle.mouse_default_cursor_shape == Control.CURSOR_HSIZE)
+	assert(rightDockResizeHandle.mouse_default_cursor_shape == Control.CURSOR_HSIZE)
+	assert(is_equal_approx(dockResizeHandle.get_global_rect().position.x, 272.0))
+	assert(is_equal_approx(rightDockResizeHandle.get_global_rect().position.x, 1002.0))
 	assert(circuitEditorDock.find_children("*", "CheckBox", true, false).is_empty())
 	assert(circuitEditorDock.find_children("*", "SpinBox", true, false).size() == 4)
 	for labelNode in circuitEditorDock.find_children("*", "Label", true, false):
@@ -554,11 +560,13 @@ func captureBoard() -> void:
 	assert(is_equal_approx(dockHost.offset_right, 420.0))
 	main.call("setRightDockWidth", 420.0)
 	assert(is_equal_approx(rightDockHost.offset_left, -420.0))
+	assert(is_equal_approx(rightDockResizeHandle.offset_left, -426.0))
 	assertCanvasViewIsStable(boardViewport, subViewport, camera, initialCanvasRect, initialSubViewportSize, initialCameraCenter, initialCameraZoom)
 	main.call("setDockWidth", 1.0)
 	assert(is_equal_approx(dockHost.offset_right, 208.0))
 	main.call("setRightDockWidth", 1.0)
 	assert(is_equal_approx(rightDockHost.offset_left, -208.0))
+	assert(is_equal_approx(rightDockResizeHandle.offset_left, -214.0))
 	await process_frame
 	assertDockLayout(dockHost, circuitEditorDock)
 	assertDockLayout(rightDockHost, rightDock)
@@ -581,9 +589,11 @@ func captureBoard() -> void:
 	assertCanvasViewIsStable(boardViewport, subViewport, camera, initialCanvasRect, initialSubViewportSize, initialCameraCenter, initialCameraZoom)
 	await create_timer(0.25).timeout
 	assert(is_equal_approx(rightDockHost.offset_left, 0.0))
+	assert(not rightDockResizeHandle.visible)
 	assertCanvasViewIsStable(boardViewport, subViewport, camera, initialCanvasRect, initialSubViewportSize, initialCameraCenter, initialCameraZoom)
 	main.call("setRightSidebarOpen", true)
 	await process_frame
+	assert(rightDockResizeHandle.visible)
 	assertCanvasViewIsStable(boardViewport, subViewport, camera, initialCanvasRect, initialSubViewportSize, initialCameraCenter, initialCameraZoom)
 	await create_timer(0.25).timeout
 	assertCanvasViewIsStable(boardViewport, subViewport, camera, initialCanvasRect, initialSubViewportSize, initialCameraCenter, initialCameraZoom)

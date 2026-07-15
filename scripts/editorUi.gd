@@ -22,6 +22,7 @@ const rightDockSide := "right"
 @onready var dockHost: Control = $Interface/DockHost
 @onready var dockResizeHandle: ColorRect = $Interface/DockResizeHandle
 @onready var rightDockHost: Control = $Interface/RightDockHost
+@onready var rightDockResizeHandle: ColorRect = $Interface/RightDockResizeHandle
 
 var dockDefinitions: Array[Dictionary] = []
 var currentDock: Control
@@ -35,6 +36,7 @@ var eventHistory: Array[String] = []
 var leftSidebarOpen := true
 var rightSidebarOpen := true
 var isResizingDock := false
+var isResizingRightDock := false
 var leftSidebarTween: Tween
 var rightSidebarTween: Tween
 
@@ -45,10 +47,16 @@ func _ready() -> void:
 	leftSidebarToggle.toggled.connect(setLeftSidebarOpen)
 	rightSidebarToggle.toggled.connect(setRightSidebarOpen)
 	dockResizeHandle.gui_input.connect(handleDockResizeInput)
+	rightDockResizeHandle.gui_input.connect(handleRightDockResizeInput)
 	dockResizeHandle.mouse_entered.connect(func() -> void: dockResizeHandle.color = Color("5d7090"))
 	dockResizeHandle.mouse_exited.connect(func() -> void:
 		if not isResizingDock:
 			dockResizeHandle.color = Color("263346")
+	)
+	rightDockResizeHandle.mouse_entered.connect(func() -> void: rightDockResizeHandle.color = Color("5d7090"))
+	rightDockResizeHandle.mouse_exited.connect(func() -> void:
+		if not isResizingRightDock:
+			rightDockResizeHandle.color = Color("263346")
 	)
 	resized.connect(syncDockLayout)
 	dockDefinitions = DockRegistry.discoverDocks()
@@ -296,6 +304,8 @@ func updateSidebarLayout(animate: bool) -> void:
 	var rightEnd := 0.0 if rightSidebarOpen else rightDockWidth
 	var resizeStart := dockWidth if leftSidebarOpen else -6.0
 	var resizeEnd := dockWidth + 6.0 if leftSidebarOpen else 0.0
+	var rightResizeStart := -rightDockWidth - 6.0 if rightSidebarOpen else 0.0
+	var rightResizeEnd := -rightDockWidth if rightSidebarOpen else 6.0
 	if leftSidebarTween:
 		leftSidebarTween.kill()
 	if rightSidebarTween:
@@ -308,10 +318,14 @@ func updateSidebarLayout(animate: bool) -> void:
 		dockResizeHandle.offset_left = resizeStart
 		dockResizeHandle.offset_right = resizeEnd
 		dockResizeHandle.visible = leftSidebarOpen
+		rightDockResizeHandle.offset_left = rightResizeStart
+		rightDockResizeHandle.offset_right = rightResizeEnd
+		rightDockResizeHandle.visible = rightSidebarOpen
 		return
 	dockHost.visible = true
 	rightDockHost.visible = true
 	dockResizeHandle.visible = true
+	rightDockResizeHandle.visible = true
 	leftSidebarTween = create_tween().set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
 	leftSidebarTween.tween_property(dockHost, "offset_left", leftStart, sidebarAnimationDuration)
 	leftSidebarTween.parallel().tween_property(dockHost, "offset_right", leftEnd, sidebarAnimationDuration)
@@ -321,14 +335,17 @@ func updateSidebarLayout(animate: bool) -> void:
 	rightSidebarTween = create_tween().set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
 	rightSidebarTween.tween_property(rightDockHost, "offset_left", rightStart, sidebarAnimationDuration)
 	rightSidebarTween.parallel().tween_property(rightDockHost, "offset_right", rightEnd, sidebarAnimationDuration)
+	rightSidebarTween.parallel().tween_property(rightDockResizeHandle, "offset_left", rightResizeStart, sidebarAnimationDuration)
+	rightSidebarTween.parallel().tween_property(rightDockResizeHandle, "offset_right", rightResizeEnd, sidebarAnimationDuration)
 	rightSidebarTween.chain().tween_callback(finishRightSidebarTransition.bind(rightSidebarOpen))
 
 func finishLeftSidebarTransition(isOpen: bool) -> void:
 	if leftSidebarOpen == isOpen:
 		dockResizeHandle.visible = isOpen
 
-func finishRightSidebarTransition(_isOpen: bool) -> void:
-	pass
+func finishRightSidebarTransition(isOpen: bool) -> void:
+	if rightSidebarOpen == isOpen:
+		rightDockResizeHandle.visible = isOpen
 
 func handleDockResizeInput(event: InputEvent) -> void:
 	var mouseButton := event as InputEventMouseButton
@@ -340,6 +357,18 @@ func handleDockResizeInput(event: InputEvent) -> void:
 	var mouseMotion := event as InputEventMouseMotion
 	if mouseMotion and isResizingDock:
 		setDockWidth(get_global_mouse_position().x)
+		get_viewport().set_input_as_handled()
+
+func handleRightDockResizeInput(event: InputEvent) -> void:
+	var mouseButton := event as InputEventMouseButton
+	if mouseButton and mouseButton.button_index == MOUSE_BUTTON_LEFT:
+		isResizingRightDock = mouseButton.pressed
+		rightDockResizeHandle.color = Color("7589aa") if isResizingRightDock else Color("5d7090")
+		get_viewport().set_input_as_handled()
+		return
+	var mouseMotion := event as InputEventMouseMotion
+	if mouseMotion and isResizingRightDock:
+		setRightDockWidth(size.x - get_global_mouse_position().x)
 		get_viewport().set_input_as_handled()
 
 func syncDockLayout() -> void:
@@ -361,6 +390,8 @@ func configureTopBar() -> void:
 			configureTopBarButton(topBarButton)
 	dockResizeHandle.color = Color("263346")
 	dockResizeHandle.mouse_default_cursor_shape = Control.CURSOR_HSIZE
+	rightDockResizeHandle.color = Color("263346")
+	rightDockResizeHandle.mouse_default_cursor_shape = Control.CURSOR_HSIZE
 
 func configureTopBarButton(topBarButton: Button) -> void:
 	topBarButton.expand_icon = false
