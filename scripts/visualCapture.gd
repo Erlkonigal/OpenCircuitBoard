@@ -25,6 +25,15 @@ func shouldCaptureSidebar() -> bool:
 func shouldCaptureEventLogDock() -> bool:
 	return OS.get_cmdline_user_args().has("--captureEventLogDock")
 
+func shouldCaptureClipboardDock() -> bool:
+	return OS.get_cmdline_user_args().has("--captureClipboardDock")
+
+func shouldCaptureSelection() -> bool:
+	return OS.get_cmdline_user_args().has("--captureSelection")
+
+func shouldCapturePastePreview() -> bool:
+	return OS.get_cmdline_user_args().has("--capturePastePreview")
+
 func shouldCaptureDockMenu() -> bool:
 	return OS.get_cmdline_user_args().has("--captureDockMenu")
 
@@ -60,13 +69,166 @@ func assertDockLayout(dockHost: Control, dock: Control) -> void:
 	assert(contentRect.end.x <= dockRect.end.x - 8.0 + 0.5)
 	assertSidebarControlsFit(contentRoot)
 
-func countButtonTooltip(dock: Control, tooltipText: String) -> int:
-	var count := 0
-	for buttonNode in dock.find_children("*", "Button", true, false):
+func findDockDefinition(definitions: Array[Dictionary], dockId: String) -> Dictionary:
+	for definition in definitions:
+		if String(definition.get("dockId", "")) == dockId:
+			return definition
+	return {}
+
+func findDockMenuButton(grid: GridContainer, dockTitle: String) -> Button:
+	for buttonNode in grid.get_children():
 		var button := buttonNode as Button
-		if button.tooltip_text == tooltipText:
-			count += 1
-	return count
+		if button and button.tooltip_text == dockTitle:
+			return button
+	return null
+
+func assertIconButton(button: Button) -> void:
+	assert(button != null)
+	assert(button.icon != null)
+	assert(not button.expand_icon)
+	assert(button.icon_alignment == HORIZONTAL_ALIGNMENT_CENTER)
+	assert(button.vertical_icon_alignment == VERTICAL_ALIGNMENT_CENTER)
+	assert(button.icon.get_size() == Vector2(16, 16))
+
+func assertClipboardDock(dockHost: Control, clipboardDock: Control, expectedClipboard: Dictionary) -> void:
+	assert(String(clipboardDock.get("dockId")) == "clipboard")
+	assertDockLayout(dockHost, clipboardDock)
+	var dockIcon := clipboardDock.get("dockIcon") as Texture2D
+	assert(dockIcon != null)
+	assert(dockIcon.get_size() == Vector2(16, 16))
+	var dockMenuButton := clipboardDock.get("dockMenuButton") as Button
+	assertIconButton(dockMenuButton)
+	var itemButton := clipboardDock.find_child("clipboardItem", true, false) as Button
+	var itemTitle := clipboardDock.find_child("clipboardItemTitle", true, false) as Label
+	var itemDetails := clipboardDock.find_child("clipboardItemDetails", true, false) as Label
+	var preview := clipboardDock.find_child("clipboardPreview", true, false) as Control
+	assert(itemButton != null)
+	assert(itemTitle != null)
+	assert(itemDetails != null)
+	assert(preview != null)
+	assert(not itemButton.disabled)
+	assert(itemButton.button_pressed)
+	assert(itemTitle.text == "Selection")
+	var boundsSize: Vector2i = expectedClipboard.get("boundsSize", Vector2i.ZERO)
+	var tileCount := (expectedClipboard.get("tiles", []) as Array).size()
+	assert(itemDetails.text.contains("%d x %d" % [boundsSize.x, boundsSize.y]))
+	assert(itemDetails.text.contains("%d tiles" % tileCount))
+	assert(preview.custom_minimum_size.y >= 64.0)
+
+func sendCtrlShortcut(board: Node2D, keycode: Key) -> void:
+	var event := InputEventKey.new()
+	event.pressed = true
+	event.ctrl_pressed = true
+	event.keycode = keycode
+	board.call("handleKeyInput", event)
+
+func assertBoardEditingInteractions(board: Node2D) -> Dictionary:
+	# Each direct sequence mirrors one pointer gesture and must create one command.
+	var strokeStart := Vector2i(-18, -12)
+	var strokeEnd := Vector2i(-15, -12)
+	var historyStart := (board.get("undoStack") as Array).size()
+	board.call("selectTool", "and")
+	board.call("beginStroke", strokeStart, true)
+	board.call("appendStrokeTo", strokeEnd)
+	board.call("finishStroke")
+	var tileData: Dictionary = board.get("tileData")
+	for x in range(strokeStart.x, strokeEnd.x + 1):
+		assert(tileData.has(Vector2i(x, strokeStart.y)))
+	assert((board.get("undoStack") as Array).size() == historyStart + 1)
+	sendCtrlShortcut(board, KEY_Z)
+	for x in range(strokeStart.x, strokeEnd.x + 1):
+		assert(not tileData.has(Vector2i(x, strokeStart.y)))
+	assert((board.get("undoStack") as Array).size() == historyStart)
+	sendCtrlShortcut(board, KEY_U)
+	for x in range(strokeStart.x, strokeEnd.x + 1):
+		assert(tileData.has(Vector2i(x, strokeStart.y)))
+	assert((board.get("undoStack") as Array).size() == historyStart + 1)
+
+	board.call("beginStroke", strokeStart, false)
+	board.call("appendStrokeTo", strokeEnd)
+	board.call("finishStroke")
+	for x in range(strokeStart.x, strokeEnd.x + 1):
+		assert(not tileData.has(Vector2i(x, strokeStart.y)))
+	assert((board.get("undoStack") as Array).size() == historyStart + 2)
+	sendCtrlShortcut(board, KEY_Z)
+	for x in range(strokeStart.x, strokeEnd.x + 1):
+		assert(tileData.has(Vector2i(x, strokeStart.y)))
+	sendCtrlShortcut(board, KEY_U)
+	for x in range(strokeStart.x, strokeEnd.x + 1):
+		assert(not tileData.has(Vector2i(x, strokeStart.y)))
+	sendCtrlShortcut(board, KEY_Z)
+	sendCtrlShortcut(board, KEY_Z)
+	assert((board.get("undoStack") as Array).size() == historyStart)
+
+	var source := Vector2i(-12, -10)
+	var sourceOther := source + Vector2i(2, 0)
+	assert(board.call("placeTile", source, "or"))
+	assert(board.call("placeTile", sourceOther, "xor"))
+	board.call("setSelection", Rect2i(source, Vector2i(3, 1)))
+	var sourceSelection: Dictionary = board.call("getSelectionItem")
+	assert((sourceSelection.get("cells", []) as Array).size() == 2)
+	sendCtrlShortcut(board, KEY_C)
+	var clipboard: Dictionary = board.call("getClipboardItem")
+	assert((clipboard.get("boundsSize", Vector2i.ZERO) as Vector2i) == Vector2i(3, 1))
+	assert((clipboard.get("tiles", []) as Array).size() == 2)
+
+	var pasteAnchor := Vector2i(-12, -7)
+	sendCtrlShortcut(board, KEY_V)
+	board.call("updatePastePreview", pasteAnchor)
+	assert(bool(board.get("pastePreviewValid")))
+	board.call("confirmPastePreview")
+	assert(tileData.has(pasteAnchor))
+	assert(tileData.has(pasteAnchor + Vector2i(2, 0)))
+	var pastedSelection: Dictionary = board.call("getSelectionItem")
+	assert((pastedSelection.get("bounds", Rect2i()) as Rect2i).position == pasteAnchor)
+	assert((pastedSelection.get("cells", []) as Array).size() == 2)
+
+	var occupiedTileCount := tileData.size()
+	board.call("beginPastePreview")
+	board.call("updatePastePreview", pasteAnchor)
+	assert(not bool(board.get("pastePreviewValid")))
+	board.call("confirmPastePreview")
+	assert(tileData.size() == occupiedTileCount)
+	board.call("cancelPastePreview")
+
+	var collisionOffset := Vector2i(0, 2)
+	var collisionCoordinates := pasteAnchor + collisionOffset
+	assert(board.call("placeTile", collisionCoordinates, "nor"))
+	board.call("beginMove", pasteAnchor)
+	board.call("updateMovePreview", pasteAnchor + collisionOffset)
+	assert(not bool(board.get("movePreviewValid")))
+	board.call("finishMove")
+	assert(tileData.has(pasteAnchor))
+	assert(tileData.has(collisionCoordinates))
+
+	var moveOffset := Vector2i(4, 2)
+	var movedPrimary := pasteAnchor + moveOffset
+	var movedOther := movedPrimary + Vector2i(2, 0)
+	var historyBeforeMove := (board.get("undoStack") as Array).size()
+	board.call("beginMove", pasteAnchor)
+	board.call("updateMovePreview", movedPrimary)
+	assert(bool(board.get("movePreviewValid")))
+	board.call("finishMove")
+	assert(not tileData.has(pasteAnchor))
+	assert(not tileData.has(pasteAnchor + Vector2i(2, 0)))
+	assert(tileData.has(movedPrimary))
+	assert(tileData.has(movedOther))
+	assert((board.get("undoStack") as Array).size() == historyBeforeMove + 1)
+	sendCtrlShortcut(board, KEY_Z)
+	assert(tileData.has(pasteAnchor))
+	assert(tileData.has(pasteAnchor + Vector2i(2, 0)))
+	sendCtrlShortcut(board, KEY_U)
+	assert(tileData.has(movedPrimary))
+	assert(tileData.has(movedOther))
+
+	# Leave only the visual-capture tiles in the board while retaining the clipboard item.
+	sendCtrlShortcut(board, KEY_Z)
+	sendCtrlShortcut(board, KEY_Z)
+	board.call("clearSelection")
+	for coordinates in [source, sourceOther, collisionCoordinates]:
+		board.call("removeTile", coordinates)
+	assert((board.get("undoStack") as Array).size() == historyStart)
+	return clipboard
 
 func captureBoard() -> void:
 	var captureViewportSize := Vector2i(
@@ -108,66 +270,49 @@ func captureBoard() -> void:
 		var topBarButton := topBarChild as Button
 		if topBarButton == null:
 			continue
-		assert(topBarButton.icon != null)
-		assert(not topBarButton.expand_icon)
-		assert(topBarButton.icon_alignment == HORIZONTAL_ALIGNMENT_CENTER)
-		assert(topBarButton.vertical_icon_alignment == VERTICAL_ALIGNMENT_CENTER)
-		assert(topBarButton.icon.get_size() == Vector2(16, 16))
+		assertIconButton(topBarButton)
 	var dockRect := dockHost.get_global_rect()
 	assert(is_equal_approx(dockRect.size.x, 272.0))
 	assert(circuitEditorDock.find_children("*", "CheckBox", true, false).is_empty())
 	assert(circuitEditorDock.find_children("*", "SpinBox", true, false).size() == 4)
-	var sectionTitleCount := 0
 	for labelNode in circuitEditorDock.find_children("*", "Label", true, false):
 		var label := labelNode as Label
 		assert(label.text != "Layers")
-		if label.text == "Tools":
-			sectionTitleCount += 1
-	assert(sectionTitleCount == 1)
-	for actionName in ["Add", "Image", "Duplicate", "Undo", "Redo", "Draw", "Edit", "Erase", "Sample", "Select", "Transform"]:
-		assert(countButtonTooltip(circuitEditorDock, actionName) == 1)
+		assert(label.text != "Tools")
 	var dockDefinitions: Array[Dictionary] = main.get("dockDefinitions")
-	assert(dockDefinitions.size() == 2)
-	assert(String(dockDefinitions[0].dockId) == "circuitEditor")
-	assert(String(dockDefinitions[1].dockId) == "eventLog")
+	assert(dockDefinitions.size() == 3)
+	var circuitEditorDefinition := findDockDefinition(dockDefinitions, "circuitEditor")
+	var clipboardDefinition := findDockDefinition(dockDefinitions, "clipboard")
+	var eventLogDefinition := findDockDefinition(dockDefinitions, "eventLog")
+	assert(not circuitEditorDefinition.is_empty())
+	assert(not clipboardDefinition.is_empty())
+	assert(not eventLogDefinition.is_empty())
+	for definition in [circuitEditorDefinition, clipboardDefinition, eventLogDefinition]:
+		var definitionIcon := definition.get("dockIcon") as Texture2D
+		assert(definitionIcon != null)
+		assert(definitionIcon.get_size() == Vector2(16, 16))
 	var dockMenu := main.get("dockMenu") as PopupPanel
 	assert(dockMenu.get_child_count() == 1)
 	var dockMenuGrid := dockMenu.get_child(0) as GridContainer
 	assert(dockMenuGrid.get_child_count() == dockDefinitions.size())
 	var dockMenuButton := circuitEditorDock.get("dockMenuButton") as Button
-	assert(dockMenuButton.icon != null)
-	assert(not dockMenuButton.expand_icon)
-	assert(dockMenuButton.icon_alignment == HORIZONTAL_ALIGNMENT_CENTER)
-	assert(dockMenuButton.vertical_icon_alignment == VERTICAL_ALIGNMENT_CENTER)
-	assert(dockMenuButton.icon.get_size() == Vector2(16, 16))
+	assertIconButton(dockMenuButton)
 	for dockButtonNode in circuitEditorDock.find_children("*", "Button", true, false):
 		var dockButton := dockButtonNode as Button
 		if dockButton.icon != null:
-			assert(dockButton.icon_alignment == HORIZONTAL_ALIGNMENT_CENTER)
-			assert(dockButton.vertical_icon_alignment == VERTICAL_ALIGNMENT_CENTER)
-			assert(dockButton.icon.get_size() == Vector2(16, 16))
-	var foundCircuitEditorIcon := false
-	var foundEventLogIcon := false
-	var circuitEditorMenuButton: Button
-	var eventLogMenuButton: Button
+			assertIconButton(dockButton)
 	for menuButtonNode in dockMenuGrid.get_children():
 		var menuButton := menuButtonNode as Button
-		assert(menuButton.icon != null)
-		assert(not menuButton.expand_icon)
-		assert(menuButton.icon_alignment == HORIZONTAL_ALIGNMENT_CENTER)
-		assert(menuButton.vertical_icon_alignment == VERTICAL_ALIGNMENT_CENTER)
-		assert(menuButton.icon.get_size() == Vector2(16, 16))
-		if menuButton.tooltip_text == "CircuitEditor":
-			assert(menuButton.icon == dockMenuButton.icon)
-			circuitEditorMenuButton = menuButton
-			foundCircuitEditorIcon = true
-		elif menuButton.tooltip_text == "EventLog":
-			eventLogMenuButton = menuButton
-			foundEventLogIcon = true
-	assert(foundCircuitEditorIcon)
-	assert(foundEventLogIcon)
+		assertIconButton(menuButton)
+	var circuitEditorMenuButton := findDockMenuButton(dockMenuGrid, "CircuitEditor")
+	var clipboardMenuButton := findDockMenuButton(dockMenuGrid, "Clipboard")
+	var eventLogMenuButton := findDockMenuButton(dockMenuGrid, "EventLog")
 	assert(circuitEditorMenuButton != null)
+	assert(clipboardMenuButton != null)
 	assert(eventLogMenuButton != null)
+	assert(circuitEditorMenuButton.icon == dockMenuButton.icon)
+	assert(clipboardMenuButton.icon == clipboardDefinition.get("dockIcon"))
+	assert(eventLogMenuButton.icon == eventLogDefinition.get("dockIcon"))
 	dockMenuButton.emit_signal("pressed")
 	await process_frame
 	assert(dockMenu.visible)
@@ -274,10 +419,37 @@ func captureBoard() -> void:
 	assert(secondMarkerIndex > firstMarkerIndex)
 	assert(eventLogText.find("HistoryMarkerOne", firstMarkerIndex + 1) == -1)
 	assert(eventLogText.find("HistoryMarkerTwo", secondMarkerIndex + 1) == -1)
+	var copiedClipboard := assertBoardEditingInteractions(board)
+	await process_frame
+	assert(dockHost.get_child_count() == 1)
+	var clipboardDock := main.get("currentDock") as Control
+	assertClipboardDock(dockHost, clipboardDock, copiedClipboard)
+	assertCanvasViewIsStable(boardViewport, subViewport, camera, initialCanvasRect, initialSubViewportSize, initialCameraCenter, initialCameraZoom)
+	var clipboardItemButton := clipboardDock.find_child("clipboardItem", true, false) as Button
+	clipboardItemButton.emit_signal("pressed")
+	await process_frame
+	assertClipboardDock(dockHost, main.get("currentDock") as Control, copiedClipboard)
+	main.call("activateDock", "eventLog")
+	await process_frame
+	main.call("activateDock", "clipboard")
+	await process_frame
+	clipboardDock = main.get("currentDock") as Control
+	assertClipboardDock(dockHost, clipboardDock, copiedClipboard)
+	assertCanvasViewIsStable(boardViewport, subViewport, camera, initialCanvasRect, initialSubViewportSize, initialCameraCenter, initialCameraZoom)
 	var selector := board.get_node("Selector") as ColorRect
 	selector.visible = shouldCaptureSelector()
 	if selector.visible:
 		selector.position = Vector2(8, -8) * float(board.get("cellSize"))
+	if shouldCaptureSelection():
+		board.call("setSelection", Rect2i(Vector2i(-1, 0), Vector2i(3, 2)))
+		var selectionOverlay := board.get_node("SelectionOverlay") as Node2D
+		assert(bool(selectionOverlay.get("hasOverlay")))
+		assert(bool(selectionOverlay.get("isSelection")))
+	if shouldCapturePastePreview():
+		board.call("beginPastePreview")
+		board.call("updatePastePreview", Vector2i(5, 2))
+		assert(bool(board.get("pastePreviewValid")))
+		assert((board.get_node("PreviewTiles") as Node2D).get_child_count() == 2)
 	if shouldCaptureDefaultZoom():
 		camera.zoom = initialCameraZoom
 	else:
@@ -320,7 +492,10 @@ func captureBoard() -> void:
 	if shouldCaptureEventLogDock():
 		main.call("activateDock", "eventLog")
 		await process_frame
-	if shouldCaptureSidebar() or shouldCaptureEventLogDock() or shouldCaptureDockMenu():
+	if shouldCaptureClipboardDock():
+		main.call("activateDock", "clipboard")
+		await process_frame
+	if shouldCaptureSidebar() or shouldCaptureEventLogDock() or shouldCaptureClipboardDock() or shouldCaptureDockMenu():
 		main.call("setLeftSidebarOpen", true, false)
 		main.call("setRightSidebarOpen", true, false)
 		for frame in 2:
@@ -340,7 +515,7 @@ func captureBoard() -> void:
 	var outputPath := "user://capture.png"
 	var error := image.save_png(outputPath)
 	print("capture=", outputPath, " error=", error, " data=", OS.get_user_data_dir())
-	if shouldCaptureInterface() or shouldCaptureSidebar() or shouldCaptureEventLogDock() or shouldCaptureDockMenu():
+	if shouldCaptureInterface() or shouldCaptureSidebar() or shouldCaptureEventLogDock() or shouldCaptureClipboardDock() or shouldCaptureDockMenu():
 		var interfaceImage := main.get_viewport().get_texture().get_image()
 		if shouldCaptureInterface():
 			var interfaceError := interfaceImage.save_png("user://interfaceCapture.png")
@@ -351,6 +526,9 @@ func captureBoard() -> void:
 		if shouldCaptureEventLogDock():
 			var eventLogDockError := interfaceImage.save_png("user://eventLogDockCapture.png")
 			print("eventLogDockCapture=user://eventLogDockCapture.png error=", eventLogDockError)
+		if shouldCaptureClipboardDock():
+			var clipboardDockError := interfaceImage.save_png("user://clipboardDockCapture.png")
+			print("clipboardDockCapture=user://clipboardDockCapture.png error=", clipboardDockError)
 		if shouldCaptureDockMenu():
 			var dockMenuError := interfaceImage.save_png("user://dockMenuCapture.png")
 			print("dockMenuCapture=user://dockMenuCapture.png error=", dockMenuError)

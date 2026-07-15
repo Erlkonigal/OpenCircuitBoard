@@ -1,6 +1,23 @@
 extends Node2D
 
 const InkRegistry := preload("res://scripts/inkRegistry.gd")
+const SelectionOverlay := preload("res://scripts/selectionOverlay.gd")
+const selectionHoldMilliseconds := 350
+const dragThresholdPixels := 6.0
+
+enum InteractionMode {
+	IDLE,
+	LEFT_PENDING,
+	PAINTING,
+	DELETING,
+	SELECTING,
+	MOVING,
+	PASTING,
+}
+
+signal clipboardChanged(item: Dictionary)
+signal clipboardCopied(item: Dictionary)
+signal selectionChanged(item: Dictionary)
 
 @export_group("Board")
 @export var cellSize := 64
@@ -20,8 +37,30 @@ const InkRegistry := preload("res://scripts/inkRegistry.gd")
 
 var validRect := Rect2()
 var occupancy: Dictionary[Vector2i, Node2D] = {}
+var tileData: Dictionary[Vector2i, String] = {}
 var selectedTool := "or"
 var toolRegistry: Dictionary = {}
+var interactionMode := InteractionMode.IDLE
+var pendingMousePosition := Vector2.ZERO
+var pendingCoordinates := Vector2i.ZERO
+var pendingStartMilliseconds := 0
+var selectionStartCoordinates := Vector2i.ZERO
+var moveStartCoordinates := Vector2i.ZERO
+var moveOffset := Vector2i.ZERO
+var movePreviewValid := false
+var pasteAnchorCoordinates := Vector2i.ZERO
+var pastePreviewValid := false
+var lastStrokeCoordinates := Vector2i.ZERO
+var hasLastStrokeCoordinates := false
+var activeChanges: Dictionary[Vector2i, Dictionary] = {}
+var activeSelectionBefore: Dictionary = {}
+var selectedCells: Dictionary[Vector2i, bool] = {}
+var selectionBounds := Rect2i()
+var clipboardItem: Dictionary = {}
+var undoStack: Array[Dictionary] = []
+var redoStack: Array[Dictionary] = []
+var selectionOverlay: Node2D
+var previewTiles: Node2D
 
 func _ready() -> void:
 	toolRegistry = InkRegistry.getBoardToolRegistry()
@@ -37,8 +76,16 @@ func _ready() -> void:
 	configurePatternCanvas(canvasBoard, boardSize, validRect.position, canvasCornerRadius)
 	if boardCamera and boardCamera.has_method("setDragBounds"):
 		boardCamera.call("setDragBounds", validRect)
-		selector.size = Vector2.ONE * cellSize
-		selector.z_index = min(gridWidthCount * 2 + 100, RenderingServer.CANVAS_ITEM_Z_MAX)
+	selector.size = Vector2.ONE * cellSize
+	selector.z_index = min(gridWidthCount * 2 + 100, RenderingServer.CANVAS_ITEM_Z_MAX)
+	previewTiles = Node2D.new()
+	previewTiles.name = "PreviewTiles"
+	previewTiles.z_index = gridWidthCount * 3
+	add_child(previewTiles)
+	selectionOverlay = SelectionOverlay.new()
+	selectionOverlay.name = "SelectionOverlay"
+	selectionOverlay.z_index = min(gridWidthCount * 4 + 100, RenderingServer.CANVAS_ITEM_Z_MAX)
+	add_child(selectionOverlay)
 
 func configurePatternCanvas(patternCanvas: ColorRect, patternCanvasSize: Vector2, patternCanvasPosition: Vector2, radius: float) -> void:
 	if patternCanvas == null:
@@ -66,44 +113,587 @@ func configureCanvasShadow(boardSize: Vector2) -> void:
 		material.set_shader_parameter("cornerRadius", canvasCornerRadius)
 
 func _process(_delta: float) -> void:
+	if interactionMode == InteractionMode.LEFT_PENDING and Time.get_ticks_msec() - pendingStartMilliseconds >= selectionHoldMilliseconds:
+		beginSelection()
 	updateSelectorPosition()
 
 func _unhandled_input(event: InputEvent) -> void:
-	if not (event is InputEventMouseButton) or not event.pressed:
+	var keyEvent := event as InputEventKey
+	if keyEvent:
+		handleKeyInput(keyEvent)
 		return
+	var mouseButton := event as InputEventMouseButton
+	if mouseButton:
+		handleMouseButton(mouseButton)
+		return
+	var mouseMotion := event as InputEventMouseMotion
+	if mouseMotion:
+		handleMouseMotion(mouseMotion)
+
+func handleKeyInput(event: InputEventKey) -> void:
+	if not event.pressed or event.echo:
+		return
+	if event.keycode == KEY_ESCAPE:
+		if interactionMode == InteractionMode.PASTING:
+			cancelPastePreview()
+		elif interactionMode != InteractionMode.IDLE:
+			cancelActiveInteraction()
+		else:
+			clearSelection()
+		get_viewport().set_input_as_handled()
+		return
+	if not (event.ctrl_pressed or event.meta_pressed):
+		return
+	match event.keycode:
+		KEY_C:
+			copySelection()
+		KEY_V:
+			beginPastePreview()
+		KEY_Z:
+			undo()
+		KEY_U:
+			redo()
+		_:
+			return
+	get_viewport().set_input_as_handled()
+
+func handleMouseButton(event: InputEventMouseButton) -> void:
 	if event.button_index != MOUSE_BUTTON_LEFT and event.button_index != MOUSE_BUTTON_RIGHT:
 		return
-	var coordinates := getGridCoordinates(get_global_mouse_position())
-	if not validRect.has_point(get_global_mouse_position()):
+	if interactionMode == InteractionMode.PASTING:
+		if event.pressed and event.button_index == MOUSE_BUTTON_LEFT:
+			confirmPastePreview()
+		elif event.pressed and event.button_index == MOUSE_BUTTON_RIGHT:
+			cancelPastePreview()
+		get_viewport().set_input_as_handled()
 		return
-	if event.button_index == MOUSE_BUTTON_LEFT:
-		placeTile(coordinates)
+	if event.button_index == MOUSE_BUTTON_RIGHT:
+		if event.pressed:
+			var deleteCoordinates := getGridCoordinates(get_global_mouse_position())
+			if isCoordinateValid(deleteCoordinates):
+				beginStroke(deleteCoordinates, false)
+				get_viewport().set_input_as_handled()
+		elif interactionMode == InteractionMode.DELETING:
+			finishStroke()
+			get_viewport().set_input_as_handled()
+		return
+	if event.pressed:
+		var coordinates := getGridCoordinates(get_global_mouse_position())
+		if not isCoordinateValid(coordinates):
+			return
+		if selectedCells.has(coordinates):
+			beginMove(coordinates)
+		else:
+			beginLeftPending(event.position, coordinates)
+		get_viewport().set_input_as_handled()
+		return
+	if interactionMode == InteractionMode.LEFT_PENDING:
+		placeSingleTile()
+	elif interactionMode == InteractionMode.PAINTING:
+		finishStroke()
+	elif interactionMode == InteractionMode.SELECTING:
+		finishSelection()
+	elif interactionMode == InteractionMode.MOVING:
+		finishMove()
 	else:
-		removeTile(coordinates)
+		return
+	get_viewport().set_input_as_handled()
+
+func handleMouseMotion(event: InputEventMouseMotion) -> void:
+	var coordinates := getGridCoordinates(get_global_mouse_position())
+	match interactionMode:
+		InteractionMode.LEFT_PENDING:
+			if event.position.distance_to(pendingMousePosition) >= dragThresholdPixels:
+				beginStroke(pendingCoordinates, true)
+				appendStrokeTo(coordinates)
+		InteractionMode.PAINTING, InteractionMode.DELETING:
+			appendStrokeTo(coordinates)
+		InteractionMode.SELECTING:
+			updateSelectionMarquee(coordinates)
+		InteractionMode.MOVING:
+			updateMovePreview(coordinates)
+		InteractionMode.PASTING:
+			updatePastePreview(coordinates)
+		_:
+			return
+	get_viewport().set_input_as_handled()
 
 func selectTool(toolId: String) -> void:
 	if toolRegistry.has(toolId):
 		selectedTool = toolId
 
-func placeTile(coordinates: Vector2i) -> void:
-	if occupancy.has(coordinates) or tileScene == null:
+func placeTile(coordinates: Vector2i, toolId := selectedTool) -> bool:
+	if not isCoordinateValid(coordinates) or tileData.has(coordinates):
+		return false
+	return setTileTool(coordinates, toolId)
+
+func removeTile(coordinates: Vector2i) -> bool:
+	if not tileData.has(coordinates):
+		return false
+	var removed := setTileTool(coordinates, "")
+	if removed:
+		pruneSelection()
+	return removed
+
+func getClipboardItem() -> Dictionary:
+	return clipboardItem.duplicate(true)
+
+func selectClipboardItem(item: Dictionary) -> void:
+	if item.is_empty():
 		return
+	clipboardItem = item.duplicate(true)
+	clipboardChanged.emit(getClipboardItem())
+
+func getSelectionItem() -> Dictionary:
+	return getSelectionSnapshot()
+
+func beginLeftPending(mousePosition: Vector2, coordinates: Vector2i) -> void:
+	interactionMode = InteractionMode.LEFT_PENDING
+	pendingMousePosition = mousePosition
+	pendingCoordinates = coordinates
+	pendingStartMilliseconds = Time.get_ticks_msec()
+
+func placeSingleTile() -> void:
+	var selectionBefore := getSelectionSnapshot()
+	var changes := makeChangesForTargetValues({pendingCoordinates: selectedTool})
+	if not changes.is_empty():
+		applyChanges(changes, true)
+		pushHistory(changes, selectionBefore, selectionBefore)
+	interactionMode = InteractionMode.IDLE
+
+func beginStroke(coordinates: Vector2i, shouldPlace: bool) -> void:
+	interactionMode = InteractionMode.PAINTING if shouldPlace else InteractionMode.DELETING
+	activeChanges.clear()
+	activeSelectionBefore = getSelectionSnapshot()
+	hasLastStrokeCoordinates = false
+	appendStrokeTo(coordinates)
+
+func appendStrokeTo(coordinates: Vector2i) -> void:
+	if not isCoordinateValid(coordinates):
+		hasLastStrokeCoordinates = false
+		return
+	var path: Array[Vector2i] = [coordinates]
+	if hasLastStrokeCoordinates:
+		path = getGridLine(lastStrokeCoordinates, coordinates)
+	for point in path:
+		applyStrokeAt(point, interactionMode == InteractionMode.PAINTING)
+	lastStrokeCoordinates = coordinates
+	hasLastStrokeCoordinates = true
+
+func applyStrokeAt(coordinates: Vector2i, shouldPlace: bool) -> void:
+	if not isCoordinateValid(coordinates):
+		return
+	var afterToolId := selectedTool if shouldPlace else ""
+	if activeChanges.has(coordinates):
+		return
+	var beforeToolId := getToolIdAt(coordinates)
+	if beforeToolId == afterToolId:
+		return
+	var change := makeChange(coordinates, beforeToolId, afterToolId)
+	activeChanges[coordinates] = change
+	setTileTool(coordinates, afterToolId)
+
+func finishStroke() -> void:
+	var changes := getActiveChanges()
+	if not changes.is_empty():
+		var selectionAfter := pruneSelection()
+		pushHistory(changes, activeSelectionBefore, selectionAfter)
+	activeChanges.clear()
+	activeSelectionBefore.clear()
+	hasLastStrokeCoordinates = false
+	interactionMode = InteractionMode.IDLE
+
+func beginSelection() -> void:
+	interactionMode = InteractionMode.SELECTING
+	selectionStartCoordinates = pendingCoordinates
+	updateSelectionMarquee(pendingCoordinates)
+
+func updateSelectionMarquee(coordinates: Vector2i) -> void:
+	var bounds := makeGridRect(selectionStartCoordinates, coordinates)
+	selectionOverlay.call("showGridRect", bounds, float(cellSize), false, true)
+
+func finishSelection() -> void:
+	var coordinates := getGridCoordinates(get_global_mouse_position())
+	setSelection(makeGridRect(selectionStartCoordinates, coordinates))
+	interactionMode = InteractionMode.IDLE
+
+func beginMove(coordinates: Vector2i) -> void:
+	interactionMode = InteractionMode.MOVING
+	moveStartCoordinates = coordinates
+	moveOffset = Vector2i.ZERO
+	movePreviewValid = false
+	clearPreviewTiles()
+
+func updateMovePreview(coordinates: Vector2i) -> void:
+	moveOffset = coordinates - moveStartCoordinates
+	var preview := getMovedTileMap(moveOffset)
+	movePreviewValid = isMoveValid(preview)
+	showPreviewTiles(preview, movePreviewValid)
+	selectionOverlay.call("showGridRect", translateGridRect(selectionBounds, moveOffset), float(cellSize), true, movePreviewValid)
+
+func finishMove() -> void:
+	if moveOffset != Vector2i.ZERO and movePreviewValid:
+		var selectionBefore := getSelectionSnapshot()
+		var targetValues := getMoveTargetValues(moveOffset)
+		var changes := makeChangesForTargetValues(targetValues)
+		var selectionAfter := getMovedSelectionSnapshot(moveOffset)
+		if not changes.is_empty():
+			applyChanges(changes, true)
+			restoreSelection(selectionAfter)
+			pushHistory(changes, selectionBefore, selectionAfter)
+	clearPreviewTiles()
+	if interactionMode == InteractionMode.MOVING:
+		interactionMode = InteractionMode.IDLE
+		refreshSelectionOverlay()
+
+func getMovedTileMap(offset: Vector2i) -> Dictionary[Vector2i, String]:
+	var tiles: Dictionary[Vector2i, String] = {}
+	for coordinates in selectedCells:
+		var source := coordinates as Vector2i
+		if tileData.has(source):
+			tiles[source + offset] = tileData[source]
+	return tiles
+
+func getMoveTargetValues(offset: Vector2i) -> Dictionary[Vector2i, String]:
+	var targetValues: Dictionary[Vector2i, String] = {}
+	for coordinates in selectedCells:
+		targetValues[coordinates as Vector2i] = ""
+	for coordinates in selectedCells:
+		var source := coordinates as Vector2i
+		if tileData.has(source):
+			targetValues[source + offset] = tileData[source]
+	return targetValues
+
+func isMoveValid(targetTiles: Dictionary[Vector2i, String]) -> bool:
+	if targetTiles.is_empty():
+		return false
+	for coordinates in targetTiles:
+		var target := coordinates as Vector2i
+		if not isCoordinateValid(target):
+			return false
+		if tileData.has(target) and not selectedCells.has(target):
+			return false
+	return true
+
+func getMovedSelectionSnapshot(offset: Vector2i) -> Dictionary:
+	var cells: Array[Vector2i] = []
+	for coordinates in selectedCells:
+		cells.append((coordinates as Vector2i) + offset)
+	return {
+		"bounds": translateGridRect(selectionBounds, offset),
+		"cells": cells,
+	}
+
+func copySelection() -> void:
+	if selectedCells.is_empty():
+		return
+	var tiles: Array[Dictionary] = []
+	for coordinates in getSortedCoordinates(selectedCells.keys()):
+		if tileData.has(coordinates):
+			tiles.append({
+			"offset": coordinates - selectionBounds.position,
+			"toolId": tileData[coordinates],
+		})
+	clipboardItem = {
+		"bounds": Rect2i(Vector2i.ZERO, selectionBounds.size),
+		"boundsSize": selectionBounds.size,
+		"tiles": tiles,
+	}
+	clipboardChanged.emit(getClipboardItem())
+	clipboardCopied.emit(getClipboardItem())
+
+func beginPastePreview() -> void:
+	if clipboardItem.is_empty():
+		return
+	interactionMode = InteractionMode.PASTING
+	updatePastePreview(getGridCoordinates(get_global_mouse_position()))
+
+func updatePastePreview(anchor: Vector2i) -> void:
+	if clipboardItem.is_empty():
+		return
+	pasteAnchorCoordinates = anchor
+	var preview := getPasteTileMap(anchor)
+	pastePreviewValid = isPasteValid(preview)
+	showPreviewTiles(preview, pastePreviewValid)
+	var boundsSize: Vector2i = clipboardItem.get("boundsSize", Vector2i.ONE)
+	selectionOverlay.call("showGridRect", Rect2i(anchor, boundsSize), float(cellSize), true, pastePreviewValid)
+
+func confirmPastePreview() -> void:
+	if interactionMode != InteractionMode.PASTING or not pastePreviewValid:
+		return
+	var targetValues := getPasteTileMap(pasteAnchorCoordinates)
+	var changes := makeChangesForTargetValues(targetValues)
+	var selectionBefore := getSelectionSnapshot()
+	var selectionAfter := {
+		"bounds": Rect2i(pasteAnchorCoordinates, clipboardItem.get("boundsSize", Vector2i.ONE)),
+		"cells": getSortedCoordinates(targetValues.keys()),
+	}
+	if not changes.is_empty():
+		applyChanges(changes, true)
+		restoreSelection(selectionAfter)
+		pushHistory(changes, selectionBefore, selectionAfter)
+	cancelPastePreview(false)
+
+func cancelPastePreview(clearSelectionOverlay := true) -> void:
+	clearPreviewTiles()
+	pastePreviewValid = false
+	interactionMode = InteractionMode.IDLE
+	if clearSelectionOverlay:
+		refreshSelectionOverlay()
+
+func getPasteTileMap(anchor: Vector2i) -> Dictionary[Vector2i, String]:
+	var tiles: Dictionary[Vector2i, String] = {}
+	for entryVariant in clipboardItem.get("tiles", []):
+		var entry := entryVariant as Dictionary
+		var offset: Vector2i = entry.get("offset", entry.get("position", Vector2i.ZERO))
+		tiles[anchor + offset] = String(entry.get("toolId", ""))
+	return tiles
+
+func isPasteValid(targetTiles: Dictionary[Vector2i, String]) -> bool:
+	if targetTiles.is_empty():
+		return false
+	for coordinates in targetTiles:
+		var target := coordinates as Vector2i
+		if not isCoordinateValid(target) or tileData.has(target):
+			return false
+	return true
+
+func undo() -> void:
+	if undoStack.is_empty():
+		return
+	cancelActiveInteraction()
+	var command: Dictionary = undoStack.pop_back()
+	applyChanges(command["changes"], false)
+	restoreSelection(command["selectionBefore"])
+	redoStack.append(command)
+
+func redo() -> void:
+	if redoStack.is_empty():
+		return
+	cancelActiveInteraction()
+	var command: Dictionary = redoStack.pop_back()
+	applyChanges(command["changes"], true)
+	restoreSelection(command["selectionAfter"])
+	undoStack.append(command)
+
+func cancelActiveInteraction() -> void:
+	match interactionMode:
+		InteractionMode.PAINTING, InteractionMode.DELETING:
+			rollbackActiveChanges()
+		InteractionMode.PASTING:
+			cancelPastePreview()
+		InteractionMode.MOVING:
+			clearPreviewTiles()
+		_:
+			pass
+	activeChanges.clear()
+	activeSelectionBefore.clear()
+	hasLastStrokeCoordinates = false
+	interactionMode = InteractionMode.IDLE
+	refreshSelectionOverlay()
+
+func rollbackActiveChanges() -> void:
+	for change in getActiveChanges():
+		setTileTool(change["coordinates"], String(change["beforeToolId"]))
+
+func setSelection(bounds: Rect2i) -> void:
+	selectedCells.clear()
+	selectionBounds = bounds
+	for x in range(bounds.position.x, bounds.end.x):
+		for y in range(bounds.position.y, bounds.end.y):
+			var coordinates := Vector2i(x, y)
+			if tileData.has(coordinates):
+				selectedCells[coordinates] = true
+	if selectedCells.is_empty():
+		selectionBounds = Rect2i()
+	refreshSelectionOverlay()
+	selectionChanged.emit(getSelectionSnapshot())
+
+func clearSelection() -> void:
+	if selectedCells.is_empty():
+		return
+	selectedCells.clear()
+	selectionBounds = Rect2i()
+	refreshSelectionOverlay()
+	selectionChanged.emit(getSelectionSnapshot())
+
+func pruneSelection() -> Dictionary:
+	var changed := false
+	for coordinatesVariant in selectedCells.keys():
+		var coordinates := coordinatesVariant as Vector2i
+		if not tileData.has(coordinates):
+			selectedCells.erase(coordinates)
+			changed = true
+	if selectedCells.is_empty() and selectionBounds.size != Vector2i.ZERO:
+		selectionBounds = Rect2i()
+		changed = true
+	if changed:
+		refreshSelectionOverlay()
+		selectionChanged.emit(getSelectionSnapshot())
+	return getSelectionSnapshot()
+
+func restoreSelection(snapshot: Dictionary) -> void:
+	selectedCells.clear()
+	selectionBounds = snapshot.get("bounds", Rect2i())
+	for coordinatesVariant in snapshot.get("cells", []):
+		var coordinates := coordinatesVariant as Vector2i
+		if tileData.has(coordinates):
+			selectedCells[coordinates] = true
+	if selectedCells.is_empty():
+		selectionBounds = Rect2i()
+	refreshSelectionOverlay()
+	selectionChanged.emit(getSelectionSnapshot())
+
+func getSelectionSnapshot() -> Dictionary:
+	return {
+		"bounds": selectionBounds,
+		"cells": getSortedCoordinates(selectedCells.keys()),
+	}
+
+func refreshSelectionOverlay() -> void:
+	if selectedCells.is_empty():
+		selectionOverlay.call("clearOverlay")
+		return
+	selectionOverlay.call("showGridRect", selectionBounds, float(cellSize), true, true)
+
+func showPreviewTiles(tiles: Dictionary[Vector2i, String], isValid: bool) -> void:
+	clearPreviewTiles()
+	if tileScene == null:
+		return
+	var previewColor := Color(1.0, 1.0, 1.0, 0.5) if isValid else Color(1.0, 0.44, 0.52, 0.58)
+	for coordinates in getSortedCoordinates(tiles.keys()):
+		var toolId: String = tiles[coordinates]
+		if not toolRegistry.has(toolId):
+			continue
+		var tile := tileScene.instantiate() as Node2D
+		previewTiles.add_child(tile)
+		tile.position = Vector2(coordinates * cellSize) + Vector2.ONE * cellSize / 2.0
+		tile.call("setup", self, coordinates, float(cellSize))
+		var attributes: Dictionary = toolRegistry[toolId]
+		tile.call("setAttributes", attributes["icon"], attributes["color"])
+		tile.modulate = previewColor
+
+func clearPreviewTiles() -> void:
+	if previewTiles == null:
+		return
+	for tile in previewTiles.get_children():
+		tile.free()
+
+func makeChangesForTargetValues(targetValues: Dictionary) -> Array[Dictionary]:
+	var changes: Array[Dictionary] = []
+	for coordinates in getSortedCoordinates(targetValues.keys()):
+		var afterToolId := String(targetValues[coordinates])
+		var beforeToolId := getToolIdAt(coordinates)
+		if beforeToolId != afterToolId:
+			changes.append(makeChange(coordinates, beforeToolId, afterToolId))
+	return changes
+
+func makeChange(coordinates: Vector2i, beforeToolId: String, afterToolId: String) -> Dictionary:
+	return {
+		"coordinates": coordinates,
+		"beforeToolId": beforeToolId,
+		"afterToolId": afterToolId,
+	}
+
+func applyChanges(changes: Array, applyAfter: bool) -> void:
+	for changeVariant in changes:
+		var change := changeVariant as Dictionary
+		var toolId := String(change["afterToolId"] if applyAfter else change["beforeToolId"])
+		setTileTool(change["coordinates"], toolId)
+
+func pushHistory(changes: Array[Dictionary], selectionBefore: Dictionary, selectionAfter: Dictionary) -> void:
+	if changes.is_empty():
+		return
+	undoStack.append({
+		"changes": changes.duplicate(true),
+		"selectionBefore": selectionBefore.duplicate(true),
+		"selectionAfter": selectionAfter.duplicate(true),
+	})
+	redoStack.clear()
+
+func getActiveChanges() -> Array[Dictionary]:
+	return makeChangesForActiveMap(activeChanges)
+
+func makeChangesForActiveMap(changeMap: Dictionary) -> Array[Dictionary]:
+	var changes: Array[Dictionary] = []
+	for coordinates in getSortedCoordinates(changeMap.keys()):
+		changes.append(changeMap[coordinates])
+	return changes
+
+func setTileTool(coordinates: Vector2i, toolId: String) -> bool:
+	if toolId.is_empty():
+		if not occupancy.has(coordinates):
+			return false
+		occupancy[coordinates].queue_free()
+		occupancy.erase(coordinates)
+		tileData.erase(coordinates)
+		return true
+	if not isCoordinateValid(coordinates) or tileScene == null or not toolRegistry.has(toolId):
+		return false
+	if occupancy.has(coordinates):
+		occupancy[coordinates].queue_free()
+		occupancy.erase(coordinates)
 	var tile := tileScene.instantiate() as Node2D
 	placedTiles.add_child(tile)
 	tile.position = Vector2(coordinates * cellSize) + Vector2.ONE * cellSize / 2.0
 	tile.call("setup", self, coordinates, float(cellSize))
-	var attributes: Dictionary = toolRegistry[selectedTool]
+	var attributes: Dictionary = toolRegistry[toolId]
 	tile.call("setAttributes", attributes["icon"], attributes["color"])
 	occupancy[coordinates] = tile
+	tileData[coordinates] = toolId
+	return true
 
-func removeTile(coordinates: Vector2i) -> void:
-	if occupancy.has(coordinates):
-		occupancy[coordinates].queue_free()
-		occupancy.erase(coordinates)
+func getToolIdAt(coordinates: Vector2i) -> String:
+	return String(tileData.get(coordinates, ""))
+
+func isCoordinateValid(coordinates: Vector2i) -> bool:
+	var cellCenter := Vector2(coordinates * cellSize) + Vector2.ONE * cellSize * 0.5
+	return validRect.has_point(cellCenter)
+
+func makeGridRect(first: Vector2i, second: Vector2i) -> Rect2i:
+	var origin := Vector2i(mini(first.x, second.x), mini(first.y, second.y))
+	var end := Vector2i(maxi(first.x, second.x), maxi(first.y, second.y)) + Vector2i.ONE
+	return Rect2i(origin, end - origin)
+
+func translateGridRect(bounds: Rect2i, offset: Vector2i) -> Rect2i:
+	return Rect2i(bounds.position + offset, bounds.size)
+
+func getGridLine(first: Vector2i, second: Vector2i) -> Array[Vector2i]:
+	var coordinates: Array[Vector2i] = []
+	var x := first.x
+	var y := first.y
+	var deltaX := absi(second.x - first.x)
+	var deltaY := -absi(second.y - first.y)
+	var stepX := 1 if first.x < second.x else -1
+	var stepY := 1 if first.y < second.y else -1
+	var error := deltaX + deltaY
+	while true:
+		coordinates.append(Vector2i(x, y))
+		if x == second.x and y == second.y:
+			break
+		var doubleError := error * 2
+		if doubleError >= deltaY:
+			error += deltaY
+			x += stepX
+		if doubleError <= deltaX:
+			error += deltaX
+			y += stepY
+	return coordinates
+
+func getSortedCoordinates(coordinates: Array) -> Array[Vector2i]:
+	var sorted: Array[Vector2i] = []
+	for coordinateVariant in coordinates:
+		sorted.append(coordinateVariant as Vector2i)
+	sorted.sort_custom(func(first: Vector2i, second: Vector2i) -> bool:
+		if first.y == second.y:
+			return first.x < second.x
+		return first.y < second.y
+	)
+	return sorted
 
 func updateSelectorPosition() -> void:
 	var mousePosition := get_global_mouse_position()
-	selector.visible = validRect.has_point(mousePosition)
+	selector.visible = interactionMode == InteractionMode.IDLE and validRect.has_point(mousePosition)
 	if selector.visible:
 		selector.position = Vector2(getGridCoordinates(mousePosition) * cellSize)
 

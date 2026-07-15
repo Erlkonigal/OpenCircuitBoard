@@ -37,6 +37,8 @@ var rightSidebarTween: Tween
 func _ready() -> void:
 	configureTopBar()
 	configureRightDock()
+	board.connect("clipboardChanged", updateClipboardItem)
+	board.connect("clipboardCopied", showClipboardDock)
 	leftSidebarToggle.toggled.connect(setLeftSidebarOpen)
 	rightSidebarToggle.toggled.connect(setRightSidebarOpen)
 	dockResizeHandle.gui_input.connect(handleDockResizeInput)
@@ -114,8 +116,12 @@ func activateDock(dockId: String) -> void:
 		currentDock.connect("inkSelected", selectInk)
 	if currentDock.has_signal("eventRecorded"):
 		currentDock.connect("eventRecorded", recordEvent)
+	if currentDock.has_signal("clipboardItemSelected"):
+		currentDock.connect("clipboardItemSelected", selectClipboardItem)
 	if currentDock.has_method("setEventHistory"):
 		currentDock.call("setEventHistory", eventHistory)
+	if currentDock.has_method("setClipboardItem"):
+		currentDock.call("setClipboardItem", board.call("getClipboardItem"))
 	setDockWidth(float(definition.dockWidth))
 
 func recordEvent(eventText: String) -> void:
@@ -136,6 +142,20 @@ func showDockMenu(menuButton: Button) -> void:
 func selectInk(ink: Dictionary) -> void:
 	board.call("selectTool", String(ink.toolId))
 	selectionLabel.text = String(ink.title)
+
+func updateClipboardItem(item: Dictionary) -> void:
+	if currentDock and currentDock.has_method("setClipboardItem"):
+		currentDock.call("setClipboardItem", item)
+
+func showClipboardDock(item: Dictionary) -> void:
+	activateDock("clipboard")
+	if currentDock and currentDock.has_method("setClipboardItem"):
+		currentDock.call("setClipboardItem", item)
+
+func selectClipboardItem(item: Dictionary) -> void:
+	if item.is_empty():
+		return
+	board.call("selectClipboardItem", item)
 
 func setLeftSidebarOpen(isOpen: bool, animate := true) -> void:
 	leftSidebarOpen = isOpen

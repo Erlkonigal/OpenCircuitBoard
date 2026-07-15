@@ -64,7 +64,6 @@ func buildDock() -> void:
 	content.add_theme_constant_override("separation", 3)
 	root.add_child(content)
 
-	content.add_child(buildToolsSection())
 	content.add_child(buildCursorInfoSection())
 	content.add_child(buildInksSection())
 	content.add_child(buildArraySection())
@@ -102,22 +101,6 @@ func buildHeader() -> Control:
 	spacer.custom_minimum_size = Vector2(dockIconSize + 8, dockIconSize + 8)
 	header.add_child(spacer)
 	return header
-
-func buildToolsSection() -> Control:
-	var panel := makeSection()
-	panel.name = "toolsSection"
-	var section := getSectionContent(panel)
-	section.add_child(makeSectionTitle("Tools"))
-	section.add_child(makeActionRow(["Add", "Image", "Duplicate", "Undo", "Redo"]))
-	section.add_child(makeActionRow(["Draw", "Edit", "Erase", "Sample", "Select", "Transform"]))
-	return panel
-
-func makeActionRow(actionNames: Array[String]) -> HBoxContainer:
-	var row := HBoxContainer.new()
-	row.add_theme_constant_override("separation", 6)
-	for actionName in actionNames:
-		row.add_child(makeActionButton(actionName))
-	return row
 
 func buildCursorInfoSection() -> Control:
 	var panel := makeSection()
@@ -199,25 +182,6 @@ func makeSectionTitle(titleText: String) -> Label:
 	title.add_theme_color_override("font_color", primaryTextColor)
 	title.add_theme_font_size_override("font_size", 16)
 	return title
-
-func makeActionButton(actionName: String) -> Button:
-	var button := Button.new()
-	button.custom_minimum_size = Vector2(24, 22)
-	button.tooltip_text = actionName
-	button.icon = solidIcon
-	button.expand_icon = false
-	button.icon_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	button.vertical_icon_alignment = VERTICAL_ALIGNMENT_CENTER
-	button.add_theme_color_override("icon_normal_color", Color("91a0b9"))
-	button.add_theme_color_override("icon_hover_color", primaryTextColor)
-	button.add_theme_color_override("icon_pressed_color", activeAccentColor)
-	button.add_theme_color_override("icon_hover_pressed_color", activeAccentColor)
-	button.add_theme_stylebox_override("normal", makeBox(Color.TRANSPARENT, 2, Color.TRANSPARENT))
-	button.add_theme_stylebox_override("hover", makeBox(controlHoverColor, 2, Color.TRANSPARENT))
-	button.add_theme_stylebox_override("pressed", makeBox(Color.TRANSPARENT, 2, Color.TRANSPARENT))
-	button.add_theme_stylebox_override("hover_pressed", makeBox(controlHoverColor, 2, Color.TRANSPARENT))
-	button.pressed.connect(func() -> void: recordEvent("%sAction" % actionName))
-	return button
 
 func makeInkButton(ink: Dictionary) -> Button:
 	var button := Button.new()
