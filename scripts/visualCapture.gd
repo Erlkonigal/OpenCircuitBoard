@@ -252,6 +252,16 @@ func assertTileIcon(tile: Node2D, ink: Dictionary, cellSize: float) -> void:
 	assert(iconRect.stretch_mode == TextureRect.STRETCH_SCALE)
 	assert(iconRect.modulate.is_equal_approx(inkColor.darkened(0.45)))
 
+func assertSharedTileGeometry(firstTile: Node2D, secondTile: Node2D) -> void:
+	var firstBase := firstTile.get_node("BaseBlock") as TextureRect
+	var firstShadow := firstTile.get_node("ShadowBlock") as TextureRect
+	var secondBase := secondTile.get_node("BaseBlock") as TextureRect
+	var secondShadow := secondTile.get_node("ShadowBlock") as TextureRect
+	assert(firstBase.texture != null)
+	assert(firstBase.texture == firstShadow.texture)
+	assert(firstBase.texture == secondBase.texture)
+	assert(firstBase.texture == secondShadow.texture)
+
 func assertClipboardDock(dockHost: Control, clipboardDock: Control, expectedHistory: Array, expectedSelectedIndex: int) -> void:
 	assert(String(clipboardDock.get("dockId")) == "clipboard")
 	assertDockLayout(dockHost, clipboardDock)
@@ -430,11 +440,34 @@ func assertBoardEditingInteractions(main: Control, board: Node2D, camera: Camera
 	sendCtrlShortcut(board, KEY_V)
 	board.call("updatePastePreview", pasteAnchor)
 	assert(bool(board.get("pastePreviewValid")))
+	assert(not bool(board.get("isPastePreviewBuilding")))
+	var previewTiles := board.get("previewTiles") as Node2D
+	var previewTileIds: Array[int] = []
+	var previewPositions: Array[Vector2] = []
+	for previewTile in previewTiles.get_children():
+		previewTileIds.append(previewTile.get_instance_id())
+		previewPositions.append(previewTile.position)
 	assertPastePreviewAllowsCameraPan(board, camera)
 	board.call("updatePastePreview", pasteAnchor)
+	for index in previewTiles.get_child_count():
+		var previewTile := previewTiles.get_child(index) as Node2D
+		assert(previewTile.get_instance_id() == previewTileIds[index])
+		assert(previewTile.position.is_equal_approx(previewPositions[index]))
+	var movedPasteAnchor := pasteAnchor + Vector2i(1, 0)
+	board.call("updatePastePreview", movedPasteAnchor)
+	for index in previewTiles.get_child_count():
+		var previewTile := previewTiles.get_child(index) as Node2D
+		assert(previewTile.get_instance_id() == previewTileIds[index])
+		assert(previewTile.position.is_equal_approx(previewPositions[index] + Vector2.RIGHT * float(board.get("cellSize"))))
+	board.call("updatePastePreview", pasteAnchor)
+	var firstPreviewTile := previewTiles.get_child(0) as Node2D
 	board.call("confirmPastePreview")
 	assert(tileData.has(pasteAnchor))
 	assert(tileData.has(pasteAnchor + Vector2i(2, 0)))
+	var pastedPreviewGroup := firstPreviewTile.get_parent() as Node2D
+	assert(pastedPreviewGroup.name == "PastedTiles")
+	assert(pastedPreviewGroup.get_parent() == board)
+	assert(pastedPreviewGroup != board.get("previewTiles"))
 	var pastedSelection: Dictionary = board.call("getSelectionItem")
 	assert((pastedSelection.get("bounds", Rect2i()) as Rect2i).position == pasteAnchor)
 	assert((pastedSelection.get("cells", []) as Array).size() == 2)
@@ -797,6 +830,10 @@ func captureBoard() -> void:
 	assertTileIcon(busTile, InkRegistry.getInk("busMagenta"), float(board.get("cellSize")))
 	assertTileIcon(traceRedTile, InkRegistry.getInk("traceRed"), float(board.get("cellSize")))
 	assertTileIcon(traceBlueTile, InkRegistry.getInk("traceBlue"), float(board.get("cellSize")))
+	assertSharedTileGeometry(rightTile, leftTile)
+	assertSharedTileGeometry(leftTile, busTile)
+	assertSharedTileGeometry(busTile, traceRedTile)
+	assertSharedTileGeometry(traceRedTile, traceBlueTile)
 	assert(leftTile.z_index > rightTile.z_index)
 	circuitEditorDock.call("recordEvent", "HistoryMarkerOne")
 	await process_frame

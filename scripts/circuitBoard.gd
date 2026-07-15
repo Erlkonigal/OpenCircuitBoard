@@ -2,9 +2,12 @@ extends Node2D
 
 const InkRegistry := preload("res://scripts/inkRegistry.gd")
 const SelectionOverlay := preload("res://scripts/selectionOverlay.gd")
+const CircuitTile := preload("res://scripts/circuitTile.gd")
 const selectionHoldMilliseconds := 250
 const dragThresholdPixels := 6.0
 const clipboardHistoryLimit := 4
+const previewBuildBatchSize := 64
+const previewBuildThreshold := 128
 
 enum InteractionMode {
 	IDLE,
@@ -51,6 +54,7 @@ var moveOffset := Vector2i.ZERO
 var movePreviewValid := false
 var pasteAnchorCoordinates := Vector2i.ZERO
 var pastePreviewValid := false
+var pastePreviewValues: Dictionary[Vector2i, String] = {}
 var lastStrokeCoordinates := Vector2i.ZERO
 var hasLastStrokeCoordinates := false
 var activeChanges: Dictionary[Vector2i, Dictionary] = {}
@@ -63,9 +67,14 @@ var undoStack: Array[Dictionary] = []
 var redoStack: Array[Dictionary] = []
 var selectionOverlay: Node2D
 var previewTiles: Node2D
+var previewTileByCoordinates: Dictionary[Vector2i, Node2D] = {}
+var previewBuildGeneration := 0
+var previewBuildState: Dictionary = {}
+var isPastePreviewBuilding := false
 
 func _ready() -> void:
 	toolRegistry = InkRegistry.getBoardToolRegistry()
+	CircuitTile.warmGeometry(float(cellSize))
 	var boardSize := Vector2(gridWidthCount * cellSize, gridHeightCount * cellSize)
 	validRect = Rect2(-boardSize / 2.0, boardSize)
 	configurePatternCanvas(
@@ -80,10 +89,7 @@ func _ready() -> void:
 		boardCamera.call("setDragBounds", validRect)
 	selector.size = Vector2.ONE * cellSize
 	selector.z_index = min(gridWidthCount * 2 + 100, RenderingServer.CANVAS_ITEM_Z_MAX)
-	previewTiles = Node2D.new()
-	previewTiles.name = "PreviewTiles"
-	previewTiles.z_index = gridWidthCount * 3
-	add_child(previewTiles)
+	previewTiles = createPreviewTiles()
 	selectionOverlay = SelectionOverlay.new()
 	selectionOverlay.name = "SelectionOverlay"
 	selectionOverlay.z_index = min(gridWidthCount * 4 + 100, RenderingServer.CANVAS_ITEM_Z_MAX)
@@ -113,6 +119,13 @@ func configureCanvasShadow(boardSize: Vector2) -> void:
 		material.set_shader_parameter("frameSize", canvasShadow.size)
 		material.set_shader_parameter("boardOffset", shadowMargin)
 		material.set_shader_parameter("cornerRadius", canvasCornerRadius)
+
+func createPreviewTiles() -> Node2D:
+	var tiles := Node2D.new()
+	tiles.name = "PreviewTiles"
+	tiles.z_index = gridWidthCount * 3
+	add_child(tiles)
+	return tiles
 
 func _process(_delta: float) -> void:
 	if interactionMode == InteractionMode.LEFT_PENDING and Time.get_ticks_msec() - pendingStartMilliseconds >= selectionHoldMilliseconds:
@@ -242,9 +255,12 @@ func getInkAt(coordinates: Vector2i) -> Dictionary:
 	return InkRegistry.getInk(String(tileData[coordinates]))
 
 func getClipboardItem() -> Dictionary:
+	return getSelectedClipboardItem().duplicate(true)
+
+func getSelectedClipboardItem() -> Dictionary:
 	if selectedClipboardIndex < 0 or selectedClipboardIndex >= clipboardHistory.size():
 		return {}
-	return clipboardHistory[selectedClipboardIndex].duplicate(true)
+	return clipboardHistory[selectedClipboardIndex]
 
 func getClipboardHistory() -> Array[Dictionary]:
 	var history: Array[Dictionary] = []
@@ -260,7 +276,7 @@ func selectClipboardItem(index: int) -> bool:
 		return false
 	selectedClipboardIndex = index
 	if interactionMode == InteractionMode.PASTING:
-		updatePastePreview(pasteAnchorCoordinates)
+		updatePastePreview(pasteAnchorCoordinates, true)
 	emitClipboardChanged()
 	return true
 
@@ -464,17 +480,20 @@ func cutSelection() -> void:
 	pushHistory(changes, selectionBefore, getSelectionSnapshot())
 
 func beginPastePreview() -> void:
-	if getClipboardItem().is_empty():
+	if getSelectedClipboardItem().is_empty():
 		return
 	interactionMode = InteractionMode.PASTING
-	updatePastePreview(getGridCoordinates(get_global_mouse_position()))
+	updatePastePreview(getGridCoordinates(get_global_mouse_position()), true)
 
-func updatePastePreview(anchor: Vector2i) -> void:
-	var clipboardItem := getClipboardItem()
+func updatePastePreview(anchor: Vector2i, force := false) -> void:
+	var clipboardItem := getSelectedClipboardItem()
 	if clipboardItem.is_empty():
 		return
+	if not force and anchor == pasteAnchorCoordinates and not previewTileByCoordinates.is_empty():
+		return
 	pasteAnchorCoordinates = anchor
-	var preview := getPasteTileMap(anchor)
+	var preview := getPasteTileMap(anchor, clipboardItem)
+	pastePreviewValues = preview
 	pastePreviewValid = isPasteValid(preview)
 	showPreviewTiles(preview, pastePreviewValid)
 	var boundsSize: Vector2i = clipboardItem.get("boundsSize", Vector2i.ONE)
@@ -485,20 +504,26 @@ func updatePastePreviewAtPointer() -> void:
 		updatePastePreview(getGridCoordinates(get_global_mouse_position()))
 
 func confirmPastePreview() -> void:
-	if interactionMode != InteractionMode.PASTING or not pastePreviewValid:
+	if interactionMode != InteractionMode.PASTING or not pastePreviewValid or isPastePreviewBuilding:
 		return
-	var clipboardItem := getClipboardItem()
+	var clipboardItem := getSelectedClipboardItem()
 	if clipboardItem.is_empty():
 		return
-	var targetValues := getPasteTileMap(pasteAnchorCoordinates)
+	var targetValues := pastePreviewValues
+	if targetValues.is_empty():
+		targetValues = getPasteTileMap(pasteAnchorCoordinates, clipboardItem)
 	var changes := makeChangesForTargetValues(targetValues)
 	var selectionBefore := getSelectionSnapshot()
+	var pastedCells: Array[Vector2i] = []
+	for changeVariant in changes:
+		var change := changeVariant as Dictionary
+		pastedCells.append(change["coordinates"] as Vector2i)
 	var selectionAfter := {
 		"bounds": Rect2i(pasteAnchorCoordinates, clipboardItem.get("boundsSize", Vector2i.ONE)),
-		"cells": getSortedCoordinates(targetValues.keys()),
+		"cells": pastedCells,
 	}
 	if not changes.is_empty():
-		applyChanges(changes, true)
+		applyPasteChanges(changes)
 		restoreSelection(selectionAfter)
 		pushHistory(changes, selectionBefore, selectionAfter)
 	cancelPastePreview(false)
@@ -506,13 +531,13 @@ func confirmPastePreview() -> void:
 func cancelPastePreview(clearSelectionOverlay := true) -> void:
 	clearPreviewTiles()
 	pastePreviewValid = false
+	pastePreviewValues.clear()
 	interactionMode = InteractionMode.IDLE
 	if clearSelectionOverlay:
 		refreshSelectionOverlay()
 
-func getPasteTileMap(anchor: Vector2i) -> Dictionary[Vector2i, String]:
+func getPasteTileMap(anchor: Vector2i, clipboardItem: Dictionary = {}) -> Dictionary[Vector2i, String]:
 	var tiles: Dictionary[Vector2i, String] = {}
-	var clipboardItem := getClipboardItem()
 	for entryVariant in clipboardItem.get("tiles", []):
 		var entry := entryVariant as Dictionary
 		var offset: Vector2i = entry.get("offset", entry.get("position", Vector2i.ZERO))
@@ -627,27 +652,89 @@ func refreshSelectionOverlay() -> void:
 	selectionOverlay.call("showGridRect", selectionBounds, float(cellSize), true, true)
 
 func showPreviewTiles(tiles: Dictionary[Vector2i, String], isValid: bool) -> void:
-	clearPreviewTiles()
 	if tileScene == null:
+		clearPreviewTiles()
 		return
+	previewBuildGeneration += 1
+	previewBuildState.clear()
+	isPastePreviewBuilding = false
 	var previewColor := Color(1.0, 1.0, 1.0, 0.5) if isValid else Color(1.0, 0.44, 0.52, 0.58)
+	var previewCoordinates: Array[Vector2i] = []
+	var previewToolIds: Array[String] = []
 	for coordinates in getSortedCoordinates(tiles.keys()):
 		var toolId: String = tiles[coordinates]
-		if not toolRegistry.has(toolId):
-			continue
+		if toolRegistry.has(toolId):
+			previewCoordinates.append(coordinates)
+			previewToolIds.append(toolId)
+	var existingTiles := previewTiles.get_children()
+	previewTileByCoordinates.clear()
+	var reusedCount := mini(existingTiles.size(), previewCoordinates.size())
+	for index in reusedCount:
+		configurePreviewTile(existingTiles[index] as Node2D, previewCoordinates[index], previewToolIds[index], previewColor, false)
+	var createdCount := previewCoordinates.size()
+	if interactionMode == InteractionMode.PASTING and previewCoordinates.size() > previewBuildThreshold and reusedCount < previewCoordinates.size():
+		createdCount = mini(reusedCount + previewBuildBatchSize, previewCoordinates.size())
+	for index in range(reusedCount, createdCount):
 		var tile := tileScene.instantiate() as Node2D
 		previewTiles.add_child(tile)
-		tile.position = Vector2(coordinates * cellSize) + Vector2.ONE * cellSize / 2.0
+		configurePreviewTile(tile, previewCoordinates[index], previewToolIds[index], previewColor, true)
+	for index in range(createdCount, existingTiles.size()):
+		(existingTiles[index] as Node2D).hide()
+	if createdCount < previewCoordinates.size():
+		previewBuildState = {
+			"coordinates": previewCoordinates,
+			"toolIds": previewToolIds,
+			"previewColor": previewColor,
+			"nextIndex": createdCount,
+		}
+		isPastePreviewBuilding = true
+		schedulePastePreviewBatch(previewBuildGeneration)
+
+func configurePreviewTile(tile: Node2D, coordinates: Vector2i, toolId: String, previewColor: Color, isNew: bool) -> void:
+	if isNew:
 		tile.call("setup", self, coordinates, float(cellSize))
+	else:
+		tile.show()
+		tile.call("updateGridCoordinates", self, coordinates)
+	tile.position = Vector2(coordinates * cellSize) + Vector2.ONE * cellSize / 2.0
+	if String(tile.get_meta("previewToolId", "")) != toolId:
 		var attributes: Dictionary = toolRegistry[toolId]
 		tile.call("setAttributes", attributes["icon"], attributes["color"])
-		tile.modulate = previewColor
+		tile.set_meta("previewToolId", toolId)
+	tile.modulate = previewColor
+	previewTileByCoordinates[coordinates] = tile
+
+func schedulePastePreviewBatch(generation: int) -> void:
+	get_tree().create_timer(0.0).timeout.connect(buildPastePreviewBatch.bind(generation), CONNECT_ONE_SHOT)
+
+func buildPastePreviewBatch(generation: int) -> void:
+	if generation != previewBuildGeneration or previewBuildState.is_empty() or tileScene == null:
+		return
+	var previewCoordinates: Array = previewBuildState["coordinates"]
+	var previewToolIds: Array = previewBuildState["toolIds"]
+	var previewColor: Color = previewBuildState["previewColor"]
+	var startIndex := int(previewBuildState["nextIndex"])
+	var endIndex := mini(startIndex + previewBuildBatchSize, previewCoordinates.size())
+	for index in range(startIndex, endIndex):
+		var tile := tileScene.instantiate() as Node2D
+		previewTiles.add_child(tile)
+		configurePreviewTile(tile, previewCoordinates[index] as Vector2i, String(previewToolIds[index]), previewColor, true)
+	previewBuildState["nextIndex"] = endIndex
+	if endIndex >= previewCoordinates.size():
+		previewBuildState.clear()
+		isPastePreviewBuilding = false
+		return
+	schedulePastePreviewBatch(generation)
 
 func clearPreviewTiles() -> void:
+	previewBuildGeneration += 1
+	previewBuildState.clear()
+	isPastePreviewBuilding = false
 	if previewTiles == null:
 		return
 	for tile in previewTiles.get_children():
 		tile.free()
+	previewTileByCoordinates.clear()
 
 func makeChangesForTargetValues(targetValues: Dictionary) -> Array[Dictionary]:
 	var changes: Array[Dictionary] = []
@@ -671,13 +758,61 @@ func applyChanges(changes: Array, applyAfter: bool) -> void:
 		var toolId := String(change["afterToolId"] if applyAfter else change["beforeToolId"])
 		setTileTool(change["coordinates"], toolId)
 
+func applyPasteChanges(changes: Array) -> void:
+	if canPromotePastePreview(changes):
+		promotePreviewTiles(changes)
+		return
+	for changeVariant in changes:
+		var change := changeVariant as Dictionary
+		var coordinates: Vector2i = change["coordinates"]
+		var toolId := String(change["afterToolId"])
+		var previewTile := previewTileByCoordinates.get(coordinates) as Node2D
+		if previewTile and previewTile.get_parent() == previewTiles and not toolId.is_empty() and not occupancy.has(coordinates):
+			previewTile.reparent(placedTiles)
+			previewTile.modulate = Color.WHITE
+			occupancy[coordinates] = previewTile
+			tileData[coordinates] = toolId
+		else:
+			setTileTool(coordinates, toolId)
+	previewTileByCoordinates.clear()
+
+func canPromotePastePreview(changes: Array) -> bool:
+	if isPastePreviewBuilding or previewTiles == null or previewTileByCoordinates.size() != changes.size():
+		return false
+	for changeVariant in changes:
+		var change := changeVariant as Dictionary
+		var coordinates: Vector2i = change["coordinates"]
+		var toolId := String(change["afterToolId"])
+		var previewTile := previewTileByCoordinates.get(coordinates) as Node2D
+		if previewTile == null or previewTile.get_parent() != previewTiles or toolId.is_empty() or occupancy.has(coordinates):
+			return false
+	return true
+
+func promotePreviewTiles(changes: Array) -> void:
+	var completedPreviewTiles := previewTiles
+	for tile in completedPreviewTiles.get_children():
+		if not tile.visible:
+			tile.free()
+	# Reparenting a large subtree stalls the frame, so completed previews stay on the board.
+	completedPreviewTiles.name = "PastedTiles"
+	completedPreviewTiles.z_index = 0
+	for changeVariant in changes:
+		var change := changeVariant as Dictionary
+		var coordinates: Vector2i = change["coordinates"]
+		var previewTile := previewTileByCoordinates[coordinates]
+		previewTile.modulate = Color.WHITE
+		occupancy[coordinates] = previewTile
+		tileData[coordinates] = String(change["afterToolId"])
+	previewTileByCoordinates.clear()
+	previewTiles = createPreviewTiles()
+
 func pushHistory(changes: Array[Dictionary], selectionBefore: Dictionary, selectionAfter: Dictionary) -> void:
 	if changes.is_empty():
 		return
 	undoStack.append({
-		"changes": changes.duplicate(true),
-		"selectionBefore": selectionBefore.duplicate(true),
-		"selectionAfter": selectionAfter.duplicate(true),
+		"changes": changes,
+		"selectionBefore": selectionBefore,
+		"selectionAfter": selectionAfter,
 	})
 	redoStack.clear()
 
