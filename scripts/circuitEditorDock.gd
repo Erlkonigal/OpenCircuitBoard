@@ -21,6 +21,7 @@ const activeAccentColor := Color("f2c94c")
 
 var inkButtons: Dictionary[String, Button] = {}
 var selectedInkId := "or"
+var lastSelectedInkIdByPaletteToolId: Dictionary[String, String] = {}
 var hoveredInkLabel: Label
 var positionXLabel: Label
 var positionYLabel: Label
@@ -186,10 +187,10 @@ func makeSectionTitle(titleText: String) -> Label:
 func makeInkButton(ink: Dictionary) -> Button:
 	var button := InkButton.new() as Button
 	button.call("configure", ink)
-	button.pressed.connect(selectInk.bind(ink))
-	button.mouse_entered.connect(setHoveredInk.bind(String(ink.title)))
-	button.mouse_exited.connect(clearHoveredInk)
 	var paletteToolId := InkRegistry.getPaletteToolId(ink)
+	button.pressed.connect(selectPaletteInk.bind(paletteToolId))
+	button.mouse_entered.connect(setHoveredPaletteInk.bind(paletteToolId))
+	button.mouse_exited.connect(clearHoveredInk)
 	if bool(ink.get("isExpandable", false)):
 		button.gui_input.connect(handleInkButtonInput.bind(button, paletteToolId))
 	inkButtons[paletteToolId] = button
@@ -263,6 +264,7 @@ func selectInk(ink: Dictionary, shouldRecordEvent := true, shouldEmit := true) -
 	if ink.is_empty():
 		return
 	selectedInkId = InkRegistry.getComponentId(ink)
+	lastSelectedInkIdByPaletteToolId[InkRegistry.getPaletteToolId(ink)] = selectedInkId
 	updateInkButtonStates()
 	if shouldRecordEvent:
 		recordEvent("Selected%s" % ink.title)
@@ -272,19 +274,41 @@ func selectInk(ink: Dictionary, shouldRecordEvent := true, shouldEmit := true) -
 func syncSelectedInk(toolId: String) -> void:
 	selectInk(InkRegistry.getInk(toolId), false, false)
 
+func syncLastSelectedInkIds(lastSelectedInkIds: Dictionary) -> void:
+	for paletteToolId in lastSelectedInkIds:
+		var normalizedPaletteToolId := String(paletteToolId)
+		var componentId := String(lastSelectedInkIds[paletteToolId])
+		var ink := InkRegistry.getInk(componentId)
+		if not ink.is_empty() and InkRegistry.getPaletteToolId(ink) == normalizedPaletteToolId:
+			lastSelectedInkIdByPaletteToolId[normalizedPaletteToolId] = componentId
+	updateInkButtonStates()
+
 func getSelectedInkId() -> String:
 	return selectedInkId
+
+func getLastSelectedInkId(paletteToolId: String) -> String:
+	return InkRegistry.getComponentId(getLastSelectedInk(paletteToolId))
 
 func updateInkButtonStates() -> void:
 	var selectedInk := InkRegistry.getInk(selectedInkId)
 	for paletteToolId in inkButtons:
 		var button := inkButtons[paletteToolId]
-		var paletteInk := InkRegistry.getInk(String(paletteToolId))
+		var displayedInk := getLastSelectedInk(String(paletteToolId))
 		var isSelected := InkRegistry.getPaletteToolId(selectedInk) == paletteToolId
-		var displayedInk: Dictionary = selectedInk if isSelected else paletteInk
 		button.set_pressed_no_signal(isSelected)
+		button.tooltip_text = String(displayedInk.get("title", ""))
 		button.call("setInkIcon", displayedInk.get("icon") as Texture2D)
 		button.call("setInkAppearance", displayedInk.get("color", Color.WHITE), isSelected)
+
+func selectPaletteInk(paletteToolId: String) -> void:
+	selectInk(getLastSelectedInk(paletteToolId))
+
+func getLastSelectedInk(paletteToolId: String) -> Dictionary:
+	var componentId := String(lastSelectedInkIdByPaletteToolId.get(paletteToolId, paletteToolId))
+	var ink := InkRegistry.getInk(componentId)
+	if not ink.is_empty() and InkRegistry.getPaletteToolId(ink) == paletteToolId:
+		return ink
+	return InkRegistry.getInk(paletteToolId)
 
 func handleInkButtonInput(event: InputEvent, anchorButton: Button, paletteToolId: String) -> void:
 	var mouseButton := event as InputEventMouseButton
@@ -297,6 +321,9 @@ func handleInkButtonInput(event: InputEvent, anchorButton: Button, paletteToolId
 func setHoveredInk(titleText: String) -> void:
 	if hoveredInkLabel:
 		hoveredInkLabel.text = titleText
+
+func setHoveredPaletteInk(paletteToolId: String) -> void:
+	setHoveredInk(String(getLastSelectedInk(paletteToolId).get("title", "None")))
 
 func clearHoveredInk() -> void:
 	if hoveredInkLabel:

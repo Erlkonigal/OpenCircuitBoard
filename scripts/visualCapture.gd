@@ -714,6 +714,21 @@ func captureBoard() -> void:
 	circuitEditorDock.call("selectInk", InkRegistry.getInk("or"), false)
 	assert(String(board.get("selectedTool")) == "or")
 	assertInkButton(orButton, InkRegistry.getInk("or"), true)
+	assertInkButton(traceButton, InkRegistry.getInk("traceBlue"), false)
+	traceButton.emit_signal("pressed")
+	await process_frame
+	assert(String(board.get("selectedTool")) == "traceBlue")
+	assert(String(circuitEditorDock.call("getSelectedInkId")) == "traceBlue")
+	assertInkButton(traceButton, InkRegistry.getInk("traceBlue"), true)
+	circuitEditorDock.call("selectInk", InkRegistry.getInk("or"), false)
+	root.push_input(makeMouseButtonEvent(traceButton, MOUSE_BUTTON_RIGHT, true))
+	await process_frame
+	assert(inkVariantMenu.visible)
+	var rememberedTraceVariantButtons: Dictionary = main.get("inkVariantButtons")
+	assertInkButton(rememberedTraceVariantButtons.get("traceBlue") as Button, InkRegistry.getInk("traceBlue"), true)
+	root.push_input(makeMouseButtonEvent(traceButton, MOUSE_BUTTON_RIGHT, false))
+	main.call("hideInkVariantMenu")
+	await process_frame
 	var interactionModeBeforeBusMenu := int(board.get("interactionMode"))
 	root.push_input(makeMouseButtonEvent(busButton, MOUSE_BUTTON_RIGHT, true))
 	await process_frame
@@ -736,6 +751,21 @@ func captureBoard() -> void:
 	circuitEditorDock.call("selectInk", InkRegistry.getInk("or"), false)
 	assert(String(board.get("selectedTool")) == "or")
 	assertInkButton(orButton, InkRegistry.getInk("or"), true)
+	assertInkButton(busButton, InkRegistry.getInk("busMagenta"), false)
+	busButton.emit_signal("pressed")
+	await process_frame
+	assert(String(board.get("selectedTool")) == "busMagenta")
+	assert(String(circuitEditorDock.call("getSelectedInkId")) == "busMagenta")
+	assertInkButton(busButton, InkRegistry.getInk("busMagenta"), true)
+	circuitEditorDock.call("selectInk", InkRegistry.getInk("or"), false)
+	root.push_input(makeMouseButtonEvent(busButton, MOUSE_BUTTON_RIGHT, true))
+	await process_frame
+	assert(inkVariantMenu.visible)
+	var rememberedBusVariantButtons: Dictionary = main.get("inkVariantButtons")
+	assertInkButton(rememberedBusVariantButtons.get("busMagenta") as Button, InkRegistry.getInk("busMagenta"), true)
+	root.push_input(makeMouseButtonEvent(busButton, MOUSE_BUTTON_RIGHT, false))
+	main.call("hideInkVariantMenu")
+	await process_frame
 	var boardBounds: Rect2 = board.get("validRect")
 	board.set_process(false)
 	# Place the right tile first so the capture verifies X-based depth ordering.
@@ -802,6 +832,9 @@ func captureBoard() -> void:
 	assert(restoredCircuitEditorDock.get("dockId") == "circuitEditor")
 	assertDockLayout(dockHost, restoredCircuitEditorDock)
 	assertCanvasViewIsStable(boardViewport, subViewport, camera, initialCanvasRect, initialSubViewportSize, initialCameraCenter, initialCameraZoom)
+	var restoredInkButtons: Dictionary = restoredCircuitEditorDock.get("inkButtons")
+	assertInkButton(restoredInkButtons.get("trace") as Button, InkRegistry.getInk("traceBlue"), false)
+	assertInkButton(restoredInkButtons.get("bus") as Button, InkRegistry.getInk("busMagenta"), false)
 	restoredCircuitEditorDock.call("recordEvent", "HistoryMarkerTwo")
 	await process_frame
 	main.call("activateDock", "eventLog")

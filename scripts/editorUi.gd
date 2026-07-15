@@ -39,7 +39,9 @@ var dockMenuTargetSide := leftDockSide
 var inkVariantMenu: PopupPanel
 var inkVariantMenuGrid: GridContainer
 var inkVariantMenuDock: Control
+var inkVariantMenuPaletteToolId := ""
 var inkVariantButtons: Dictionary[String, Button] = {}
+var lastSelectedInkIdByPaletteToolId: Dictionary[String, String] = {}
 var dockWidth := 272.0
 var rightDockWidth := 272.0
 var eventHistory: Array[String] = []
@@ -246,6 +248,8 @@ func connectDockSignals(dock: Control, dockSide: String) -> void:
 		dock.connect("eventRecorded", recordEvent)
 	if dock.has_signal("clipboardItemSelected"):
 		dock.connect("clipboardItemSelected", selectClipboardItem)
+	if dock.has_method("syncLastSelectedInkIds"):
+		dock.call("syncLastSelectedInkIds", lastSelectedInkIdByPaletteToolId)
 	if dock.has_method("syncSelectedInk"):
 		dock.call("syncSelectedInk", String(board.get("selectedTool")))
 
@@ -280,13 +284,17 @@ func buildInkVariantMenu() -> void:
 	inkVariantMenuGrid.add_theme_constant_override("h_separation", inkVariantMenuSeparation)
 	inkVariantMenuGrid.add_theme_constant_override("v_separation", inkVariantMenuSeparation)
 	inkVariantMenu.add_child(inkVariantMenuGrid)
-	inkVariantMenu.popup_hide.connect(func() -> void: inkVariantMenuDock = null)
+	inkVariantMenu.popup_hide.connect(func() -> void:
+		inkVariantMenuDock = null
+		inkVariantMenuPaletteToolId = ""
+	)
 
 func showInkVariantMenu(anchorButton: Button, paletteToolId: String, dock: Control) -> void:
 	var variants := InkRegistry.getInkVariants(paletteToolId)
 	if variants.size() < 2:
 		return
 	inkVariantMenuDock = dock
+	inkVariantMenuPaletteToolId = paletteToolId
 	populateInkVariantMenu(variants)
 	var menuRows := ceili(float(variants.size()) / float(inkVariantMenuColumns))
 	var menuSize := Vector2i(
@@ -325,12 +333,15 @@ func hideInkVariantMenu() -> void:
 	if inkVariantMenu:
 		inkVariantMenu.hide()
 	inkVariantMenuDock = null
+	inkVariantMenuPaletteToolId = ""
 
 func refreshInkVariantButtons() -> void:
 	if inkVariantMenuDock == null:
 		return
 	var selectedInkId := ""
-	if inkVariantMenuDock.has_method("getSelectedInkId"):
+	if inkVariantMenuDock.has_method("getLastSelectedInkId"):
+		selectedInkId = String(inkVariantMenuDock.call("getLastSelectedInkId", inkVariantMenuPaletteToolId))
+	elif inkVariantMenuDock.has_method("getSelectedInkId"):
 		selectedInkId = String(inkVariantMenuDock.call("getSelectedInkId"))
 	for componentId in inkVariantButtons:
 		var button := inkVariantButtons[componentId]
@@ -340,6 +351,7 @@ func refreshInkVariantButtons() -> void:
 		button.call("setInkAppearance", ink.get("color", Color.WHITE), isSelected)
 
 func selectInk(ink: Dictionary) -> void:
+	lastSelectedInkIdByPaletteToolId[InkRegistry.getPaletteToolId(ink)] = InkRegistry.getComponentId(ink)
 	board.call("selectTool", InkRegistry.getComponentId(ink))
 	refreshInkVariantButtons()
 
