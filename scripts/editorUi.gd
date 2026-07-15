@@ -53,6 +53,7 @@ var leftSidebarTween: Tween
 var rightSidebarTween: Tween
 
 func _ready() -> void:
+	Input.set_use_accumulated_input(false)
 	configureTopBar()
 	board.connect("clipboardChanged", updateClipboardHistory)
 	board.connect("clipboardCopied", showClipboardDock)

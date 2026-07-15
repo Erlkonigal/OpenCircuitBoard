@@ -607,6 +607,7 @@ func captureBoard() -> void:
 	root.add_child(main)
 	for frame in 5:
 		await process_frame
+	assert(not Input.is_using_accumulated_input())
 
 	var board := main.get_node("BoardViewport/SubViewport/CircuitBoard") as Node2D
 	var boardViewport := main.get_node("BoardViewport") as SubViewportContainer
