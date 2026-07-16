@@ -338,8 +338,8 @@ func assertInkButton(button: Button, ink: Dictionary, isSelected: bool) -> void:
 	var expectedIconColor: Color = Color("111a26") if isSelected else inkColor
 	assert(icon.modulate.is_equal_approx(expectedIconColor))
 	var variantIndicator := button.get_node_or_null("VariantIndicator") as Control
-	var isExpandable := bool(button.get("IsExpandable"))
-	assert((variantIndicator != null) == isExpandable)
+	var hasContextMenu := bool(button.get("IsExpandable")) or bool(button.get("IsConfigurable"))
+	assert((variantIndicator != null) == hasContextMenu)
 	if variantIndicator:
 		assert(variantIndicator.mouse_filter == Control.MOUSE_FILTER_IGNORE)
 		var expectedIndicatorColor := Color("111a26") if isSelected else Color("b4c1d3")

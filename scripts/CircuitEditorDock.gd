@@ -3,6 +3,7 @@ extends "res://scripts/DockView.gd"
 signal dockMenuRequested(menuButton: Button)
 signal inkSelected(ink: Dictionary)
 signal inkVariantMenuRequested(anchorButton: Button, paletteToolId: String)
+signal clockSettingsMenuRequested(anchorButton: Button)
 signal eventRecorded(eventText: String)
 
 const InkRegistry := preload("res://scripts/InkRegistry.gd")
@@ -176,6 +177,8 @@ func makeInkButton(ink: Dictionary) -> Button:
 	button.mouse_exited.connect(clearHoveredInk)
 	if bool(ink.get("isExpandable", false)):
 		button.gui_input.connect(handleInkButtonInput.bind(button, paletteToolId))
+	elif bool(ink.get("isConfigurable", false)):
+		button.gui_input.connect(handleClockSettingsInput.bind(button))
 	InkButtons[paletteToolId] = button
 	return button
 
@@ -267,7 +270,15 @@ func handleInkButtonInput(event: InputEvent, anchorButton: Button, paletteToolId
 		return
 	if mouseButton.pressed:
 		inkVariantMenuRequested.emit(anchorButton, paletteToolId)
-	accept_event()
+		accept_event()
+
+func handleClockSettingsInput(event: InputEvent, anchorButton: Button) -> void:
+	var mouseButton := event as InputEventMouseButton
+	if mouseButton == null or mouseButton.button_index != MOUSE_BUTTON_RIGHT:
+		return
+	if mouseButton.pressed:
+		clockSettingsMenuRequested.emit(anchorButton)
+		accept_event()
 
 func setHoveredInk(titleText: String) -> void:
 	if HoveredInkLabel:

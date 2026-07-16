@@ -9,6 +9,8 @@ func run(context) -> void:
 	assert(projectTitle.text == "New Project - Open Circuit Board")
 	assert(board.call("placeTile", Vector2i(-3, 2), "xor"))
 	assert(board.call("placeTile", Vector2i(4, -1), "latchOff"))
+	main.call("setClockHoldTicks", 4)
+	assert(board.call("placeTile", Vector2i(6, 3), "clock"))
 	assert(board.call("setTileState", Vector2i(4, -1), true))
 	board.call("selectTool", "busMagenta")
 	var expectedProjectData := board.call("exportProjectData") as Dictionary
@@ -28,6 +30,7 @@ func run(context) -> void:
 	assert(projectTitle.text == "frontendTestProject.ocb - Open Circuit Board")
 	var restoredProjectData := board.call("exportProjectData") as Dictionary
 	assert(JSON.stringify(restoredProjectData) == JSON.stringify(expectedProjectData))
+	assert(int(board.call("getTileClockHoldTicks", Vector2i(6, 3))) == 4)
 	main.call("createNewProject")
 	assert(projectTitle.text == "New Project - Open Circuit Board")
 	restoreFile(projectPath, hadProject, previousProject)

@@ -6,6 +6,8 @@ const CircuitTile := preload("res://scripts/CircuitTile.gd")
 const ClipboardHistoryLimit := 4
 const PreviewBuildBatchSize := 64
 const PreviewBuildThreshold := 128
+const ClockHoldTicksMinimum := 1
+const ClockHoldTicksMaximum := 16
 
 enum InteractionMode {
 	Idle,
@@ -19,6 +21,7 @@ enum InteractionMode {
 signal clipboardChanged(history: Array[Dictionary], selectedIndex: int)
 signal clipboardCopied(history: Array[Dictionary], selectedIndex: int)
 signal selectionChanged(item: Dictionary)
+signal clockHoldTicksChanged(holdTicks: int)
 
 @export_group("Board")
 @export var CellSize := 64
@@ -40,6 +43,7 @@ var ValidRect := Rect2()
 var Occupancy: Dictionary[Vector2i, Node2D] = {}
 var TileValues: Dictionary[Vector2i, Dictionary] = {}
 var SelectedTool := "or"
+var ClockHoldTicks := ClockHoldTicksMinimum
 var ToolRegistry: Dictionary = {}
 var EditorInputEnabled := true
 var CurrentInteractionMode := InteractionMode.Idle
@@ -224,6 +228,22 @@ func selectTool(toolId: String) -> void:
 	if ToolRegistry.has(toolId):
 		SelectedTool = toolId
 
+func setClockHoldTicks(requestedHoldTicks: int) -> void:
+	var normalizedHoldTicks := clampi(requestedHoldTicks, ClockHoldTicksMinimum, ClockHoldTicksMaximum)
+	if ClockHoldTicks == normalizedHoldTicks:
+		return
+	ClockHoldTicks = normalizedHoldTicks
+	clockHoldTicksChanged.emit(ClockHoldTicks)
+
+func getClockHoldTicks() -> int:
+	return ClockHoldTicks
+
+func getTileClockHoldTicks(coordinates: Vector2i) -> int:
+	var tileValue := getTileValueAt(coordinates)
+	if String(tileValue.get("toolId", "")) != "clock":
+		return ClockHoldTicksMinimum
+	return int(tileValue.get("clockHoldTicks", ClockHoldTicksMinimum))
+
 func placeTile(coordinates: Vector2i, toolId := SelectedTool) -> bool:
 	if not isCoordinateValid(coordinates) or TileValues.has(coordinates):
 		return false
@@ -265,25 +285,32 @@ func getSimulationTiles() -> Array[Dictionary]:
 	var tiles: Array[Dictionary] = []
 	for coordinates in getSortedCoordinates(TileValues.keys()):
 		var tileValue := getTileValueAt(coordinates)
-		tiles.append({
+		var simulationTile := {
 			"coordinates": coordinates,
 			"toolId": String(tileValue.get("toolId", "")),
 			"isOn": bool(tileValue.get("isOn", false)),
-		})
+		}
+		if String(tileValue.get("toolId", "")) == "clock":
+			simulationTile["clockHoldTicks"] = int(tileValue.get("clockHoldTicks", ClockHoldTicksMinimum))
+		tiles.append(simulationTile)
 	return tiles
 
 func exportProjectData() -> Dictionary:
 	var tiles: Array[Dictionary] = []
 	for coordinates in getSortedCoordinates(TileValues.keys()):
 		var tileValue := getTileValueAt(coordinates)
-		tiles.append({
+		var projectTile := {
 			"x": coordinates.x,
 			"y": coordinates.y,
 			"toolId": String(tileValue.get("toolId", "")),
 			"isOn": bool(tileValue.get("isOn", false)),
-		})
+		}
+		if String(tileValue.get("toolId", "")) == "clock":
+			projectTile["clockHoldTicks"] = int(tileValue.get("clockHoldTicks", ClockHoldTicksMinimum))
+		tiles.append(projectTile)
 	return {
 		"selectedTool": SelectedTool,
+		"clockHoldTicks": ClockHoldTicks,
 		"tiles": tiles,
 	}
 
@@ -291,6 +318,7 @@ func importProjectData(projectData: Dictionary) -> bool:
 	var rawTiles: Variant = projectData.get("tiles", [])
 	if not (rawTiles is Array):
 		return false
+	var requestedClockHoldTicks := clampi(int(projectData.get("clockHoldTicks", ClockHoldTicksMinimum)), ClockHoldTicksMinimum, ClockHoldTicksMaximum)
 	var nextTiles: Dictionary[Vector2i, Dictionary] = {}
 	for rawTileVariant in rawTiles:
 		if not (rawTileVariant is Dictionary):
@@ -302,7 +330,7 @@ func importProjectData(projectData: Dictionary) -> bool:
 		var toolId := String(rawTile["toolId"])
 		if nextTiles.has(coordinates) or not isCoordinateValid(coordinates) or not ToolRegistry.has(toolId):
 			return false
-		nextTiles[coordinates] = makeTileValue(toolId, rawTile.get("isOn", null))
+		nextTiles[coordinates] = makeTileValue(toolId, rawTile.get("isOn", null), rawTile.get("clockHoldTicks", requestedClockHoldTicks))
 	var requestedTool := String(projectData.get("selectedTool", "or"))
 	if not ToolRegistry.has(requestedTool):
 		requestedTool = "or"
@@ -316,6 +344,7 @@ func importProjectData(projectData: Dictionary) -> bool:
 		if not setTileValue(coordinates, nextTiles[coordinates]):
 			return false
 	SelectedTool = requestedTool
+	ClockHoldTicks = requestedClockHoldTicks
 	UndoStack.clear()
 	RedoStack.clear()
 	SelectedCells.clear()
@@ -325,6 +354,7 @@ func importProjectData(projectData: Dictionary) -> bool:
 	refreshSelectionOverlay()
 	selectionChanged.emit(getSelectionSnapshot())
 	emitClipboardChanged()
+	clockHoldTicksChanged.emit(ClockHoldTicks)
 	return true
 
 func clearProjectData() -> void:
@@ -532,11 +562,14 @@ func copySelection() -> bool:
 	for coordinates in getSortedCoordinates(SelectedCells.keys()):
 		if TileValues.has(coordinates):
 			var tileValue := getTileValueAt(coordinates)
-			tiles.append({
+			var clipboardTile := {
 			"offset": coordinates - SelectionBounds.position,
 			"toolId": tileValue["toolId"],
 			"isOn": tileValue["isOn"],
-		})
+			}
+			if String(tileValue.get("toolId", "")) == "clock":
+				clipboardTile["clockHoldTicks"] = int(tileValue.get("clockHoldTicks", ClockHoldTicksMinimum))
+			tiles.append(clipboardTile)
 	var clipboardItem := {
 		"bounds": Rect2i(Vector2i.ZERO, SelectionBounds.size),
 		"boundsSize": SelectionBounds.size,
@@ -643,7 +676,7 @@ func getPasteTileMap(anchor: Vector2i, clipboardItem: Dictionary = {}) -> Dictio
 	for entryVariant in clipboardItem.get("tiles", []):
 		var entry := entryVariant as Dictionary
 		var offset: Vector2i = entry.get("offset", entry.get("position", Vector2i.ZERO))
-		tiles[anchor + offset] = makeTileValue(String(entry.get("toolId", "")), entry.get("isOn", null))
+		tiles[anchor + offset] = makeTileValue(String(entry.get("toolId", "")), entry.get("isOn", null), entry.get("clockHoldTicks", null))
 	return tiles
 
 func isPasteValid(targetTiles: Dictionary[Vector2i, Dictionary]) -> bool:
@@ -930,19 +963,23 @@ func makeChangesForActiveMap(changeMap: Dictionary) -> Array[Dictionary]:
 		changes.append(changeMap[coordinates])
 	return changes
 
-func makeTileValue(toolId: String, isOn: Variant = null) -> Dictionary:
+func makeTileValue(toolId: String, isOn: Variant = null, clockHoldTicks: Variant = null) -> Dictionary:
 	if toolId.is_empty():
 		return {}
 	var resolvedIsOn := InkRegistry.getDefaultIsOn(toolId) if isOn == null else bool(isOn)
-	return {
+	var tileValue := {
 		"toolId": toolId,
 		"isOn": resolvedIsOn,
 	}
+	if toolId == "clock":
+		var resolvedClockHoldTicks := ClockHoldTicks if clockHoldTicks == null else clampi(int(clockHoldTicks), ClockHoldTicksMinimum, ClockHoldTicksMaximum)
+		tileValue["clockHoldTicks"] = resolvedClockHoldTicks
+	return tileValue
 
 func normalizeTileValue(rawValue: Variant) -> Dictionary:
 	if rawValue is Dictionary:
 		var tileValue := rawValue as Dictionary
-		return makeTileValue(String(tileValue.get("toolId", "")), tileValue.get("isOn", null))
+		return makeTileValue(String(tileValue.get("toolId", "")), tileValue.get("isOn", null), tileValue.get("clockHoldTicks", null))
 	if rawValue is String:
 		return makeTileValue(String(rawValue))
 	return {}

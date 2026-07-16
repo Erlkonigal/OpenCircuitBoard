@@ -54,7 +54,7 @@ static func getPaletteInks() -> Array[Dictionary]:
 		makeInk("xnor", "Xnor", "Gates", Color("bf58ee")),
 		makeInk("latchOn", "LatchOn", "General Components", Color("43ec90")),
 		makeInk("latchOff", "LatchOff", "General Components", Color("43ec90"), "", false, false),
-		makeInk("clock", "Clock", "General Components", Color("f05b70")),
+		makeInk("clock", "Clock", "General Components", Color("f05b70"), "", false, true, true),
 		makeInk("led", "Led", "General Components", Color("e6edf8")),
 	]
 
@@ -120,7 +120,8 @@ static func makeInk(
 	color: Color,
 	paletteToolId := "",
 	isExpandable := false,
-	defaultIsOn := true
+	defaultIsOn := true,
+	isConfigurable := false
 ) -> Dictionary:
 	var resolvedPaletteToolId := paletteToolId if not paletteToolId.is_empty() else toolId
 	return {
@@ -132,5 +133,6 @@ static func makeInk(
 		"color": color,
 		"icon": getInkIcon(toolId),
 		"isExpandable": isExpandable,
+		"isConfigurable": isConfigurable,
 		"defaultIsOn": defaultIsOn,
 	}

@@ -8,6 +8,7 @@ const VariantIndicatorColor := Color("b4c1d3")
 
 var InkIcon: TextureRect
 var IsExpandable := false
+var IsConfigurable := false
 var VariantIndicator: Control
 
 func configure(ink: Dictionary) -> void:
@@ -17,6 +18,7 @@ func configure(ink: Dictionary) -> void:
 	tooltip_text = String(ink.get("title", ""))
 	expand_icon = false
 	IsExpandable = bool(ink.get("isExpandable", false))
+	IsConfigurable = bool(ink.get("isConfigurable", false))
 	var iconRect := TextureRect.new()
 	iconRect.name = "InkIcon"
 	iconRect.mouse_filter = Control.MOUSE_FILTER_IGNORE
@@ -27,7 +29,7 @@ func configure(ink: Dictionary) -> void:
 	iconRect.texture = ink.get("icon") as Texture2D
 	add_child(iconRect)
 	InkIcon = iconRect
-	if IsExpandable:
+	if IsExpandable or IsConfigurable:
 		VariantIndicator = makeVariantIndicator()
 		add_child(VariantIndicator)
 	var inkColor: Color = ink.get("color", Color.WHITE)

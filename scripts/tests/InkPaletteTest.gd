@@ -10,7 +10,7 @@ func run(context) -> void:
 	var circuitEditorDock: Control = context.getDockForSide(main, "left")
 	var inkButtons: Dictionary = circuitEditorDock.get("InkButtons")
 	assert(inkButtons.size() == 19)
-	assert(circuitEditorDock.find_children("VariantIndicator", "Control", true, false).size() == 2)
+	assert(circuitEditorDock.find_children("VariantIndicator", "Control", true, false).size() == 3)
 	var toolRegistry: Dictionary = board.get("ToolRegistry")
 	assert(toolRegistry.size() == 29)
 	for toolId in ["cross", "tunnel", "mesh", "bus", "busRed", "busGreen", "busYellow", "busCyan", "busMagenta", "read", "write", "trace", "traceRed", "traceGreen", "traceBlue", "traceCyan", "traceMagenta", "buffer", "and", "or", "xor", "not", "nand", "nor", "xnor", "latchOn", "latchOff", "clock", "led"]:
@@ -33,5 +33,6 @@ func run(context) -> void:
 	context.assertInkButton(inkButtons.get("or") as Button, InkRegistry.getInk("or"), true)
 	context.assertInkButton(inkButtons.get("bus") as Button, InkRegistry.getInk("bus"), false)
 	context.assertInkButton(inkButtons.get("trace") as Button, InkRegistry.getInk("trace"), false)
+	context.assertInkButton(inkButtons.get("clock") as Button, InkRegistry.getInk("clock"), false)
 	context.assertInkButton(inkButtons.get("read") as Button, InkRegistry.getInk("read"), false)
 	context.assertInkButton(inkButtons.get("write") as Button, InkRegistry.getInk("write"), false)

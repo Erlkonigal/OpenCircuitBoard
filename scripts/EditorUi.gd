@@ -49,6 +49,7 @@ const InkVariantMenuColumns := 3
 const InkVariantMenuButtonSize := Vector2i(28, 28)
 const InkVariantMenuSeparation := 4
 const InkVariantMenuPadding := 14
+const ClockSettingsMenuSize := Vector2i(146, 38)
 const LeftDockSide := "left"
 const RightDockSide := "right"
 
@@ -87,6 +88,10 @@ var InkVariantMenuGrid: GridContainer
 var InkVariantMenuDock: Control
 var InkVariantMenuPaletteToolId := ""
 var InkVariantButtons: Dictionary[String, Button] = {}
+var ClockSettingsMenu: PopupPanel
+var ClockHoldTicksControl: Button
+var ClockHoldTicksSuffix: Label
+var ClockSettingsMenuDock: Control
 var LastSelectedInkIdByPaletteToolId: Dictionary[String, String] = {}
 var DockWidth := 272.0
 var RightDockWidth := 272.0
@@ -111,6 +116,8 @@ var SimulationStepLength := SimulationStepLengthMinimum
 var LoopFrequency := 5.0
 var IsDraggingStepLength := false
 var StepLengthDragRemainder := 0.0
+var IsDraggingClockHoldTicks := false
+var ClockHoldTicksDragRemainder := 0.0
 
 func _ready() -> void:
 	Input.set_use_accumulated_input(false)
@@ -118,6 +125,7 @@ func _ready() -> void:
 	configureProjectDialogs()
 	Board.connect("clipboardChanged", updateClipboardHistory)
 	Board.connect("clipboardCopied", showClipboardDock)
+	Board.connect("clockHoldTicksChanged", refreshClockHoldTicksControl)
 	NewProjectButton.pressed.connect(createNewProject)
 	OpenProjectButton.pressed.connect(showOpenProjectDialog)
 	SaveProjectButton.pressed.connect(saveProject)
@@ -150,6 +158,7 @@ func _ready() -> void:
 		return
 	buildDockMenu()
 	buildInkVariantMenu()
+	buildClockSettingsMenu()
 	var initialLeftDockId := String(DockDefinitions[0].dockId)
 	activateDock(initialLeftDockId, LeftDockSide)
 	var initialRightDockId := getInitialRightDockId(initialLeftDockId)
@@ -293,6 +302,8 @@ func setDockForSide(definition: Dictionary, dockSide: String) -> void:
 	if previousDock:
 		if InkVariantMenuDock == previousDock:
 			hideInkVariantMenu()
+		if ClockSettingsMenuDock == previousDock:
+			hideClockSettingsMenu()
 		previousDock.free()
 	var dockScene := definition.scene as PackedScene
 	var nextDock := dockScene.instantiate() as Control
@@ -318,6 +329,8 @@ func connectDockSignals(dock: Control, dockSide: String) -> void:
 		dock.connect("inkSelected", selectInk)
 	if dock.has_signal("inkVariantMenuRequested"):
 		dock.connect("inkVariantMenuRequested", showInkVariantMenu.bind(dock))
+	if dock.has_signal("clockSettingsMenuRequested"):
+		dock.connect("clockSettingsMenuRequested", showClockSettingsMenu.bind(dock))
 	if dock.has_signal("eventRecorded"):
 		dock.connect("eventRecorded", recordEvent)
 	if dock.has_signal("clipboardItemSelected"):
@@ -408,6 +421,92 @@ func hideInkVariantMenu() -> void:
 		InkVariantMenu.hide()
 	InkVariantMenuDock = null
 	InkVariantMenuPaletteToolId = ""
+
+func buildClockSettingsMenu() -> void:
+	ClockSettingsMenu = PopupPanel.new()
+	ClockSettingsMenu.transparent_bg = true
+	ClockSettingsMenu.add_theme_stylebox_override("panel", makeMenuBox())
+	$Interface.add_child(ClockSettingsMenu)
+	var content := HBoxContainer.new()
+	content.name = "ClockSettingsMenuContent"
+	content.add_theme_constant_override("separation", 4)
+	ClockSettingsMenu.add_child(content)
+	var holdLabel := Label.new()
+	holdLabel.name = "ClockHoldTicksLabel"
+	holdLabel.text = "Hold"
+	holdLabel.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	holdLabel.add_theme_color_override("font_color", Color("b4c1d3"))
+	content.add_child(holdLabel)
+	ClockHoldTicksControl = Button.new()
+	ClockHoldTicksControl.name = "ClockHoldTicksControl"
+	ClockHoldTicksControl.custom_minimum_size = Vector2(42, 24)
+	ClockHoldTicksControl.gui_input.connect(handleClockHoldTicksInput)
+	content.add_child(ClockHoldTicksControl)
+	var ticksLabel := Label.new()
+	ticksLabel.name = "ClockHoldTicksSuffix"
+	ticksLabel.text = "ticks"
+	ticksLabel.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	ticksLabel.add_theme_color_override("font_color", Color("8d9db5"))
+	content.add_child(ticksLabel)
+	ClockHoldTicksSuffix = ticksLabel
+	ClockSettingsMenu.popup_hide.connect(func() -> void:
+		ClockSettingsMenuDock = null
+	)
+	configureClockHoldTicksControl()
+	refreshClockHoldTicksControl()
+
+func showClockSettingsMenu(anchorButton: Button, dock: Control) -> void:
+	if ClockSettingsMenu == null:
+		return
+	hideInkVariantMenu()
+	ClockSettingsMenuDock = dock
+	refreshClockHoldTicksControl()
+	var anchorRect := anchorButton.get_global_rect()
+	var popupPosition := Vector2i(anchorRect.position + Vector2(anchorRect.size.x + 4.0, 0.0))
+	var viewportSize := get_viewport_rect().size
+	if popupPosition.x + ClockSettingsMenuSize.x > int(viewportSize.x):
+		popupPosition.x = int(anchorRect.position.x) - ClockSettingsMenuSize.x - 4
+	if popupPosition.y + ClockSettingsMenuSize.y > int(viewportSize.y):
+		popupPosition.y = int(anchorRect.end.y) - ClockSettingsMenuSize.y
+	popupPosition.x = clampi(popupPosition.x, 0, maxi(0, int(viewportSize.x) - ClockSettingsMenuSize.x))
+	popupPosition.y = clampi(popupPosition.y, 0, maxi(0, int(viewportSize.y) - ClockSettingsMenuSize.y))
+	ClockSettingsMenu.popup(Rect2i(popupPosition, ClockSettingsMenuSize))
+
+func hideClockSettingsMenu() -> void:
+	if ClockSettingsMenu:
+		ClockSettingsMenu.hide()
+	ClockSettingsMenuDock = null
+
+func handleClockHoldTicksInput(event: InputEvent) -> void:
+	var mouseButton := event as InputEventMouseButton
+	if mouseButton and mouseButton.button_index == MOUSE_BUTTON_LEFT:
+		IsDraggingClockHoldTicks = mouseButton.pressed
+		ClockHoldTicksDragRemainder = 0.0
+		get_viewport().set_input_as_handled()
+		return
+	var mouseMotion := event as InputEventMouseMotion
+	if mouseMotion and IsDraggingClockHoldTicks:
+		ClockHoldTicksDragRemainder += mouseMotion.relative.x
+		var adjustment := 0
+		if ClockHoldTicksDragRemainder >= SimulationDragPixelsPerStep:
+			adjustment = floori(ClockHoldTicksDragRemainder / SimulationDragPixelsPerStep)
+		elif ClockHoldTicksDragRemainder <= -SimulationDragPixelsPerStep:
+			adjustment = ceili(ClockHoldTicksDragRemainder / SimulationDragPixelsPerStep)
+		if adjustment != 0:
+			setClockHoldTicks(int(Board.call("getClockHoldTicks")) + adjustment)
+			ClockHoldTicksDragRemainder -= float(adjustment) * SimulationDragPixelsPerStep
+		get_viewport().set_input_as_handled()
+
+func setClockHoldTicks(requestedHoldTicks: int) -> void:
+	Board.call("setClockHoldTicks", requestedHoldTicks)
+	refreshClockHoldTicksControl()
+
+func refreshClockHoldTicksControl(_holdTicks := 0) -> void:
+	var holdTicks := int(Board.call("getClockHoldTicks"))
+	if ClockHoldTicksControl:
+		ClockHoldTicksControl.text = str(holdTicks)
+	if ClockHoldTicksSuffix:
+		ClockHoldTicksSuffix.text = "tick" if holdTicks == 1 else "ticks"
 
 func refreshInkVariantButtons() -> void:
 	if InkVariantMenuDock == null:
@@ -916,17 +1015,25 @@ func configureSimulationModeButton() -> void:
 	SimulationModeButton.add_theme_stylebox_override("hover_pressed", makeCommandBox(hoverColor.darkened(0.08)))
 
 func configureStepLengthControl() -> void:
-	StepLengthControl.alignment = HORIZONTAL_ALIGNMENT_CENTER
-	StepLengthControl.add_theme_font_size_override("font_size", TopBarFontSize)
-	StepLengthControl.add_theme_color_override("font_color", Color("9aa8bf"))
-	StepLengthControl.add_theme_color_override("font_hover_color", Color("e1e9f6"))
-	StepLengthControl.add_theme_color_override("font_pressed_color", Color("f2c94c"))
-	StepLengthControl.add_theme_color_override("font_disabled_color", Color("46546b"))
-	StepLengthControl.add_theme_stylebox_override("normal", makeStepLengthBox(Color("2a3548")))
-	StepLengthControl.add_theme_stylebox_override("hover", makeStepLengthBox(Color("35435a")))
-	StepLengthControl.add_theme_stylebox_override("pressed", makeStepLengthBox(Color("202b3b")))
-	StepLengthControl.add_theme_stylebox_override("disabled", makeStepLengthBox(Color("202a38")))
-	StepLengthControl.mouse_default_cursor_shape = Control.CURSOR_HSIZE
+	configureTickCountControl(StepLengthControl)
+
+func configureClockHoldTicksControl() -> void:
+	if ClockHoldTicksControl:
+		configureTickCountControl(ClockHoldTicksControl)
+		ClockHoldTicksControl.tooltip_text = "Drag to change clock hold ticks"
+
+func configureTickCountControl(control: Button) -> void:
+	control.alignment = HORIZONTAL_ALIGNMENT_CENTER
+	control.add_theme_font_size_override("font_size", TopBarFontSize)
+	control.add_theme_color_override("font_color", Color("9aa8bf"))
+	control.add_theme_color_override("font_hover_color", Color("e1e9f6"))
+	control.add_theme_color_override("font_pressed_color", Color("f2c94c"))
+	control.add_theme_color_override("font_disabled_color", Color("46546b"))
+	control.add_theme_stylebox_override("normal", makeStepLengthBox(Color("2a3548")))
+	control.add_theme_stylebox_override("hover", makeStepLengthBox(Color("35435a")))
+	control.add_theme_stylebox_override("pressed", makeStepLengthBox(Color("202b3b")))
+	control.add_theme_stylebox_override("disabled", makeStepLengthBox(Color("202a38")))
+	control.mouse_default_cursor_shape = Control.CURSOR_HSIZE
 
 func configureLoopFrequencySlider() -> void:
 	var sliderBox := StyleBoxFlat.new()

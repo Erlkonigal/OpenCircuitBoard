@@ -6,6 +6,7 @@ const BehaviorTestEntries := [
 	{"id": "inkPalette", "path": "res://scripts/tests/InkPaletteTest.gd"},
 	{"id": "traceVariant", "path": "res://scripts/tests/TraceVariantTest.gd"},
 	{"id": "busVariant", "path": "res://scripts/tests/BusVariantTest.gd"},
+	{"id": "clockSettings", "path": "res://scripts/tests/ClockSettingsTest.gd"},
 	{"id": "strokeHistory", "path": "res://scripts/tests/StrokeHistoryTest.gd"},
 	{"id": "simulationState", "path": "res://scripts/tests/SimulationStateTest.gd"},
 	{"id": "selectionMarquee", "path": "res://scripts/tests/SelectionMarqueeTest.gd"},
@@ -46,6 +47,7 @@ const CaptureTestEntries := [
 	{"id": "dualDockCapture", "path": "res://scripts/tests/DualDockCaptureTest.gd", "legacyArgs": ["--captureDualDock"], "interfaceOutputPath": "user://dualDockCapture.png"},
 	{"id": "traceColorMenu", "path": "res://scripts/tests/TraceColorMenuCaptureTest.gd", "legacyArgs": ["--captureTraceColorMenu"], "interfaceOutputPath": "user://traceColorMenuCapture.png"},
 	{"id": "busColorMenu", "path": "res://scripts/tests/BusColorMenuCaptureTest.gd", "legacyArgs": ["--captureBusColorMenu"], "interfaceOutputPath": "user://busColorMenuCapture.png"},
+	{"id": "clockSettingsMenu", "path": "res://scripts/tests/ClockSettingsMenuCaptureTest.gd", "legacyArgs": [], "interfaceOutputPath": "user://clockSettingsMenuCapture.png"},
 ]
 
 static func getDefaultCaptureEntry() -> Dictionary:
