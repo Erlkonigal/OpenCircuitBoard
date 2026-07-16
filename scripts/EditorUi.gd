@@ -826,6 +826,7 @@ func configureTopBar() -> void:
 			configureTopBarButton(topBarButton)
 	($Interface/TopBar/RowSeparator as ColorRect).color = TopBarSeparatorColor
 	($Interface/TopBar/Content/SidebarSeparator as ColorRect).color = TopBarSeparatorColor
+	($Interface/TopBar/Content/RightSidebarSeparator as ColorRect).color = TopBarSeparatorColor
 	configureStepLengthControl()
 	configureLoopFrequencySlider()
 	SimulationStatus.add_theme_font_size_override("font_size", TopBarFontSize)

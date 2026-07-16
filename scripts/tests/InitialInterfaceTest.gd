@@ -37,6 +37,8 @@ func run(context) -> void:
 	var stepLengthControl := topBarContent.get_node("StepLengthControl") as Button
 	var loopFrequencySlider := topBarContent.get_node("LoopFrequencySlider") as HSlider
 	var simulationStatus := topBarContent.get_node("SimulationStatus") as Label
+	var rightSidebarSeparator := topBarContent.get_node("RightSidebarSeparator") as ColorRect
+	var rightSidebarToggle := topBarContent.get_node("RightSidebarToggle") as Button
 	for topBarButton in [
 		topBarContent.get_node("LeftSidebarToggle") as Button,
 		topBarContent.get_node("RightSidebarToggle") as Button,
@@ -54,6 +56,11 @@ func run(context) -> void:
 	assert(stepLengthControl.text == "1")
 	assert(is_equal_approx(loopFrequencySlider.value, 5.0))
 	assert(not simulationStatus.visible)
+	assert(topBarContent.get_child(topBarContent.get_child_count() - 2) == rightSidebarSeparator)
+	assert(topBarContent.get_child(topBarContent.get_child_count() - 1) == rightSidebarToggle)
+	assert(is_equal_approx(rightSidebarSeparator.size.x, 1.0))
+	assert(rightSidebarSeparator.color.is_equal_approx(Color("263346")))
+	assert(is_equal_approx(rightSidebarToggle.get_global_rect().end.x, topBarContent.get_global_rect().end.x))
 
 	var dockResizeHandle := main.get_node("Interface/DockResizeHandle") as Control
 	var rightDockResizeHandle := main.get_node("Interface/RightDockResizeHandle") as Control

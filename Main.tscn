@@ -205,14 +205,6 @@ custom_minimum_size = Vector2(1, 22)
 size_flags_vertical = 4
 mouse_filter = 2
 
-[node name="RightSidebarToggle" type="Button" parent="Interface/TopBar/Content"]
-layout_mode = 2
-custom_minimum_size = Vector2(24, 24)
-size_flags_vertical = 4
-toggle_mode = true
-button_pressed = true
-tooltip_text = "CloseRightSidebar"
-
 [node name="SimulationModeButton" type="Button" parent="Interface/TopBar/Content"]
 layout_mode = 2
 custom_minimum_size = Vector2(108, 24)
@@ -265,6 +257,20 @@ vertical_alignment = 1
 [node name="SimulationSpacer" type="Control" parent="Interface/TopBar/Content"]
 layout_mode = 2
 size_flags_horizontal = 3
+
+[node name="RightSidebarSeparator" type="ColorRect" parent="Interface/TopBar/Content"]
+layout_mode = 2
+custom_minimum_size = Vector2(1, 22)
+size_flags_vertical = 4
+mouse_filter = 2
+
+[node name="RightSidebarToggle" type="Button" parent="Interface/TopBar/Content"]
+layout_mode = 2
+custom_minimum_size = Vector2(24, 24)
+size_flags_vertical = 4
+toggle_mode = true
+button_pressed = true
+tooltip_text = "CloseRightSidebar"
 
 [node name="DockHost" type="Control" parent="Interface"]
 layout_mode = 3
