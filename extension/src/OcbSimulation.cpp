@@ -11,6 +11,7 @@ void OcbSimulation::_bind_methods() {
 			godot::D_METHOD("compileGrid", "kinds", "initialStates", "clockHoldTicks", "meshIds", "width", "height"),
 			&OcbSimulation::compileGrid);
 	ClassDB::bind_method(godot::D_METHOD("advanceTick"), &OcbSimulation::advanceTick);
+	ClassDB::bind_method(godot::D_METHOD("advanceTicks", "tickCount"), &OcbSimulation::advanceTicks);
 	ClassDB::bind_method(godot::D_METHOD("getStates"), &OcbSimulation::getStates);
 	ClassDB::bind_method(godot::D_METHOD("toggleLatch", "cellIndex"), &OcbSimulation::toggleLatch);
 	ClassDB::bind_method(godot::D_METHOD("reset"), &OcbSimulation::reset);
@@ -63,6 +64,10 @@ godot::Dictionary OcbSimulation::compileGrid(
 
 godot::PackedInt32Array OcbSimulation::advanceTick() {
 	return makePackedInt32Array(core_.advanceTick());
+}
+
+godot::PackedInt32Array OcbSimulation::advanceTicks(int32_t tickCount) {
+	return makePackedInt32Array(core_.advanceTicks(tickCount));
 }
 
 godot::PackedInt32Array OcbSimulation::getStates() const {

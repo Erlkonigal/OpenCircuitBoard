@@ -68,6 +68,42 @@ void testReadWritePipeline() {
 	expect(core.getStates()[4] == 1, "Buffer updates after one logical tick from the settled Write input");
 }
 
+void testBatchAdvanceMatchesSingleTicks() {
+	CompileInput input = makeInput(5, 1);
+	setKind(input, 0, 0, ToolKind::Clock);
+	setKind(input, 1, 0, ToolKind::Read);
+	setKind(input, 2, 0, ToolKind::Trace);
+	setKind(input, 3, 0, ToolKind::Write);
+	setKind(input, 4, 0, ToolKind::Buffer);
+	SimulationCore singleTickCore;
+	SimulationCore batchCore;
+	CompileError error;
+	expect(singleTickCore.compile(input, error), "single-tick comparison circuit compiles");
+	expect(batchCore.compile(input, error), "batch comparison circuit compiles");
+	const std::vector<int32_t> initialStates = batchCore.getStates();
+
+	for (int32_t tick = 0; tick < 3; ++tick) {
+		singleTickCore.advanceTick();
+	}
+	const std::vector<int32_t> batchChanges = batchCore.advanceTicks(3);
+	const std::vector<int32_t> batchStates = batchCore.getStates();
+	expect(batchStates == singleTickCore.getStates(), "batch advance reaches the same state as repeated single ticks");
+
+	std::vector<int32_t> expectedChanges;
+	for (int32_t cell = 0; cell < static_cast<int32_t>(batchStates.size()); ++cell) {
+		if (initialStates[cell] != batchStates[cell]) {
+			expectedChanges.push_back(cell);
+			expectedChanges.push_back(batchStates[cell]);
+		}
+	}
+	expect(batchChanges == expectedChanges, "batch advance reports only the final delta");
+
+	const std::vector<int32_t> statesBeforeNoOp = batchCore.getStates();
+	expect(batchCore.advanceTicks(0).empty(), "zero-length batch returns no delta");
+	expect(batchCore.advanceTicks(-1).empty(), "negative-length batch returns no delta");
+	expect(batchCore.getStates() == statesBeforeNoOp, "non-positive batch does not advance state");
+}
+
 void testReadWriteZeroDelayPeerPorts() {
 	CompileInput input = makeInput(8, 1);
 	setKind(input, 0, 0, ToolKind::Clock);
@@ -473,6 +509,7 @@ void testSnapshotRestore() {
 
 int main() {
 	testReadWritePipeline();
+	testBatchAdvanceMatchesSingleTicks();
 	testReadWriteZeroDelayPeerPorts();
 	testWriteAcceptsReadInput();
 	testCrossIsolation();

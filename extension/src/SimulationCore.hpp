@@ -56,6 +56,7 @@ class SimulationCore {
 public:
 	bool compile(const CompileInput &input, CompileError &error);
 	std::vector<int32_t> advanceTick();
+	std::vector<int32_t> advanceTicks(int32_t tickCount);
 	std::vector<int32_t> getStates() const;
 	bool toggleLatch(int32_t cellIndex, std::vector<int32_t> &changes, std::string &errorReason);
 	std::vector<int32_t> reset();
@@ -98,6 +99,7 @@ private:
 
 	uint8_t evaluateComponent(int32_t componentId, const std::vector<uint8_t> &networkStates, uint8_t currentState) const;
 	void resolveConnectorNetworks(const std::vector<uint8_t> &componentStates, std::vector<uint8_t> &networkStates) const;
+	void advanceState();
 	void resetInternal();
 	std::vector<int32_t> makeStateDeltas(const std::vector<int32_t> &previousStates) const;
 	uint64_t makeTopologySignature() const;
@@ -126,6 +128,9 @@ private:
 	std::vector<uint8_t> componentStates_;
 	std::vector<uint8_t> networkStates_;
 	std::vector<int32_t> clockPhases_;
+	std::vector<uint8_t> nextComponentStates_;
+	std::vector<uint8_t> nextNetworkStates_;
+	std::vector<int32_t> nextClockPhases_;
 };
 
 } // namespace ocb

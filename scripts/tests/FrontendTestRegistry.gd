@@ -28,6 +28,7 @@ const BehaviorTestEntries := [
 	{"id": "eventLogDock", "path": "res://scripts/tests/EventLogDockTest.gd"},
 	{"id": "clipboardDock", "path": "res://scripts/tests/ClipboardDockTest.gd"},
 	{"id": "simulationToolbar", "path": "res://scripts/tests/SimulationToolbarTest.gd"},
+	{"id": "loopFrequencyControl", "path": "res://scripts/tests/LoopFrequencyControlTest.gd"},
 	{"id": "projectDialogs", "path": "res://scripts/tests/ProjectDialogsTest.gd"},
 	{"id": "projectRoundTrip", "path": "res://scripts/tests/ProjectRoundTripTest.gd"},
 ]

@@ -39,10 +39,14 @@ const SimulationEditHoverColor := Color("fa4268")
 const SimulationStepColor := Color("f3b941")
 const SimulationStepLengthMinimum := 1
 const SimulationStepLengthMaximum := 16
-const SimulationFrequencyMinimum := 1.0
-const SimulationFrequencyMaximum := 20.0
+const SimulationFrequencyMinimumTps := 1.0
+const SimulationCapacityRiseSmoothing := 0.12
+const SimulationFrameWorkShare := 0.75
+const SimulationBatchTickCount := 256
+const SimulationFrequencyProbeBatchTickCount := 64
+const SimulationFrequencyProbeDurationUsec := 4_000
+const SimulationThroughputSampleIntervalUsec := 250_000
 const SimulationDragPixelsPerStep := 8.0
-const SimulationMaxCatchUpTicks := 8
 const DockMenuButtonSize := 28
 const DockMenuSeparation := 5
 const DockMenuPadding := 14
@@ -78,6 +82,7 @@ const RightDockSide := "right"
 @onready var NextTickButton: Button = $Interface/TopBar/Content/NextTickButton
 @onready var StepLengthControl: Button = $Interface/TopBar/Content/StepLengthControl
 @onready var LoopFrequencySlider: HSlider = $Interface/TopBar/Content/LoopFrequencySlider
+@onready var LoopFrequencyInput: LineEdit = $Interface/TopBar/Content/LoopFrequencyInput
 @onready var SimulationStatus: Label = $Interface/TopBar/Content/SimulationStatus
 @onready var DockHost: Control = $Interface/DockHost
 @onready var DockResizeHandle: ColorRect = $Interface/DockResizeHandle
@@ -127,7 +132,13 @@ var SimulationTick := 0
 var SimulationTimeline: Array = []
 var SimulationAccumulator := 0.0
 var SimulationStepLength := SimulationStepLengthMinimum
-var LoopFrequency := 5.0
+var LoopFrequency := SimulationFrequencyMinimumTps
+var LoopFrequencyMaximumTps := SimulationFrequencyMinimumTps
+var IsLoopFrequencyFullSpeed := false
+var IsEditingLoopFrequency := false
+var SimulationTicksPerSecond := 0.0
+var SimulationThroughputSampleStartUsec := 0
+var SimulationThroughputSampleTicks := 0
 var IsDraggingStepLength := false
 var StepLengthDragRemainder := 0.0
 var SimulationBridgeInstance := SimulationBridge.new()
@@ -155,7 +166,11 @@ func _ready() -> void:
 	LoopStepButton.pressed.connect(toggleLoopStepMode)
 	NextTickButton.pressed.connect(showNextSimulationTick)
 	StepLengthControl.gui_input.connect(handleStepLengthInput)
-	LoopFrequencySlider.value_changed.connect(setLoopFrequency)
+	LoopFrequencySlider.value_changed.connect(setLoopFrequencyFromSlider)
+	LoopFrequencySlider.gui_input.connect(handleLoopFrequencySliderInput)
+	LoopFrequencyInput.gui_input.connect(handleLoopFrequencyInput)
+	LoopFrequencyInput.text_submitted.connect(submitLoopFrequencyInput)
+	LoopFrequencyInput.focus_exited.connect(commitLoopFrequencyInput)
 	BoardViewport.gui_input.connect(handleSimulationCanvasInput)
 	DockResizeHandle.gui_input.connect(handleDockResizeInput)
 	RightDockResizeHandle.gui_input.connect(handleRightDockResizeInput)
@@ -920,6 +935,9 @@ func toggleSimulationLatchAt(coordinates: Vector2i) -> bool:
 		failActiveSimulation(toggleResult)
 		return false
 	applySimulationUpdates(toggleResult.get("updates", []) as Array)
+	if IsLooping:
+		refreshSimulationControls()
+		return true
 	var snapshotResult := SimulationBridgeInstance.captureState()
 	if not bool(snapshotResult.get("ok", false)):
 		failActiveSimulation(snapshotResult)
@@ -947,11 +965,12 @@ func enterSimulation() -> void:
 	if not bool(statesResult.get("ok", false)):
 		abortSimulationStart(statesResult)
 		return
-	var snapshotResult := SimulationBridgeInstance.captureState()
-	if not bool(snapshotResult.get("ok", false)):
-		abortSimulationStart(snapshotResult)
-		return
 	applySimulationUpdates(statesResult.get("updates", []) as Array)
+	var capacityProbeResult := probeLoopFrequencyMaximum()
+	if not bool(capacityProbeResult.get("ok", false)):
+		abortSimulationStart(capacityProbeResult)
+		return
+	updateLoopFrequencyMaximum(float(capacityProbeResult.get("ticksPerSecond", SimulationFrequencyMinimumTps)))
 	hideInkVariantMenu()
 	hideClockSettingsMenu()
 	hideMeshSettingsMenu()
@@ -961,9 +980,31 @@ func enterSimulation() -> void:
 	setCircuitEditorInputEnabled(false)
 	IsLooping = true
 	SimulationTick = 0
-	SimulationTimeline = [snapshotResult.get("snapshot", PackedByteArray()) as PackedByteArray]
+	SimulationTimeline.clear()
 	SimulationAccumulator = 0.0
+	resetSimulationThroughput()
 	refreshSimulationControls()
+
+func probeLoopFrequencyMaximum() -> Dictionary:
+	var snapshotResult := SimulationBridgeInstance.captureState()
+	if not bool(snapshotResult.get("ok", false)):
+		return snapshotResult
+	var startedUsec := Time.get_ticks_usec()
+	var advancedTickCount := 0
+	while Time.get_ticks_usec() - startedUsec < SimulationFrequencyProbeDurationUsec:
+		var advanceResult := SimulationBridgeInstance.advanceTicks(SimulationFrequencyProbeBatchTickCount)
+		if not bool(advanceResult.get("ok", false)):
+			return advanceResult
+		advancedTickCount += SimulationFrequencyProbeBatchTickCount
+	var elapsedUsec := maxi(1, Time.get_ticks_usec() - startedUsec)
+	var restoreResult := SimulationBridgeInstance.restoreState(snapshotResult.get("snapshot", PackedByteArray()) as PackedByteArray)
+	if not bool(restoreResult.get("ok", false)):
+		return restoreResult
+	applySimulationUpdates(restoreResult.get("updates", []) as Array)
+	return {
+		"ok": true,
+		"ticksPerSecond": float(advancedTickCount) * 1_000_000.0 / float(elapsedUsec),
+	}
 
 func leaveSimulation() -> void:
 	if not IsSimulating:
@@ -973,6 +1014,7 @@ func leaveSimulation() -> void:
 	SimulationTick = 0
 	SimulationTimeline.clear()
 	SimulationAccumulator = 0.0
+	resetSimulationThroughput()
 	clearSimulationRuntimeStates()
 	SimulationBridgeInstance.release()
 	Board.call("setEditorInputEnabled", true)
@@ -982,9 +1024,26 @@ func leaveSimulation() -> void:
 func toggleLoopStepMode() -> void:
 	if not IsSimulating:
 		return
-	IsLooping = not IsLooping
+	if IsLooping:
+		if not initializeStepSimulationTimeline():
+			return
+		IsLooping = false
+	else:
+		IsLooping = true
+		SimulationTick = 0
+		SimulationTimeline.clear()
+		resetSimulationThroughput()
 	SimulationAccumulator = 0.0
 	refreshSimulationControls()
+
+func initializeStepSimulationTimeline() -> bool:
+	var snapshotResult := SimulationBridgeInstance.captureState()
+	if not bool(snapshotResult.get("ok", false)):
+		failActiveSimulation(snapshotResult)
+		return false
+	SimulationTick = 0
+	SimulationTimeline = [snapshotResult.get("snapshot", PackedByteArray()) as PackedByteArray]
+	return true
 
 func showPreviousSimulationTick() -> void:
 	if not IsSimulating or IsLooping or SimulationTick <= 0:
@@ -1002,27 +1061,59 @@ func updateSimulation(delta: float) -> void:
 	if not IsSimulating or not IsLooping:
 		return
 	SimulationAccumulator += delta
-	var tickPeriod := 1.0 / maxf(LoopFrequency, SimulationFrequencyMinimum)
-	var advancedTickCount := 0
-	while SimulationAccumulator >= tickPeriod and advancedTickCount < SimulationMaxCatchUpTicks:
-		SimulationAccumulator -= tickPeriod
-		if not advanceSimulationTimeline():
-			break
-		advancedTickCount += 1
+	var requestedTickCount := floori(SimulationAccumulator * LoopFrequency)
+	if requestedTickCount <= 0:
+		return
+	SimulationAccumulator -= float(requestedTickCount) / LoopFrequency
+	var advanceResult := advanceLoopingSimulation(requestedTickCount, delta)
+	if not bool(advanceResult.get("ok", false)):
+		return
+	var advancedTickCount := int(advanceResult.get("advancedTickCount", 0))
 	if advancedTickCount > 0:
-		refreshSimulationControls()
+		if IsLoopFrequencyFullSpeed or LoopFrequency >= LoopFrequencyMaximumTps * 0.8:
+			updateLoopFrequencyMaximum(float(advanceResult.get("ticksPerSecond", LoopFrequencyMaximumTps)))
+		recordSimulationThroughput(advancedTickCount)
+		refreshSimulationStatus()
 
-func advanceSimulationTimeline() -> bool:
-	return showSimulationTick(SimulationTick + 1)
+func advanceLoopingSimulation(requestedTickCount: int, delta: float) -> Dictionary:
+	var startedUsec := Time.get_ticks_usec()
+	var frameDeadlineUsec := startedUsec + getSimulationWorkBudgetUsec(delta)
+	var advancedTickCount := 0
+	while advancedTickCount < requestedTickCount and Time.get_ticks_usec() < frameDeadlineUsec:
+		var batchTickCount := mini(SimulationBatchTickCount, requestedTickCount - advancedTickCount)
+		var advanceResult := SimulationBridgeInstance.advanceTicks(batchTickCount)
+		if not bool(advanceResult.get("ok", false)):
+			failActiveSimulation(advanceResult)
+			return {"ok": false}
+		advancedTickCount += batchTickCount
+	if advancedTickCount <= 0:
+		return {"ok": true, "advancedTickCount": 0, "ticksPerSecond": 0.0}
+	var statesResult := SimulationBridgeInstance.getCurrentUpdates()
+	if not bool(statesResult.get("ok", false)):
+		failActiveSimulation(statesResult)
+		return {"ok": false}
+	applySimulationUpdates(statesResult.get("updates", []) as Array)
+	var elapsedUsec := maxi(1, Time.get_ticks_usec() - startedUsec)
+	return {
+		"ok": true,
+		"advancedTickCount": advancedTickCount,
+		"ticksPerSecond": float(advancedTickCount) * 1_000_000.0 / float(elapsedUsec),
+	}
+
+func getSimulationWorkBudgetUsec(delta: float) -> int:
+	var frameDuration := maxf(delta, 0.001)
+	return maxi(1, floori(frameDuration * 1_000_000.0 * SimulationFrameWorkShare))
 
 func showSimulationTick(targetTick: int) -> bool:
-	if targetTick < 0 or SimulationTimeline.is_empty():
+	if IsLooping or targetTick < 0 or SimulationTimeline.is_empty():
 		return false
 	if targetTick < SimulationTimeline.size():
 		return applySimulationSnapshot(targetTick)
 	return buildSimulationTimelineTo(targetTick)
 
 func buildSimulationTimelineTo(targetTick: int) -> bool:
+	if IsLooping:
+		return false
 	var lastTick := SimulationTimeline.size() - 1
 	if not applySimulationSnapshot(lastTick):
 		return false
@@ -1092,10 +1183,136 @@ func getSimulationFailureText(result: Dictionary) -> String:
 	return "Simulation error: %s" % reason
 
 func setLoopFrequency(requestedFrequency: float) -> void:
-	LoopFrequency = clampf(roundf(requestedFrequency), SimulationFrequencyMinimum, SimulationFrequencyMaximum)
-	LoopFrequencySlider.set_value_no_signal(LoopFrequency)
+	LoopFrequency = clampf(requestedFrequency, SimulationFrequencyMinimumTps, LoopFrequencyMaximumTps)
+	IsLoopFrequencyFullSpeed = is_equal_approx(LoopFrequency, LoopFrequencyMaximumTps)
+	LoopFrequencySlider.set_value_no_signal(getLoopFrequencySliderValue())
+	LoopFrequencyInput.text = getLoopFrequencyText()
+	resetSimulationThroughput()
 	if IsSimulating:
 		refreshSimulationControls()
+
+func setLoopFrequencyFromSlider(requestedValue: float) -> void:
+	var sliderValue := clampf(requestedValue, 0.0, LoopFrequencyMaximumTps)
+	var normalizedSliderValue := sliderValue / LoopFrequencyMaximumTps
+	var maximumLogarithm := getBase10Logarithm(LoopFrequencyMaximumTps)
+	LoopFrequency = pow(10.0, maximumLogarithm * normalizedSliderValue)
+	IsLoopFrequencyFullSpeed = is_equal_approx(sliderValue, LoopFrequencyMaximumTps)
+	LoopFrequencySlider.set_value_no_signal(sliderValue)
+	LoopFrequencyInput.text = getLoopFrequencyText()
+	resetSimulationThroughput()
+	if IsSimulating:
+		refreshSimulationControls()
+
+func getLoopFrequencySliderValue() -> float:
+	if LoopFrequencyMaximumTps <= SimulationFrequencyMinimumTps:
+		return 0.0
+	var maximumLogarithm := getBase10Logarithm(LoopFrequencyMaximumTps)
+	if maximumLogarithm <= 0.0:
+		return 0.0
+	var normalizedSliderValue := getBase10Logarithm(LoopFrequency) / maximumLogarithm
+	return clampf(normalizedSliderValue, 0.0, 1.0) * LoopFrequencyMaximumTps
+
+func getBase10Logarithm(value: float) -> float:
+	return log(maxf(SimulationFrequencyMinimumTps, value)) / log(10.0)
+
+func updateLoopFrequencyMaximum(measuredTicksPerSecond: float) -> void:
+	if measuredTicksPerSecond <= 0.0:
+		return
+	var measuredMaximum := maxf(SimulationFrequencyMinimumTps, measuredTicksPerSecond)
+	var nextMaximum := measuredMaximum
+	if LoopFrequencyMaximumTps > SimulationFrequencyMinimumTps and measuredMaximum > LoopFrequencyMaximumTps:
+		nextMaximum = lerpf(LoopFrequencyMaximumTps, measuredMaximum, SimulationCapacityRiseSmoothing)
+	setLoopFrequencyMaximumTps(nextMaximum)
+
+func setLoopFrequencyMaximumTps(requestedMaximum: float) -> void:
+	var nextMaximum := maxf(SimulationFrequencyMinimumTps, requestedMaximum)
+	if is_equal_approx(nextMaximum, LoopFrequencyMaximumTps):
+		return
+	LoopFrequencyMaximumTps = nextMaximum
+	LoopFrequencySlider.set_block_signals(true)
+	LoopFrequencySlider.max_value = LoopFrequencyMaximumTps
+	var didClampFrequency := false
+	if IsLoopFrequencyFullSpeed:
+		LoopFrequency = LoopFrequencyMaximumTps
+	elif LoopFrequency > LoopFrequencyMaximumTps:
+		LoopFrequency = LoopFrequencyMaximumTps
+		IsLoopFrequencyFullSpeed = true
+		didClampFrequency = true
+	LoopFrequencySlider.set_value_no_signal(getLoopFrequencySliderValue())
+	LoopFrequencySlider.set_block_signals(false)
+	if not IsEditingLoopFrequency:
+		LoopFrequencyInput.text = getLoopFrequencyText()
+	if didClampFrequency:
+		resetSimulationThroughput()
+
+func getLoopFrequencyMaximumTps() -> float:
+	return LoopFrequencyMaximumTps
+
+func getLoopFrequencyText() -> String:
+	return "%.3f" % LoopFrequency
+
+func handleLoopFrequencySliderInput(event: InputEvent) -> void:
+	if not IsSimulating or not IsLooping:
+		return
+	var mouseButton := event as InputEventMouseButton
+	if mouseButton == null or mouseButton.button_index != MOUSE_BUTTON_RIGHT or not mouseButton.pressed:
+		return
+	IsEditingLoopFrequency = true
+	LoopFrequencyInput.text = getLoopFrequencyText()
+	refreshSimulationControls()
+	LoopFrequencyInput.grab_focus()
+	LoopFrequencyInput.select_all()
+	get_viewport().set_input_as_handled()
+
+func handleLoopFrequencyInput(event: InputEvent) -> void:
+	if not IsEditingLoopFrequency:
+		return
+	var mouseButton := event as InputEventMouseButton
+	if mouseButton == null or mouseButton.button_index != MOUSE_BUTTON_RIGHT or not mouseButton.pressed:
+		return
+	commitLoopFrequencyInput()
+	IsEditingLoopFrequency = false
+	refreshSimulationControls()
+	get_viewport().set_input_as_handled()
+
+func submitLoopFrequencyInput(_submittedText: String) -> void:
+	commitLoopFrequencyInput()
+
+func commitLoopFrequencyInput() -> void:
+	var frequencyText := LoopFrequencyInput.text.strip_edges()
+	if frequencyText.is_empty() or not frequencyText.is_valid_float():
+		LoopFrequencyInput.text = getLoopFrequencyText()
+		return
+	setLoopFrequency(frequencyText.to_float())
+
+func resetSimulationThroughput() -> void:
+	SimulationTicksPerSecond = LoopFrequency
+	SimulationThroughputSampleStartUsec = Time.get_ticks_usec()
+	SimulationThroughputSampleTicks = 0
+
+func recordSimulationThroughput(advancedTickCount: int) -> void:
+	if advancedTickCount <= 0:
+		return
+	var nowUsec := Time.get_ticks_usec()
+	if SimulationThroughputSampleStartUsec <= 0:
+		SimulationThroughputSampleStartUsec = nowUsec
+	SimulationThroughputSampleTicks += advancedTickCount
+	var elapsedUsec := nowUsec - SimulationThroughputSampleStartUsec
+	if elapsedUsec <= 0:
+		return
+	if IsLoopFrequencyFullSpeed or elapsedUsec >= SimulationThroughputSampleIntervalUsec:
+		SimulationTicksPerSecond = float(SimulationThroughputSampleTicks) * 1_000_000.0 / float(elapsedUsec)
+	if elapsedUsec >= SimulationThroughputSampleIntervalUsec:
+		SimulationThroughputSampleStartUsec = nowUsec
+		SimulationThroughputSampleTicks = 0
+
+func getSimulationThroughputText() -> String:
+	var ticksPerSecond := maxf(0.0, SimulationTicksPerSecond)
+	if ticksPerSecond >= 999_950.0:
+		return "%.1fM TPS" % (ticksPerSecond / 1_000_000.0)
+	if ticksPerSecond >= 999.95:
+		return "%.1fK TPS" % (ticksPerSecond / 1_000.0)
+	return "%.1f TPS" % ticksPerSecond
 
 func handleStepLengthInput(event: InputEvent) -> void:
 	if StepLengthControl.disabled:
@@ -1126,6 +1343,8 @@ func setSimulationStepLength(requestedStepLength: int) -> void:
 func refreshSimulationControls() -> void:
 	var canEditStepLength := IsSimulating and not IsLooping
 	var canEditLoopFrequency := IsSimulating and IsLooping
+	if not canEditLoopFrequency:
+		IsEditingLoopFrequency = false
 	SimulationModeButton.text = "Edit" if IsSimulating else "Simulate"
 	SimulationModeButton.tooltip_text = "Exit simulation" if IsSimulating else "Enter simulation"
 	configureSimulationModeButton()
@@ -1133,16 +1352,26 @@ func refreshSimulationControls() -> void:
 	LoopStepButton.disabled = not IsSimulating
 	NextTickButton.disabled = not IsSimulating or IsLooping
 	StepLengthControl.disabled = not canEditStepLength
+	LoopFrequencySlider.visible = not IsEditingLoopFrequency
+	LoopFrequencyInput.visible = IsEditingLoopFrequency
 	LoopFrequencySlider.mouse_filter = Control.MOUSE_FILTER_STOP if canEditLoopFrequency else Control.MOUSE_FILTER_IGNORE
 	LoopFrequencySlider.focus_mode = Control.FOCUS_ALL if canEditLoopFrequency else Control.FOCUS_NONE
 	LoopFrequencySlider.modulate = Color.WHITE if canEditLoopFrequency else Color(1.0, 1.0, 1.0, 0.38)
+	LoopFrequencyInput.mouse_filter = Control.MOUSE_FILTER_STOP if canEditLoopFrequency else Control.MOUSE_FILTER_IGNORE
+	LoopFrequencyInput.focus_mode = Control.FOCUS_ALL if canEditLoopFrequency else Control.FOCUS_NONE
+	LoopFrequencyInput.editable = canEditLoopFrequency
+	LoopFrequencyInput.modulate = Color.WHITE if canEditLoopFrequency else Color(1.0, 1.0, 1.0, 0.38)
 	LoopStepButton.tooltip_text = "Switch to step mode" if IsLooping else "Switch to loop mode"
 	LoopStepButton.add_theme_color_override("icon_normal_color", Color("e2eaf7") if IsLooping else SimulationStepColor)
 	LoopStepButton.add_theme_color_override("icon_hover_color", Color.WHITE if IsLooping else Color("ffd878"))
-	SimulationStatus.visible = IsSimulating
-	if IsSimulating:
-		SimulationStatus.text = "~%d TPS" % roundi(LoopFrequency) if IsLooping else "Step Mode"
+	refreshSimulationStatus()
 	setSimulationStepLength(SimulationStepLength)
+
+func refreshSimulationStatus() -> void:
+	SimulationStatus.visible = IsSimulating
+	if not IsSimulating:
+		return
+	SimulationStatus.text = getSimulationThroughputText() if IsLooping else "Step Mode"
 
 func setLeftSidebarOpen(isOpen: bool, animate := true) -> void:
 	LeftSidebarOpen = isOpen
@@ -1272,6 +1501,7 @@ func configureTopBar() -> void:
 	NextTickButton.tooltip_text = "Next tick"
 	StepLengthControl.tooltip_text = "Drag to change step length"
 	LoopFrequencySlider.tooltip_text = "Drag to change loop frequency"
+	LoopFrequencyInput.tooltip_text = "Enter loop frequency in TPS"
 	for child in ProjectContent.get_children():
 		var projectButton := child as Button
 		if projectButton:
@@ -1288,6 +1518,7 @@ func configureTopBar() -> void:
 	refreshProjectTitle()
 	configureStepLengthControl()
 	configureLoopFrequencySlider()
+	configureLoopFrequencyInput()
 	SimulationStatus.add_theme_font_size_override("font_size", TopBarFontSize)
 	SimulationStatus.add_theme_color_override("font_color", Color("7f8ca2"))
 	refreshSimulationControls()
@@ -1363,6 +1594,18 @@ func configureLoopFrequencySlider() -> void:
 	LoopFrequencySlider.add_theme_icon_override("grabber", makeSolidTexture(Vector2i(6, 16), Color("f4f6fa")))
 	LoopFrequencySlider.add_theme_icon_override("grabber_highlight", makeSolidTexture(Vector2i(6, 16), Color.WHITE))
 	LoopFrequencySlider.add_theme_icon_override("grabber_disabled", makeSolidTexture(Vector2i(6, 16), Color("7d899e")))
+
+func configureLoopFrequencyInput() -> void:
+	LoopFrequencyInput.alignment = HORIZONTAL_ALIGNMENT_CENTER
+	LoopFrequencyInput.context_menu_enabled = false
+	LoopFrequencyInput.select_all_on_focus = true
+	LoopFrequencyInput.add_theme_font_size_override("font_size", TopBarFontSize)
+	LoopFrequencyInput.add_theme_color_override("font_color", Color("d8e1ef"))
+	LoopFrequencyInput.add_theme_color_override("font_selected_color", Color.WHITE)
+	LoopFrequencyInput.add_theme_color_override("caret_color", Color("f4f6fa"))
+	LoopFrequencyInput.add_theme_stylebox_override("normal", makeStepLengthBox(Color("2a3548")))
+	LoopFrequencyInput.add_theme_stylebox_override("focus", makeStepLengthBox(Color("35435a")))
+	LoopFrequencyInput.add_theme_stylebox_override("read_only", makeStepLengthBox(Color("202a38")))
 
 func makeCommandBox(color: Color) -> StyleBoxFlat:
 	var box := StyleBoxFlat.new()

@@ -34,12 +34,21 @@ func runNativeSimulationTest() -> void:
 		push_error("OcbSimulationSnapshotMissing")
 		quit(1)
 		return
-	for _tick in 4:
-		var changes: Variant = simulation.call("advanceTick")
-		if not (changes is PackedInt32Array):
-			push_error("OcbSimulationAdvanceInvalid")
-			quit(1)
-			return
+	var changes: Variant = simulation.call("advanceTick")
+	if not (changes is PackedInt32Array):
+		push_error("OcbSimulationAdvanceInvalid")
+		quit(1)
+		return
+	var batchChanges: Variant = simulation.call("advanceTicks", 3)
+	if not (batchChanges is PackedInt32Array):
+		push_error("OcbSimulationBatchAdvanceInvalid")
+		quit(1)
+		return
+	var noOpBatchChanges: Variant = simulation.call("advanceTicks", 0)
+	if not (noOpBatchChanges is PackedInt32Array) or not (noOpBatchChanges as PackedInt32Array).is_empty():
+		push_error("OcbSimulationNoOpBatchAdvanceInvalid")
+		quit(1)
+		return
 	var restoreResult: Dictionary = simulation.call("restoreState", snapshot)
 	if not bool(restoreResult.get("ok", false)):
 		push_error("OcbSimulationRestoreFailed:%s" % String(restoreResult.get("errorReason", "Unknown")))

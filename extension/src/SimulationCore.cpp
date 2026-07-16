@@ -206,6 +206,9 @@ void SimulationCore::clear() {
 	componentStates_.clear();
 	networkStates_.clear();
 	clockPhases_.clear();
+	nextComponentStates_.clear();
+	nextNetworkStates_.clear();
+	nextClockPhases_.clear();
 }
 
 bool SimulationCore::compile(const CompileInput &input, CompileError &error) {
@@ -723,34 +726,43 @@ bool SimulationCore::toggleLatch(int32_t cellIndex, std::vector<int32_t> &change
 	return true;
 }
 
-std::vector<int32_t> SimulationCore::advanceTick() {
-	if (!compiled_) {
-		return {};
-	}
-	const std::vector<int32_t> previousStates = getStates();
-	std::vector<uint8_t> nextComponentStates = componentStates_;
-	std::vector<int32_t> nextClockPhases = clockPhases_;
+void SimulationCore::advanceState() {
+	nextComponentStates_ = componentStates_;
+	nextClockPhases_ = clockPhases_;
 	for (int32_t component = 0; component < static_cast<int32_t>(components_.size()); ++component) {
 		const Component &definition = components_[component];
 		if (definition.kind == ToolKind::Clock) {
 			int32_t phase = clockPhases_[component] + 1;
 			if (phase >= definition.clockHoldTicks) {
 				phase = 0;
-				nextComponentStates[component] = componentStates_[component] == 0 ? 1 : 0;
+				nextComponentStates_[component] = componentStates_[component] == 0 ? 1 : 0;
 			}
-			nextClockPhases[component] = phase;
+			nextClockPhases_[component] = phase;
 		} else {
-			nextComponentStates[component] = evaluateComponent(component, networkStates_, componentStates_[component]);
+			nextComponentStates_[component] = evaluateComponent(component, networkStates_, componentStates_[component]);
 		}
 	}
 
-	std::vector<uint8_t> nextNetworkStates;
-	resolveConnectorNetworks(nextComponentStates, nextNetworkStates);
+	resolveConnectorNetworks(nextComponentStates_, nextNetworkStates_);
 
-	componentStates_ = std::move(nextComponentStates);
-	networkStates_ = std::move(nextNetworkStates);
-	clockPhases_ = std::move(nextClockPhases);
+	componentStates_.swap(nextComponentStates_);
+	networkStates_.swap(nextNetworkStates_);
+	clockPhases_.swap(nextClockPhases_);
 	++tickCount_;
+}
+
+std::vector<int32_t> SimulationCore::advanceTick() {
+	return advanceTicks(1);
+}
+
+std::vector<int32_t> SimulationCore::advanceTicks(int32_t tickCount) {
+	if (!compiled_ || tickCount <= 0) {
+		return {};
+	}
+	const std::vector<int32_t> previousStates = getStates();
+	for (int32_t tick = 0; tick < tickCount; ++tick) {
+		advanceState();
+	}
 	return makeStateDeltas(previousStates);
 }
 

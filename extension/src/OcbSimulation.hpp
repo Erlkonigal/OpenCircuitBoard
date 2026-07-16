@@ -21,6 +21,7 @@ public:
 			int32_t width,
 			int32_t height);
 	godot::PackedInt32Array advanceTick();
+	godot::PackedInt32Array advanceTicks(int32_t tickCount);
 	godot::PackedInt32Array getStates() const;
 	godot::Dictionary toggleLatch(int32_t cellIndex);
 	godot::PackedInt32Array reset();
