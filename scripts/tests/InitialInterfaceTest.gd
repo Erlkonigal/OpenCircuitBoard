@@ -8,6 +8,7 @@ func run(context) -> void:
 	var topBar := context.TopBar as Control
 	var projectContent := context.ProjectContent as Control
 	var topBarContent := context.TopBarContent as Control
+	var projectTitle := context.getNodeRef(NodePath("Interface/TopBar/ProjectTitle")) as Label
 	assert(context.getConfiguredViewportSize() == Vector2i(1280, 720))
 	assert(context.RootWindow.size == Vector2i(1280, 720))
 	assert(int(ProjectSettings.get_setting("display/window/size/min_width")) == 1280)
@@ -30,6 +31,9 @@ func run(context) -> void:
 
 	for projectButtonName in ["NewProjectButton", "OpenProjectButton", "SaveProjectButton", "SaveAsProjectButton", "RecentProjectsButton"]:
 		context.assertIconButton(projectContent.get_node(projectButtonName) as Button)
+	assert(projectTitle.text == "New Project - Open Circuit Board")
+	assert(projectTitle.clip_text)
+	assert(is_equal_approx(projectTitle.get_global_rect().get_center().x, topBar.get_global_rect().get_center().x))
 	var simulationModeButton := topBarContent.get_node("SimulationModeButton") as Button
 	var previousTickButton := topBarContent.get_node("PreviousTickButton") as Button
 	var loopStepButton := topBarContent.get_node("LoopStepButton") as Button

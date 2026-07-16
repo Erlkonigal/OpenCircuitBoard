@@ -169,6 +169,21 @@ tooltip_text = "RecentProjects"
 layout_mode = 2
 size_flags_horizontal = 3
 
+[node name="ProjectTitle" type="Label" parent="Interface/TopBar"]
+layout_mode = 1
+anchors_preset = 10
+anchor_right = 1.0
+offset_left = 176.0
+offset_top = 3.0
+offset_right = -176.0
+offset_bottom = 31.0
+grow_horizontal = 2
+mouse_filter = 2
+text = "New Project - Open Circuit Board"
+clip_text = true
+horizontal_alignment = 1
+vertical_alignment = 1
+
 [node name="RowSeparator" type="ColorRect" parent="Interface/TopBar"]
 layout_mode = 1
 anchors_preset = 10

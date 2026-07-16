@@ -20,6 +20,8 @@ const SidebarAnimationDuration := 0.18
 const TopBarButtonActiveIconColor := Color("f2c94c")
 const TopBarFontSize := 16
 const TopBarSeparatorColor := Color("263346")
+const ApplicationTitle := "Open Circuit Board"
+const NewProjectTitle := "New Project"
 const SimulationStartColor := Color("00c875")
 const SimulationStartHoverColor := Color("18dd8a")
 const SimulationEditColor := Color("ed3157")
@@ -50,6 +52,7 @@ const RightDockSide := "right"
 @onready var SaveProjectButton: Button = $Interface/TopBar/ProjectContent/SaveProjectButton
 @onready var SaveAsProjectButton: Button = $Interface/TopBar/ProjectContent/SaveAsProjectButton
 @onready var RecentProjectsButton: Button = $Interface/TopBar/ProjectContent/RecentProjectsButton
+@onready var ProjectTitle: Label = $Interface/TopBar/ProjectTitle
 @onready var LeftSidebarToggle: Button = $Interface/TopBar/Content/LeftSidebarToggle
 @onready var RightSidebarToggle: Button = $Interface/TopBar/Content/RightSidebarToggle
 @onready var SimulationModeButton: Button = $Interface/TopBar/Content/SimulationModeButton
@@ -447,6 +450,7 @@ func createNewProject() -> void:
 	leaveSimulation()
 	Board.call("clearProjectData")
 	ProjectManagerInstance.clearCurrentProject()
+	refreshProjectTitle()
 	recordEvent("Created new project")
 
 func showOpenProjectDialog() -> void:
@@ -479,7 +483,9 @@ func handleProjectFileSelected(projectPath: String) -> void:
 		if bool(result.get("ok", false)):
 			recordEvent("Saved project")
 	PendingProjectFileAction = ""
-	if not bool(result.get("ok", false)):
+	if bool(result.get("ok", false)):
+		refreshProjectTitle()
+	else:
 		showProjectNotice(getProjectErrorText(String(result.get("message", "ProjectOperationFailed"))))
 
 func showRecentProjectsMenu() -> void:
@@ -528,15 +534,22 @@ func openRecentProject(projectPath: String) -> void:
 	if RecentProjectsMenu:
 		RecentProjectsMenu.hide()
 	if bool(result.get("ok", false)):
+		refreshProjectTitle()
 		recordEvent("Opened project")
 		return
 	showProjectNotice(getProjectErrorText(String(result.get("message", "ProjectOperationFailed"))))
 
 func handleProjectResult(result: Dictionary, successText: String) -> void:
 	if bool(result.get("ok", false)):
+		refreshProjectTitle()
 		recordEvent(successText)
 		return
 	showProjectNotice(getProjectErrorText(String(result.get("message", "ProjectOperationFailed"))))
+
+func refreshProjectTitle() -> void:
+	var projectFilename := ProjectManagerInstance.CurrentProjectPath.get_file() if ProjectManagerInstance.hasCurrentProject() else NewProjectTitle
+	ProjectTitle.text = "%s - %s" % [projectFilename, ApplicationTitle]
+	ProjectTitle.tooltip_text = ProjectTitle.text
 
 func showProjectNotice(message: String) -> void:
 	ProjectNoticeDialog.dialog_text = message
@@ -827,6 +840,9 @@ func configureTopBar() -> void:
 	($Interface/TopBar/RowSeparator as ColorRect).color = TopBarSeparatorColor
 	($Interface/TopBar/Content/SidebarSeparator as ColorRect).color = TopBarSeparatorColor
 	($Interface/TopBar/Content/RightSidebarSeparator as ColorRect).color = TopBarSeparatorColor
+	ProjectTitle.add_theme_font_size_override("font_size", 14)
+	ProjectTitle.add_theme_color_override("font_color", Color("b4c1d3"))
+	refreshProjectTitle()
 	configureStepLengthControl()
 	configureLoopFrequencySlider()
 	SimulationStatus.add_theme_font_size_override("font_size", TopBarFontSize)

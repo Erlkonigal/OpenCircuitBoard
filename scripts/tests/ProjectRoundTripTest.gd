@@ -1,11 +1,12 @@
 extends RefCounted
 
-const ProjectManager := preload("res://scripts/ProjectManager.gd")
-
 func run(context) -> void:
 	await context.resetMain()
 	await context.waitFrames(1)
+	var main := context.MainSceneRoot as Control
 	var board := context.CircuitBoard as Node2D
+	var projectTitle := context.getNodeRef(NodePath("Interface/TopBar/ProjectTitle")) as Label
+	assert(projectTitle.text == "New Project - Open Circuit Board")
 	assert(board.call("placeTile", Vector2i(-3, 2), "xor"))
 	assert(board.call("placeTile", Vector2i(4, -1), "latchOff"))
 	assert(board.call("setTileState", Vector2i(4, -1), true))
@@ -17,16 +18,18 @@ func run(context) -> void:
 	var previousProject := FileAccess.get_file_as_bytes(projectPath) if hadProject else PackedByteArray()
 	var hadRecentProjects := FileAccess.file_exists(recentProjectsPath)
 	var previousRecentProjects := FileAccess.get_file_as_bytes(recentProjectsPath) if hadRecentProjects else PackedByteArray()
-	var projectManager := ProjectManager.new()
-	var saveResult: Dictionary = projectManager.saveProjectAs(board, projectPath)
-	assert(bool(saveResult.get("ok", false)))
-	assert(projectManager.hasCurrentProject())
+	main.set("PendingProjectFileAction", "save")
+	main.call("handleProjectFileSelected", projectPath)
+	assert(projectTitle.text == "frontendTestProject.ocb - Open Circuit Board")
 	board.call("clearProjectData")
 	assert((board.call("getSimulationTiles") as Array).is_empty())
-	var loadResult: Dictionary = projectManager.loadProject(board, projectPath)
-	assert(bool(loadResult.get("ok", false)))
+	main.set("PendingProjectFileAction", "open")
+	main.call("handleProjectFileSelected", projectPath)
+	assert(projectTitle.text == "frontendTestProject.ocb - Open Circuit Board")
 	var restoredProjectData := board.call("exportProjectData") as Dictionary
 	assert(JSON.stringify(restoredProjectData) == JSON.stringify(expectedProjectData))
+	main.call("createNewProject")
+	assert(projectTitle.text == "New Project - Open Circuit Board")
 	restoreFile(projectPath, hadProject, previousProject)
 	restoreFile(recentProjectsPath, hadRecentProjects, previousRecentProjects)
 
