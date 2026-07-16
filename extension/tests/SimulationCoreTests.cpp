@@ -304,37 +304,49 @@ void testReadWriteIgnoreUnrelatedNeighbors() {
 	expect(readCore.compile(readInput, error), "Read ignores unrelated adjacent components");
 	expectState(readCore, readInput, 2, 1, 1, "Read still drives a valid Trace output during reset");
 
-	CompileInput writeInput = makeInput(5, 2);
+	CompileInput writeInput = makeInput(4, 2);
 	setKind(writeInput, 0, 1, ToolKind::Latch);
 	setInitialState(writeInput, 0, 1, 1);
 	setKind(writeInput, 1, 1, ToolKind::Read);
-	setKind(writeInput, 2, 1, ToolKind::Trace);
-	setKind(writeInput, 3, 1, ToolKind::Write);
-	setKind(writeInput, 4, 1, ToolKind::Led);
-	setKind(writeInput, 3, 0, ToolKind::Clock);
+	setKind(writeInput, 2, 1, ToolKind::Write);
+	setKind(writeInput, 3, 1, ToolKind::Led);
+	setKind(writeInput, 1, 0, ToolKind::BusYellow);
+	setKind(writeInput, 2, 0, ToolKind::Clock);
 	SimulationCore writeCore;
-	expect(writeCore.compile(writeInput, error), "Write ignores unrelated adjacent components");
+	expect(writeCore.compile(writeInput, error), "direct Read/Write chain ignores unrelated adjacent components");
+	expectState(writeCore, writeInput, 1, 1, 1, "Read resolves directly from its source without a Trace");
+	expectState(writeCore, writeInput, 2, 1, 1, "Write resolves directly from its Read input without a Trace");
 	writeCore.advanceTick();
-	expectState(writeCore, writeInput, 4, 1, 1, "Write still drives a valid target after one logical tick");
+	expectState(writeCore, writeInput, 3, 1, 1, "direct Write still drives a valid target after one logical tick");
 }
 
 void testReadWriteRequireValidPorts() {
-	CompileInput readInput = makeInput(3, 1);
+	CompileInput directInput = makeInput(4, 1);
+	setKind(directInput, 0, 0, ToolKind::Latch);
+	setInitialState(directInput, 0, 0, 1);
+	setKind(directInput, 1, 0, ToolKind::Read);
+	setKind(directInput, 2, 0, ToolKind::Write);
+	setKind(directInput, 3, 0, ToolKind::Led);
+	SimulationCore directCore;
+	CompileError error;
+	expect(directCore.compile(directInput, error), "Latch-Read-Write-LED compiles without a literal Trace");
+	expectState(directCore, directInput, 1, 0, 1, "direct Read starts high from its Latch source");
+	expectState(directCore, directInput, 2, 0, 1, "direct Write starts high from its Read source");
+	expectState(directCore, directInput, 3, 0, 0, "LED keeps its logical tick delay");
+	directCore.advanceTick();
+	expectState(directCore, directInput, 3, 0, 1, "direct Write drives LED after one logical tick");
+
+	CompileInput readInput = makeInput(2, 1);
 	setKind(readInput, 0, 0, ToolKind::Latch);
 	setKind(readInput, 1, 0, ToolKind::Read);
-	setKind(readInput, 2, 0, ToolKind::BusYellow);
 	SimulationCore readCore;
-	CompileError error;
-	expect(!readCore.compile(readInput, error), "Read still requires a valid Trace output");
-	expect(error.errorReason == "read_requires_trace_output", "Read keeps its missing output diagnostic");
+	expect(!readCore.compile(readInput, error), "Read still requires an outgoing connection");
 
 	CompileInput writeInput = makeInput(3, 1);
-	setKind(writeInput, 0, 0, ToolKind::BusYellow);
 	setKind(writeInput, 1, 0, ToolKind::Write);
 	setKind(writeInput, 2, 0, ToolKind::Led);
 	SimulationCore writeCore;
-	expect(!writeCore.compile(writeInput, error), "Write still requires a valid Trace input");
-	expect(error.errorReason == "write_requires_one_trace_input", "Write keeps its missing input diagnostic");
+	expect(!writeCore.compile(writeInput, error), "Write still requires one incoming connection");
 
 	CompileInput writeWithoutTarget = makeInput(3, 1);
 	setKind(writeWithoutTarget, 0, 0, ToolKind::Trace);
@@ -353,8 +365,7 @@ void testReadWriteRequireValidPorts() {
 	setKind(writeWithTwoTraceSides, 1, 2, ToolKind::Trace);
 	setKind(writeWithTwoTraceSides, 2, 2, ToolKind::Trace);
 	SimulationCore writeWithTwoTraceSidesCore;
-	expect(!writeWithTwoTraceSidesCore.compile(writeWithTwoTraceSides, error), "Write rejects two physical Trace sides on one network");
-	expect(error.errorReason == "write_requires_one_trace_input", "Write preserves its physical Trace-side diagnostic");
+	expect(!writeWithTwoTraceSidesCore.compile(writeWithTwoTraceSides, error), "Write rejects two incoming Trace sides on one network");
 
 	CompileInput ambiguousRead = makeInput(3, 2);
 	setKind(ambiguousRead, 0, 0, ToolKind::Trace);

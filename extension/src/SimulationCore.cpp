@@ -449,6 +449,7 @@ bool SimulationCore::compile(const CompileInput &input, CompileError &error) {
 			std::vector<int32_t> sourceComponents;
 			std::vector<int32_t> sourceWriteCells;
 			std::vector<int32_t> outputNetworks;
+			bool hasDirectWriteOutput = false;
 			for (const std::array<int32_t, 2> &direction : directions) {
 				const int32_t neighbor = neighborAt(cell, direction[0], direction[1]);
 				if (neighbor < 0) {
@@ -458,9 +459,11 @@ bool SimulationCore::compile(const CompileInput &input, CompileError &error) {
 				if (isTrace(neighborKind)) {
 					appendUnique(outputNetworks, cellNetwork_[neighbor]);
 				} else if (neighborKind == ToolKind::Write) {
-					// A Trace-input Write can feed Read. A Write without Trace input consumes Read instead.
+					// A Trace-input Write feeds Read. A Write without Trace input consumes Read directly.
 					if (countTraceNeighbors(neighbor) == 1) {
 						appendUnique(sourceWriteCells, neighbor);
+					} else if (countTraceNeighbors(neighbor) == 0) {
+						hasDirectWriteOutput = true;
 					}
 				} else if (isReadSource(neighborKind)) {
 					appendUnique(sourceComponents, cellToComponent_[neighbor]);
@@ -469,8 +472,8 @@ bool SimulationCore::compile(const CompileInput &input, CompileError &error) {
 			if (sourceComponents.size() + sourceWriteCells.size() != 1) {
 				return fail(cell, "read_requires_one_source");
 			}
-			if (outputNetworks.empty()) {
-				return fail(cell, "read_requires_trace_output");
+			if (outputNetworks.empty() && !hasDirectWriteOutput) {
+				return fail(cell, "read_requires_output");
 			}
 			ReadBinding binding;
 			if (!sourceComponents.empty()) {
@@ -507,7 +510,7 @@ bool SimulationCore::compile(const CompileInput &input, CompileError &error) {
 			}
 		}
 		if (traceSides > 1 || (traceSides == 0 && inputReadCells.size() != 1)) {
-			return fail(cell, "write_requires_one_trace_input");
+			return fail(cell, "write_requires_one_input");
 		}
 		const bool hasReadTarget = traceSides == 1 && !targetReadCells.empty();
 		if (targetComponents.empty() && !hasReadTarget) {
@@ -532,7 +535,7 @@ bool SimulationCore::compile(const CompileInput &input, CompileError &error) {
 		if (binding.inputReadCell >= 0) {
 			const int32_t readBindingId = readBindingByCell_[binding.inputReadCell];
 			if (readBindingId < 0) {
-				return fail(binding.inputReadCell, "write_requires_one_trace_input");
+				return fail(binding.inputReadCell, "write_requires_one_input");
 			}
 			binding.inputNetwork = readBindings_[readBindingId].signalNetwork;
 		}
