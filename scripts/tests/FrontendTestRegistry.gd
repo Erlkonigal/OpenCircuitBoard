@@ -21,6 +21,7 @@ const BehaviorTestEntries := [
 	{"id": "eventLogDock", "path": "res://scripts/tests/EventLogDockTest.gd"},
 	{"id": "clipboardDock", "path": "res://scripts/tests/ClipboardDockTest.gd"},
 	{"id": "simulationToolbar", "path": "res://scripts/tests/SimulationToolbarTest.gd"},
+	{"id": "projectDialogs", "path": "res://scripts/tests/ProjectDialogsTest.gd"},
 	{"id": "projectRoundTrip", "path": "res://scripts/tests/ProjectRoundTripTest.gd"},
 ]
 
@@ -29,6 +30,8 @@ const CaptureTestEntries := [
 	{"id": "selector", "path": "res://scripts/tests/SelectorCaptureTest.gd", "legacyArgs": ["--captureSelector"]},
 	{"id": "boardEdge", "path": "res://scripts/tests/BoardEdgeCaptureTest.gd", "legacyArgs": ["--captureBoardEdge"]},
 	{"id": "interface", "path": "res://scripts/tests/InterfaceCaptureTest.gd", "legacyArgs": ["--captureInterface"], "interfaceOutputPath": "user://interfaceCapture.png"},
+	{"id": "projectOpenDialog", "path": "res://scripts/tests/ProjectOpenDialogCaptureTest.gd", "legacyArgs": [], "interfaceOutputPath": "user://projectOpenDialogCapture.png"},
+	{"id": "projectSaveDialog", "path": "res://scripts/tests/ProjectSaveDialogCaptureTest.gd", "legacyArgs": [], "interfaceOutputPath": "user://projectSaveDialogCapture.png"},
 	{"id": "simulationLoop", "path": "res://scripts/tests/SimulationLoopCaptureTest.gd", "legacyArgs": ["--captureSimulationLoop"], "interfaceOutputPath": "user://interfaceCapture.png"},
 	{"id": "simulationStep", "path": "res://scripts/tests/SimulationStepCaptureTest.gd", "legacyArgs": ["--captureSimulationStep"], "interfaceOutputPath": "user://interfaceCapture.png"},
 	{"id": "sidebar", "path": "res://scripts/tests/SidebarCaptureTest.gd", "legacyArgs": ["--captureSidebar"], "interfaceOutputPath": "user://sidebarCapture.png"},

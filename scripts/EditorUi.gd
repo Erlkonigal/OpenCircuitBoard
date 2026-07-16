@@ -22,6 +22,15 @@ const TopBarFontSize := 16
 const TopBarSeparatorColor := Color("263346")
 const ApplicationTitle := "Open Circuit Board"
 const NewProjectTitle := "New Project"
+const DialogBackgroundColor := Color("17212f")
+const DialogSurfaceColor := Color("202a38")
+const DialogInputColor := Color("111a26")
+const DialogBorderColor := Color("33445b")
+const DialogHoverColor := Color("35435a")
+const DialogSelectionColor := Color("354b66")
+const DialogTextColor := Color("d8e1ef")
+const DialogMutedTextColor := Color("8d9db5")
+const DialogActionColor := Color("00a967")
 const SimulationStartColor := Color("00c875")
 const SimulationStartHoverColor := Color("18dd8a")
 const SimulationEditColor := Color("ed3157")
@@ -437,14 +446,39 @@ func selectClipboardItem(index: int) -> void:
 	Board.call("selectClipboardItem", index)
 
 func configureProjectDialogs() -> void:
+	var projectDialogTheme := makeProjectDialogTheme()
 	ProjectFileDialog = FileDialog.new()
 	ProjectFileDialog.access = FileDialog.ACCESS_FILESYSTEM
 	ProjectFileDialog.filters = PackedStringArray(["*.ocb ; OpenCircuitBoard Project"])
+	ProjectFileDialog.transparent_bg = true
+	ProjectFileDialog.min_size = Vector2i(760, 480)
+	ProjectFileDialog.theme = projectDialogTheme
 	ProjectFileDialog.file_selected.connect(handleProjectFileSelected)
 	$Interface.add_child(ProjectFileDialog)
+	configureProjectFileDialogButtons()
 	ProjectNoticeDialog = AcceptDialog.new()
-	ProjectNoticeDialog.title = "OpenCircuitBoard"
+	ProjectNoticeDialog.title = ApplicationTitle
+	ProjectNoticeDialog.transparent_bg = true
+	ProjectNoticeDialog.theme = projectDialogTheme
 	$Interface.add_child(ProjectNoticeDialog)
+	configureDialogActionButton(ProjectNoticeDialog.get_ok_button())
+
+func configureProjectFileDialogButtons() -> void:
+	configureDialogActionButton(ProjectFileDialog.get_ok_button())
+	configureDialogSecondaryButton(ProjectFileDialog.get_cancel_button())
+
+func configureDialogActionButton(button: Button) -> void:
+	button.add_theme_color_override("font_color", Color.WHITE)
+	button.add_theme_color_override("font_hover_color", Color.WHITE)
+	button.add_theme_color_override("font_pressed_color", Color.WHITE)
+	button.add_theme_stylebox_override("normal", makeDialogBox(DialogActionColor, DialogActionColor, 3, 6))
+	button.add_theme_stylebox_override("hover", makeDialogBox(DialogActionColor.lightened(0.1), DialogActionColor.lightened(0.1), 3, 6))
+	button.add_theme_stylebox_override("pressed", makeDialogBox(DialogActionColor.darkened(0.12), DialogActionColor.darkened(0.12), 3, 6))
+
+func configureDialogSecondaryButton(button: Button) -> void:
+	button.add_theme_stylebox_override("normal", makeDialogBox(DialogSurfaceColor, DialogBorderColor, 3, 6))
+	button.add_theme_stylebox_override("hover", makeDialogBox(DialogHoverColor, DialogBorderColor, 3, 6))
+	button.add_theme_stylebox_override("pressed", makeDialogBox(DialogInputColor, DialogBorderColor, 3, 6))
 
 func createNewProject() -> void:
 	leaveSimulation()
@@ -457,6 +491,7 @@ func showOpenProjectDialog() -> void:
 	PendingProjectFileAction = "open"
 	ProjectFileDialog.file_mode = FileDialog.FILE_MODE_OPEN_FILE
 	ProjectFileDialog.current_file = ""
+	ProjectFileDialog.title = "Open .ocb Project"
 	ProjectFileDialog.popup_centered_ratio(0.72)
 
 func saveProject() -> void:
@@ -469,6 +504,7 @@ func showSaveProjectDialog() -> void:
 	PendingProjectFileAction = "save"
 	ProjectFileDialog.file_mode = FileDialog.FILE_MODE_SAVE_FILE
 	ProjectFileDialog.current_file = ProjectManagerInstance.CurrentProjectPath.get_file() if ProjectManagerInstance.hasCurrentProject() else "Untitled.ocb"
+	ProjectFileDialog.title = "Save .ocb Project"
 	ProjectFileDialog.popup_centered_ratio(0.72)
 
 func handleProjectFileSelected(projectPath: String) -> void:
@@ -928,6 +964,80 @@ func makeSolidTexture(textureSize: Vector2i, color: Color) -> ImageTexture:
 	var image := Image.create(textureSize.x, textureSize.y, false, Image.FORMAT_RGBA8)
 	image.fill(color)
 	return ImageTexture.create_from_image(image)
+
+func makeProjectDialogTheme() -> Theme:
+	var dialogTheme := Theme.new()
+	dialogTheme.set_stylebox("panel", "FileDialog", makeDialogBox(DialogBackgroundColor, DialogBorderColor, 6, 10))
+	dialogTheme.set_stylebox("panel", "AcceptDialog", makeDialogBox(DialogBackgroundColor, DialogBorderColor, 6, 10))
+	dialogTheme.set_stylebox("panel", "Panel", makeDialogBox(DialogBackgroundColor, DialogBorderColor, 4, 6))
+	dialogTheme.set_stylebox("normal", "Button", makeDialogBox(DialogSurfaceColor, DialogBorderColor, 3, 6))
+	dialogTheme.set_stylebox("hover", "Button", makeDialogBox(DialogHoverColor, DialogBorderColor, 3, 6))
+	dialogTheme.set_stylebox("pressed", "Button", makeDialogBox(DialogInputColor, DialogBorderColor, 3, 6))
+	dialogTheme.set_stylebox("hover_pressed", "Button", makeDialogBox(DialogHoverColor, DialogBorderColor, 3, 6))
+	dialogTheme.set_stylebox("disabled", "Button", makeDialogBox(DialogInputColor, DialogBorderColor.darkened(0.25), 3, 6))
+	dialogTheme.set_color("font_color", "Button", DialogTextColor)
+	dialogTheme.set_color("font_hover_color", "Button", Color.WHITE)
+	dialogTheme.set_color("font_pressed_color", "Button", DialogTextColor)
+	dialogTheme.set_color("font_disabled_color", "Button", DialogMutedTextColor.darkened(0.25))
+	dialogTheme.set_stylebox("normal", "LineEdit", makeDialogBox(DialogInputColor, DialogBorderColor, 3, 6))
+	dialogTheme.set_stylebox("read_only", "LineEdit", makeDialogBox(DialogInputColor, DialogBorderColor, 3, 6))
+	dialogTheme.set_stylebox("focus", "LineEdit", makeDialogBox(DialogInputColor, DialogActionColor, 3, 6))
+	dialogTheme.set_color("font_color", "LineEdit", DialogTextColor)
+	dialogTheme.set_color("font_uneditable_color", "LineEdit", DialogMutedTextColor)
+	dialogTheme.set_stylebox("panel", "Tree", makeDialogBox(DialogInputColor, DialogBorderColor, 3, 4))
+	dialogTheme.set_stylebox("selected", "Tree", makeDialogBox(DialogSelectionColor, DialogActionColor, 2, 2))
+	dialogTheme.set_stylebox("selected_focus", "Tree", makeDialogBox(DialogSelectionColor, DialogActionColor, 2, 2))
+	dialogTheme.set_color("font_color", "Tree", DialogTextColor)
+	dialogTheme.set_color("font_selected_color", "Tree", Color.WHITE)
+	dialogTheme.set_color("guide_color", "Tree", DialogBorderColor)
+	dialogTheme.set_stylebox("panel", "ItemList", makeDialogBox(DialogInputColor, DialogBorderColor, 3, 4))
+	dialogTheme.set_stylebox("selected", "ItemList", makeDialogBox(DialogSelectionColor, DialogActionColor, 2, 2))
+	dialogTheme.set_color("font_color", "ItemList", DialogTextColor)
+	dialogTheme.set_color("font_selected_color", "ItemList", Color.WHITE)
+	dialogTheme.set_stylebox("normal", "OptionButton", makeDialogBox(DialogSurfaceColor, DialogBorderColor, 3, 6))
+	dialogTheme.set_stylebox("hover", "OptionButton", makeDialogBox(DialogHoverColor, DialogBorderColor, 3, 6))
+	dialogTheme.set_stylebox("pressed", "OptionButton", makeDialogBox(DialogInputColor, DialogBorderColor, 3, 6))
+	dialogTheme.set_color("font_color", "OptionButton", DialogTextColor)
+	dialogTheme.set_stylebox("panel", "PopupMenu", makeDialogBox(DialogSurfaceColor, DialogBorderColor, 4, 4))
+	dialogTheme.set_color("font_color", "PopupMenu", DialogTextColor)
+	dialogTheme.set_color("font_hover_color", "PopupMenu", Color.WHITE)
+	dialogTheme.set_color("font_color", "Label", DialogTextColor)
+	dialogTheme.set_color("default_color", "RichTextLabel", DialogTextColor)
+	dialogTheme.set_color("title_color", "Window", DialogTextColor)
+	dialogTheme.set_font_size("title_font_size", "Window", 15)
+	dialogTheme.set_constant("title_height", "Window", 34)
+	dialogTheme.set_stylebox("embedded_border", "Window", makeEmbeddedDialogWindowBox(DialogBorderColor))
+	dialogTheme.set_stylebox("embedded_unfocused_border", "Window", makeEmbeddedDialogWindowBox(DialogBorderColor.darkened(0.25)))
+	dialogTheme.set_color("folder_icon_color", "FileDialog", Color("8fb4e8"))
+	dialogTheme.set_color("file_icon_color", "FileDialog", DialogMutedTextColor)
+	dialogTheme.set_color("file_disabled_color", "FileDialog", DialogMutedTextColor.darkened(0.35))
+	return dialogTheme
+
+func makeDialogBox(backgroundColor: Color, borderColor: Color, radius: int, margin: int) -> StyleBoxFlat:
+	var box := StyleBoxFlat.new()
+	box.bg_color = backgroundColor
+	box.border_width_left = 1
+	box.border_width_top = 1
+	box.border_width_right = 1
+	box.border_width_bottom = 1
+	box.border_color = borderColor
+	box.corner_radius_top_left = radius
+	box.corner_radius_top_right = radius
+	box.corner_radius_bottom_left = radius
+	box.corner_radius_bottom_right = radius
+	box.content_margin_left = margin
+	box.content_margin_top = margin
+	box.content_margin_right = margin
+	box.content_margin_bottom = margin
+	return box
+
+func makeEmbeddedDialogWindowBox(borderColor: Color) -> StyleBoxFlat:
+	var box := makeDialogBox(DialogBackgroundColor, borderColor, 6, 0)
+	box.expand_margin_left = 2
+	box.expand_margin_top = 34
+	box.expand_margin_right = 2
+	box.expand_margin_bottom = 2
+	return box
 
 func makeMenuBox() -> StyleBoxFlat:
 	var box := StyleBoxFlat.new()
