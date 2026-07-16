@@ -243,7 +243,11 @@ func getSelectedInkId() -> String:
 func setInkInputEnabled(isEnabled: bool) -> void:
 	for paletteToolId in InkButtons:
 		var button := InkButtons[paletteToolId]
-		button.disabled = not isEnabled
+		button.disabled = false
+		button.mouse_filter = Control.MOUSE_FILTER_STOP if isEnabled else Control.MOUSE_FILTER_IGNORE
+		button.focus_mode = Control.FOCUS_ALL if isEnabled else Control.FOCUS_NONE
+		if not isEnabled:
+			button.release_focus()
 
 func getLastSelectedInkId(paletteToolId: String) -> String:
 	return InkRegistry.getComponentId(getLastSelectedInk(paletteToolId))

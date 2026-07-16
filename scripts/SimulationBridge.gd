@@ -110,6 +110,32 @@ func getCurrentUpdates() -> Dictionary:
 		"updates": makeFullStateUpdates(statesVariant as PackedInt32Array),
 	}
 
+func toggleLatchAt(coordinates: Vector2i) -> Dictionary:
+	if not hasNativeSimulation():
+		return makeFailure(-1, -1, "BackendUnavailable")
+	var cellIndex := getCellIndex(coordinates)
+	if cellIndex < 0:
+		return makeFailure(coordinates.x, coordinates.y, "SimulationLatchOutsideGrid", false, true)
+	var resultVariant: Variant = NativeSimulation.call("toggleLatch", cellIndex)
+	if not (resultVariant is Dictionary):
+		return makeFailure(coordinates.x, coordinates.y, "OcbSimulationLatchToggleResultInvalid", false, true)
+	var result := resultVariant as Dictionary
+	if not bool(result.get("ok", false)):
+		return makeFailure(
+			coordinates.x,
+			coordinates.y,
+			String(result.get("errorReason", "OcbSimulationLatchToggleFailed")),
+			false,
+			true
+		)
+	var changesVariant: Variant = result.get("changes", PackedInt32Array())
+	if not (changesVariant is PackedInt32Array):
+		return makeFailure(coordinates.x, coordinates.y, "OcbSimulationLatchToggleChangesInvalid", false, true)
+	return {
+		"ok": true,
+		"updates": makeDeltaUpdates(changesVariant as PackedInt32Array),
+	}
+
 func advanceTick() -> Dictionary:
 	if not hasNativeSimulation():
 		return makeFailure(-1, -1, "BackendUnavailable")

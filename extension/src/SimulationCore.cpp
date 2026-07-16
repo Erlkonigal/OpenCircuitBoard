@@ -614,6 +614,29 @@ std::vector<int32_t> SimulationCore::makeStateDeltas(const std::vector<int32_t> 
 	return deltas;
 }
 
+bool SimulationCore::toggleLatch(int32_t cellIndex, std::vector<int32_t> &changes, std::string &errorReason) {
+	changes.clear();
+	errorReason.clear();
+	if (!compiled_) {
+		errorReason = "simulation_not_compiled";
+		return false;
+	}
+	if (cellIndex < 0 || cellIndex >= static_cast<int32_t>(kinds_.size())) {
+		errorReason = "cell_out_of_bounds";
+		return false;
+	}
+	const int32_t componentId = cellToComponent_[cellIndex];
+	if (componentId < 0 || components_[componentId].kind != ToolKind::Latch) {
+		errorReason = "not_latch";
+		return false;
+	}
+
+	const std::vector<int32_t> previousStates = getStates();
+	componentStates_[componentId] = componentStates_[componentId] == 0 ? 1 : 0;
+	changes = makeStateDeltas(previousStates);
+	return true;
+}
+
 std::vector<int32_t> SimulationCore::advanceTick() {
 	if (!compiled_) {
 		return {};

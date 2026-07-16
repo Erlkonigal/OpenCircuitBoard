@@ -101,7 +101,7 @@ frontendTest: build
 
 test: coreTest nativeTest frontendTest
 
-run: build
+run:
 	@"$(godotExecutable)" --path "$(projectRoot)"
 
 clean:

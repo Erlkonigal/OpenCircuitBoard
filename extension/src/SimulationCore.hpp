@@ -57,6 +57,7 @@ public:
 	bool compile(const CompileInput &input, CompileError &error);
 	std::vector<int32_t> advanceTick();
 	std::vector<int32_t> getStates() const;
+	bool toggleLatch(int32_t cellIndex, std::vector<int32_t> &changes, std::string &errorReason);
 	std::vector<int32_t> reset();
 	std::vector<uint8_t> captureState() const;
 	bool restoreState(const std::vector<uint8_t> &snapshot, std::string &errorReason);

@@ -14,7 +14,7 @@ func run(context) -> void:
 	var loopFrequencySlider := topBarContent.get_node("LoopFrequencySlider") as HSlider
 	var simulationStatus := topBarContent.get_node("SimulationStatus") as Label
 	var circuitEditorDock := context.getDockForSide(main, "left") as Control
-	var clockInkButton := (circuitEditorDock.get("InkButtons") as Dictionary).get("clock") as Button
+	var orInkButton := (circuitEditorDock.get("InkButtons") as Dictionary).get("or") as Button
 	var notCoordinates := Vector2i(-12, -12)
 	var clockCoordinates := Vector2i(-10, -12)
 	assert(board.call("placeTile", notCoordinates, "not"))
@@ -36,7 +36,10 @@ func run(context) -> void:
 	assert(bool(board.call("getRuntimeTileState", notCoordinates)))
 	assert(bool(board.call("hasRuntimeTileState", notCoordinates)))
 	assert(not bool(board.call("getRuntimeTileState", clockCoordinates)))
-	assert(clockInkButton.disabled)
+	assert(not orInkButton.disabled)
+	assert(orInkButton.button_pressed)
+	assert(orInkButton.mouse_filter == Control.MOUSE_FILTER_IGNORE)
+	assert(orInkButton.focus_mode == Control.FOCUS_NONE)
 	main.call("setClockHoldTicks", 9)
 	assert(int(board.call("getClockHoldTicks")) == 1)
 	assert(simulationModeButton.text == "Edit")
@@ -72,7 +75,9 @@ func run(context) -> void:
 	assert(not bool(board.call("getTileState", notCoordinates)))
 	assert(not bool(board.call("getRuntimeTileState", notCoordinates)))
 	assert(not bool(board.call("hasRuntimeTileState", notCoordinates)))
-	assert(not clockInkButton.disabled)
+	assert(not orInkButton.disabled)
+	assert(orInkButton.mouse_filter == Control.MOUSE_FILTER_STOP)
+	assert(orInkButton.focus_mode == Control.FOCUS_ALL)
 	assert(simulationModeButton.text == "Simulate")
 	assert(not simulationStatus.visible)
 	assert(stepLengthControl.disabled)

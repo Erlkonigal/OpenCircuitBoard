@@ -12,6 +12,7 @@ void OcbSimulation::_bind_methods() {
 			&OcbSimulation::compileGrid);
 	ClassDB::bind_method(godot::D_METHOD("advanceTick"), &OcbSimulation::advanceTick);
 	ClassDB::bind_method(godot::D_METHOD("getStates"), &OcbSimulation::getStates);
+	ClassDB::bind_method(godot::D_METHOD("toggleLatch", "cellIndex"), &OcbSimulation::toggleLatch);
 	ClassDB::bind_method(godot::D_METHOD("reset"), &OcbSimulation::reset);
 	ClassDB::bind_method(godot::D_METHOD("captureState"), &OcbSimulation::captureState);
 	ClassDB::bind_method(godot::D_METHOD("restoreState", "snapshot"), &OcbSimulation::restoreState);
@@ -66,6 +67,20 @@ godot::PackedInt32Array OcbSimulation::advanceTick() {
 
 godot::PackedInt32Array OcbSimulation::getStates() const {
 	return makePackedInt32Array(core_.getStates());
+}
+
+godot::Dictionary OcbSimulation::toggleLatch(int32_t cellIndex) {
+	std::vector<int32_t> changes;
+	std::string errorReason;
+	godot::Dictionary result;
+	if (!core_.toggleLatch(cellIndex, changes, errorReason)) {
+		result["ok"] = false;
+		result["errorReason"] = godot::String(errorReason.c_str());
+		return result;
+	}
+	result["ok"] = true;
+	result["changes"] = makePackedInt32Array(changes);
+	return result;
 }
 
 godot::PackedInt32Array OcbSimulation::reset() {

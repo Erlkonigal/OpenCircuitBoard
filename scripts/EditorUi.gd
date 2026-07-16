@@ -156,6 +156,7 @@ func _ready() -> void:
 	NextTickButton.pressed.connect(showNextSimulationTick)
 	StepLengthControl.gui_input.connect(handleStepLengthInput)
 	LoopFrequencySlider.value_changed.connect(setLoopFrequency)
+	BoardViewport.gui_input.connect(handleSimulationCanvasInput)
 	DockResizeHandle.gui_input.connect(handleDockResizeInput)
 	RightDockResizeHandle.gui_input.connect(handleRightDockResizeInput)
 	DockResizeHandle.mouse_entered.connect(func() -> void: DockResizeHandle.color = Color("5d7090"))
@@ -897,6 +898,41 @@ func toggleSimulationMode() -> void:
 		leaveSimulation()
 	else:
 		enterSimulation()
+
+func handleSimulationCanvasInput(event: InputEvent) -> void:
+	if not IsSimulating:
+		return
+	var mouseButton := event as InputEventMouseButton
+	if mouseButton == null or mouseButton.button_index != MOUSE_BUTTON_LEFT or not mouseButton.pressed:
+		return
+	var boardPosition: Vector2 = Board.get_viewport().get_canvas_transform().affine_inverse() * mouseButton.position
+	var coordinatesVariant: Variant = Board.call("getGridCoordinates", boardPosition)
+	if not (coordinatesVariant is Vector2i):
+		return
+	if toggleSimulationLatchAt(coordinatesVariant as Vector2i):
+		get_viewport().set_input_as_handled()
+
+func toggleSimulationLatchAt(coordinates: Vector2i) -> bool:
+	if not IsSimulating or String(Board.call("getToolIdAt", coordinates)) != "latch":
+		return false
+	var toggleResult := SimulationBridgeInstance.toggleLatchAt(coordinates)
+	if not bool(toggleResult.get("ok", false)):
+		failActiveSimulation(toggleResult)
+		return false
+	applySimulationUpdates(toggleResult.get("updates", []) as Array)
+	var snapshotResult := SimulationBridgeInstance.captureState()
+	if not bool(snapshotResult.get("ok", false)):
+		failActiveSimulation(snapshotResult)
+		return false
+	if SimulationTick < SimulationTimeline.size() - 1:
+		SimulationTimeline.resize(SimulationTick + 1)
+	if SimulationTick >= SimulationTimeline.size():
+		failActiveSimulation({"ok": false, "errorReason": "SimulationTimelineInvalid"})
+		return false
+	SimulationTimeline[SimulationTick] = snapshotResult.get("snapshot", PackedByteArray()) as PackedByteArray
+	SimulationAccumulator = 0.0
+	refreshSimulationControls()
+	return true
 
 func enterSimulation() -> void:
 	if IsSimulating:

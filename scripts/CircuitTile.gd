@@ -4,9 +4,11 @@ static var GeometryBySize: Dictionary[Vector2i, Dictionary] = {}
 
 const OnIconDarkening := 0.45
 const OnSideDarkening := 0.55
-const OffTopColor := Color("263a3c")
-const OffSideShadowColor := Color("101c25")
-const OffIconColor := Color("46645f")
+const OffTopDarkening := 0.68
+const OffTopDesaturation := 0.60
+const OffSideDarkening := 0.86
+const OffSideDesaturation := 0.68
+const OffIconDarkening := 0.35
 
 @onready var BaseBlock: TextureRect = $BaseBlock
 @onready var ShadowBlock: TextureRect = $ShadowBlock
@@ -77,14 +79,19 @@ static func getGeometry(size: float, depth: float) -> Dictionary:
 static func warmGeometry(size: float) -> void:
 	getGeometry(size, size * 0.5)
 
+static func getMutedColor(baseColor: Color, darkening: float, desaturation: float) -> Color:
+	var luminance := baseColor.get_luminance()
+	var neutralColor := Color(luminance, luminance, luminance, baseColor.a)
+	return baseColor.lerp(neutralColor, clampf(desaturation, 0.0, 1.0)).darkened(clampf(darkening, 0.0, 1.0))
+
 static func getTopColor(baseColor: Color, nextIsOn: bool) -> Color:
-	return baseColor if nextIsOn else OffTopColor
+	return baseColor if nextIsOn else getMutedColor(baseColor, OffTopDarkening, OffTopDesaturation)
 
 static func getSideShadowColor(baseColor: Color, nextIsOn: bool) -> Color:
-	return baseColor.darkened(OnSideDarkening) if nextIsOn else OffSideShadowColor
+	return baseColor.darkened(OnSideDarkening) if nextIsOn else getMutedColor(baseColor, OffSideDarkening, OffSideDesaturation)
 
 static func getIconColor(baseColor: Color, nextIsOn: bool) -> Color:
-	return baseColor.darkened(OnIconDarkening) if nextIsOn else OffIconColor
+	return baseColor.darkened(OnIconDarkening) if nextIsOn else getTopColor(baseColor, false).darkened(OffIconDarkening)
 
 func setAttributes(icon: Texture2D, baseColor: Color, nextIsOn := true) -> void:
 	InkColor = baseColor

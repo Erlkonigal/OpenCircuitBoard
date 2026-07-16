@@ -11,6 +11,7 @@ const BehaviorTestEntries := [
 	{"id": "strokeHistory", "path": "res://scripts/tests/StrokeHistoryTest.gd"},
 	{"id": "simulationState", "path": "res://scripts/tests/SimulationStateTest.gd"},
 	{"id": "simulationCompileFailure", "path": "res://scripts/tests/SimulationCompileFailureTest.gd"},
+	{"id": "simulationLatchInteraction", "path": "res://scripts/tests/SimulationLatchInteractionTest.gd"},
 	{"id": "selectionMarquee", "path": "res://scripts/tests/SelectionMarqueeTest.gd"},
 	{"id": "selectionDeletion", "path": "res://scripts/tests/SelectionDeletionTest.gd"},
 	{"id": "rightClickDelete", "path": "res://scripts/tests/RightClickDeleteTest.gd"},

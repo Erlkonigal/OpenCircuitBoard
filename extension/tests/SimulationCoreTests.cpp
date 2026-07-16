@@ -261,6 +261,47 @@ void testLatchInitialStateConflict() {
 	expect(error.errorReason == "latch_initial_state_conflict", "Latch conflict returns its diagnostic");
 }
 
+void testLatchToggle() {
+	CompileInput input = makeInput(5, 1);
+	setKind(input, 0, 0, ToolKind::Latch);
+	setKind(input, 1, 0, ToolKind::Latch);
+	setKind(input, 2, 0, ToolKind::Read);
+	setKind(input, 3, 0, ToolKind::Trace);
+	setInitialState(input, 0, 0, 0);
+	setInitialState(input, 1, 0, 0);
+	SimulationCore core;
+	CompileError error;
+	std::vector<int32_t> changes;
+	std::string toggleError;
+	expect(!core.toggleLatch(0, changes, toggleError), "uncompiled Latch cannot be toggled");
+	expect(toggleError == "simulation_not_compiled", "uncompiled Latch returns its diagnostic");
+	expect(core.compile(input, error), "merged Latches compile for click toggling");
+
+	expect(!core.toggleLatch(-1, changes, toggleError), "negative cell index is rejected");
+	expect(toggleError == "cell_out_of_bounds", "invalid cell index returns its diagnostic");
+	expect(!core.toggleLatch(2, changes, toggleError), "Read block cannot be toggled as a Latch");
+	expect(toggleError == "not_latch", "non-Latch cell returns its diagnostic");
+
+	expect(core.toggleLatch(1, changes, toggleError), "any cell in a merged Latch toggles its component");
+	expect(changes == std::vector<int32_t>({0, 1, 1, 1, 2, 1}), "Latch toggle returns every immediately changed visible state");
+	expectState(core, input, 0, 0, 1, "first merged Latch is on after toggle");
+	expectState(core, input, 1, 0, 1, "clicked merged Latch is on after toggle");
+	expectState(core, input, 3, 0, 0, "Latch toggle does not update Read output in the same tick");
+
+	const std::vector<uint8_t> snapshot = core.captureState();
+	core.advanceTick();
+	expectState(core, input, 3, 0, 1, "toggled Latch reaches Read output on the next tick");
+	std::string restoreError;
+	expect(core.restoreState(snapshot, restoreError), "snapshot restores toggled Latch state");
+	expectState(core, input, 0, 0, 1, "restored snapshot keeps toggled Latch state");
+	expectState(core, input, 3, 0, 0, "restored snapshot keeps pre-tick Trace state");
+
+	expect(core.toggleLatch(0, changes, toggleError), "toggled Latch can be toggled off again");
+	expect(changes == std::vector<int32_t>({0, 0, 1, 0, 2, 0}), "second toggle returns every immediately changed off state");
+	core.reset();
+	expectState(core, input, 0, 0, 0, "reset restores the Latch design state");
+}
+
 void testZeroWriteGateIdentities() {
 	CompileInput input = makeInput(9, 1);
 	setKind(input, 0, 0, ToolKind::Buffer);
@@ -312,6 +353,7 @@ int main() {
 	testReadWriteRequireTraceEdges();
 	testWriteMultiplicity();
 	testLatchInitialStateConflict();
+	testLatchToggle();
 	testZeroWriteGateIdentities();
 	testSnapshotRestore();
 	return 0;
