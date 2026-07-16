@@ -73,11 +73,16 @@ private:
 
 	struct ReadBinding {
 		int32_t sourceComponent = -1;
+		int32_t sourceWriteCell = -1;
+		int32_t sourceNetwork = -1;
+		int32_t signalNetwork = -1;
 		std::vector<int32_t> outputNetworks;
 	};
 
 	struct WriteBinding {
+		int32_t cell = -1;
 		int32_t inputNetwork = -1;
+		int32_t inputReadCell = -1;
 		std::vector<int32_t> targetComponents;
 	};
 
@@ -92,6 +97,7 @@ private:
 	static int32_t colorForKind(ToolKind kind);
 
 	uint8_t evaluateComponent(int32_t componentId, const std::vector<uint8_t> &networkStates, uint8_t currentState) const;
+	void resolveConnectorNetworks(const std::vector<uint8_t> &componentStates, std::vector<uint8_t> &networkStates) const;
 	void resetInternal();
 	std::vector<int32_t> makeStateDeltas(const std::vector<int32_t> &previousStates) const;
 	uint64_t makeTopologySignature() const;
@@ -109,14 +115,13 @@ private:
 	std::vector<Component> components_;
 	std::vector<ReadBinding> readBindings_;
 	std::vector<WriteBinding> writeBindings_;
-	std::vector<std::vector<int32_t>> networkReadBindings_;
 	std::vector<std::vector<int32_t>> componentInputNetworks_;
 	std::vector<int32_t> cellToComponent_;
 	std::vector<int32_t> cellNetwork_;
 	std::vector<int32_t> meshNetworkByCell_;
 	std::vector<int32_t> crossHorizontalNetworkByCell_;
 	std::vector<int32_t> crossVerticalNetworkByCell_;
-	std::vector<int32_t> readSourceByCell_;
+	std::vector<int32_t> readBindingByCell_;
 	std::vector<int32_t> writeNetworkByCell_;
 	std::vector<uint8_t> componentStates_;
 	std::vector<uint8_t> networkStates_;

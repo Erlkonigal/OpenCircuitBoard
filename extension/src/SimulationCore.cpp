@@ -136,11 +136,11 @@ bool SimulationCore::isDevice(ToolKind kind) {
 }
 
 bool SimulationCore::isReadSource(ToolKind kind) {
-	return isDevice(kind);
+	return isDevice(kind) || kind == ToolKind::Write;
 }
 
 bool SimulationCore::isWriteTarget(ToolKind kind) {
-	return isDevice(kind) && kind != ToolKind::Clock;
+	return (isDevice(kind) && kind != ToolKind::Clock) || kind == ToolKind::Read;
 }
 
 bool SimulationCore::allowsMultipleWrites(ToolKind kind) {
@@ -195,14 +195,13 @@ void SimulationCore::clear() {
 	components_.clear();
 	readBindings_.clear();
 	writeBindings_.clear();
-	networkReadBindings_.clear();
 	componentInputNetworks_.clear();
 	cellToComponent_.clear();
 	cellNetwork_.clear();
 	meshNetworkByCell_.clear();
 	crossHorizontalNetworkByCell_.clear();
 	crossVerticalNetworkByCell_.clear();
-	readSourceByCell_.clear();
+	readBindingByCell_.clear();
 	writeNetworkByCell_.clear();
 	componentStates_.clear();
 	networkStates_.clear();
@@ -266,6 +265,16 @@ bool SimulationCore::compile(const CompileInput &input, CompileError &error) {
 		return nextY * width_ + nextX;
 	};
 	const std::array<std::array<int32_t, 2>, 4> directions = {{{-1, 0}, {1, 0}, {0, -1}, {0, 1}}};
+	const auto countTraceNeighbors = [&](int32_t cell) {
+		int32_t traceSides = 0;
+		for (const std::array<int32_t, 2> &direction : directions) {
+			const int32_t neighbor = neighborAt(cell, direction[0], direction[1]);
+			if (neighbor >= 0 && isTrace(static_cast<ToolKind>(kinds_[neighbor]))) {
+				++traceSides;
+			}
+		}
+		return traceSides;
+	};
 
 	DisjointSet componentSet(cellCount);
 	for (int32_t cell = 0; cell < cellCount; ++cell) {
@@ -424,9 +433,8 @@ bool SimulationCore::compile(const CompileInput &input, CompileError &error) {
 		}
 	}
 	networkStates_.assign(networkByRoot.size(), 0);
-	networkReadBindings_.resize(networkStates_.size());
 
-	readSourceByCell_.assign(cellCount, -1);
+	readBindingByCell_.assign(cellCount, -1);
 	writeNetworkByCell_.assign(cellCount, -1);
 	componentInputNetworks_.resize(components_.size());
 	for (int32_t cell = 0; cell < cellCount; ++cell) {
@@ -436,6 +444,7 @@ bool SimulationCore::compile(const CompileInput &input, CompileError &error) {
 		}
 		if (kind == ToolKind::Read) {
 			std::vector<int32_t> sourceComponents;
+			std::vector<int32_t> sourceWriteCells;
 			std::vector<int32_t> outputNetworks;
 			for (const std::array<int32_t, 2> &direction : directions) {
 				const int32_t neighbor = neighborAt(cell, direction[0], direction[1]);
@@ -445,31 +454,39 @@ bool SimulationCore::compile(const CompileInput &input, CompileError &error) {
 				const ToolKind neighborKind = static_cast<ToolKind>(kinds_[neighbor]);
 				if (isTrace(neighborKind)) {
 					appendUnique(outputNetworks, cellNetwork_[neighbor]);
+				} else if (neighborKind == ToolKind::Write) {
+					// A Trace-input Write can feed Read. A Write without Trace input consumes Read instead.
+					if (countTraceNeighbors(neighbor) == 1) {
+						appendUnique(sourceWriteCells, neighbor);
+					}
 				} else if (isReadSource(neighborKind)) {
 					appendUnique(sourceComponents, cellToComponent_[neighbor]);
 				}
 			}
-			if (sourceComponents.size() != 1) {
+			if (sourceComponents.size() + sourceWriteCells.size() != 1) {
 				return fail(cell, "read_requires_one_source");
 			}
 			if (outputNetworks.empty()) {
 				return fail(cell, "read_requires_trace_output");
 			}
 			ReadBinding binding;
-			binding.sourceComponent = sourceComponents.front();
+			if (!sourceComponents.empty()) {
+				binding.sourceComponent = sourceComponents.front();
+			} else {
+				binding.sourceWriteCell = sourceWriteCells.front();
+			}
 			binding.outputNetworks = std::move(outputNetworks);
 			const int32_t bindingId = static_cast<int32_t>(readBindings_.size());
-			for (int32_t network : binding.outputNetworks) {
-				networkReadBindings_[network].push_back(bindingId);
-			}
-			readSourceByCell_[cell] = binding.sourceComponent;
+			readBindingByCell_[cell] = bindingId;
 			readBindings_.push_back(std::move(binding));
 			continue;
 		}
 
 		int32_t traceSides = 0;
 		int32_t inputNetwork = -1;
+		std::vector<int32_t> inputReadCells;
 		std::vector<int32_t> targetComponents;
+		std::vector<int32_t> targetReadCells;
 		for (const std::array<int32_t, 2> &direction : directions) {
 			const int32_t neighbor = neighborAt(cell, direction[0], direction[1]);
 			if (neighbor < 0) {
@@ -479,24 +496,57 @@ bool SimulationCore::compile(const CompileInput &input, CompileError &error) {
 			if (isTrace(neighborKind)) {
 				++traceSides;
 				inputNetwork = cellNetwork_[neighbor];
+			} else if (neighborKind == ToolKind::Read) {
+				appendUnique(inputReadCells, neighbor);
+				appendUnique(targetReadCells, neighbor);
 			} else if (isWriteTarget(neighborKind)) {
 				appendUnique(targetComponents, cellToComponent_[neighbor]);
 			}
 		}
-		if (traceSides != 1) {
+		if (traceSides > 1 || (traceSides == 0 && inputReadCells.size() != 1)) {
 			return fail(cell, "write_requires_one_trace_input");
 		}
-		if (targetComponents.empty()) {
+		const bool hasReadTarget = traceSides == 1 && !targetReadCells.empty();
+		if (targetComponents.empty() && !hasReadTarget) {
 			return fail(cell, "write_requires_target");
 		}
 		WriteBinding binding;
+		binding.cell = cell;
 		binding.inputNetwork = inputNetwork;
+		if (traceSides == 0) {
+			binding.inputReadCell = inputReadCells.front();
+		}
 		binding.targetComponents = std::move(targetComponents);
+		writeBindings_.push_back(std::move(binding));
+	}
+
+	for (ReadBinding &binding : readBindings_) {
+		binding.signalNetwork = static_cast<int32_t>(networkStates_.size());
+		networkStates_.push_back(0);
+	}
+
+	for (WriteBinding &binding : writeBindings_) {
+		if (binding.inputReadCell >= 0) {
+			const int32_t readBindingId = readBindingByCell_[binding.inputReadCell];
+			if (readBindingId < 0) {
+				return fail(binding.inputReadCell, "write_requires_one_trace_input");
+			}
+			binding.inputNetwork = readBindings_[readBindingId].signalNetwork;
+		}
+		writeNetworkByCell_[binding.cell] = binding.inputNetwork;
 		for (int32_t component : binding.targetComponents) {
 			componentInputNetworks_[component].push_back(binding.inputNetwork);
 		}
-		writeNetworkByCell_[cell] = binding.inputNetwork;
-		writeBindings_.push_back(std::move(binding));
+	}
+
+	for (ReadBinding &binding : readBindings_) {
+		if (binding.sourceWriteCell < 0) {
+			continue;
+		}
+		binding.sourceNetwork = writeNetworkByCell_[binding.sourceWriteCell];
+		if (binding.sourceNetwork < 0) {
+			return fail(binding.sourceWriteCell, "read_requires_one_source");
+		}
 	}
 
 	for (int32_t component = 0; component < static_cast<int32_t>(components_.size()); ++component) {
@@ -555,6 +605,37 @@ uint8_t SimulationCore::evaluateComponent(int32_t componentId, const std::vector
 	}
 }
 
+void SimulationCore::resolveConnectorNetworks(const std::vector<uint8_t> &componentStates, std::vector<uint8_t> &networkStates) const {
+	networkStates.assign(networkStates_.size(), 0);
+	for (int32_t pass = 0; pass <= static_cast<int32_t>(readBindings_.size()); ++pass) {
+		bool changed = false;
+		for (const ReadBinding &binding : readBindings_) {
+			uint8_t sourceState = 0;
+			if (binding.sourceComponent >= 0) {
+				sourceState = componentStates[binding.sourceComponent];
+			} else if (binding.sourceNetwork >= 0) {
+				sourceState = networkStates[binding.sourceNetwork];
+			}
+			if (sourceState == 0) {
+				continue;
+			}
+			for (int32_t network : binding.outputNetworks) {
+				if (networkStates[network] == 0) {
+					networkStates[network] = 1;
+					changed = true;
+				}
+			}
+			if (networkStates[binding.signalNetwork] == 0) {
+				networkStates[binding.signalNetwork] = 1;
+				changed = true;
+			}
+		}
+		if (!changed) {
+			return;
+		}
+	}
+}
+
 void SimulationCore::resetInternal() {
 	tickCount_ = 0;
 	std::fill(networkStates_.begin(), networkStates_.end(), 0);
@@ -569,6 +650,7 @@ void SimulationCore::resetInternal() {
 			componentStates_[component] = evaluateComponent(component, networkStates_, 0);
 		}
 	}
+	resolveConnectorNetworks(componentStates_, networkStates_);
 }
 
 std::vector<int32_t> SimulationCore::getStates() const {
@@ -587,7 +669,15 @@ std::vector<int32_t> SimulationCore::getStates() const {
 			const bool vertical = crossVerticalNetworkByCell_[cell] >= 0 && networkStates_[crossVerticalNetworkByCell_[cell]] != 0;
 			states[cell] = horizontal || vertical ? 1 : 0;
 		} else if (kind == ToolKind::Read) {
-			states[cell] = readSourceByCell_[cell] >= 0 ? componentStates_[readSourceByCell_[cell]] : 0;
+			const int32_t bindingId = readBindingByCell_[cell];
+			if (bindingId >= 0) {
+				const ReadBinding &binding = readBindings_[bindingId];
+				if (binding.sourceComponent >= 0) {
+					states[cell] = componentStates_[binding.sourceComponent];
+				} else if (binding.sourceNetwork >= 0) {
+					states[cell] = networkStates_[binding.sourceNetwork];
+				}
+			}
 		} else if (kind == ToolKind::Write) {
 			states[cell] = writeNetworkByCell_[cell] >= 0 ? networkStates_[writeNetworkByCell_[cell]] : 0;
 		} else if (isDevice(kind)) {
@@ -628,6 +718,7 @@ bool SimulationCore::toggleLatch(int32_t cellIndex, std::vector<int32_t> &change
 
 	const std::vector<int32_t> previousStates = getStates();
 	componentStates_[componentId] = componentStates_[componentId] == 0 ? 1 : 0;
+	resolveConnectorNetworks(componentStates_, networkStates_);
 	changes = makeStateDeltas(previousStates);
 	return true;
 }
@@ -653,15 +744,8 @@ std::vector<int32_t> SimulationCore::advanceTick() {
 		}
 	}
 
-	std::vector<uint8_t> nextNetworkStates(networkStates_.size(), 0);
-	for (int32_t network = 0; network < static_cast<int32_t>(networkReadBindings_.size()); ++network) {
-		for (int32_t readBinding : networkReadBindings_[network]) {
-			if (componentStates_[readBindings_[readBinding].sourceComponent] != 0) {
-				nextNetworkStates[network] = 1;
-				break;
-			}
-		}
-	}
+	std::vector<uint8_t> nextNetworkStates;
+	resolveConnectorNetworks(nextComponentStates, nextNetworkStates);
 
 	componentStates_ = std::move(nextComponentStates);
 	networkStates_ = std::move(nextNetworkStates);

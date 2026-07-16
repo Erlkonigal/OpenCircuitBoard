@@ -61,12 +61,65 @@ void testReadWritePipeline() {
 	SimulationCore core;
 	CompileError error;
 	expect(core.compile(input, error), "Read/Write pipeline compiles");
+	expect(core.getStates()[2] == 1, "Read drives Trace during reset without an extra tick");
 	expect(core.getStates()[4] == 0, "buffer starts low");
 	core.advanceTick();
-	expect(core.getStates()[2] == 1, "Read drives trace one tick later");
-	expect(core.getStates()[4] == 0, "Write does not pass through in the same tick");
+	expect(core.getStates()[2] == 1, "Read keeps its Trace output resolved");
+	expect(core.getStates()[4] == 1, "Buffer updates after one logical tick from the settled Write input");
+}
+
+void testReadWriteZeroDelayPeerPorts() {
+	CompileInput input = makeInput(8, 1);
+	setKind(input, 0, 0, ToolKind::Clock);
+	setKind(input, 1, 0, ToolKind::Read);
+	setKind(input, 2, 0, ToolKind::Trace);
+	setKind(input, 3, 0, ToolKind::Write);
+	setKind(input, 4, 0, ToolKind::Read);
+	setKind(input, 5, 0, ToolKind::Trace);
+	setKind(input, 6, 0, ToolKind::Write);
+	setKind(input, 7, 0, ToolKind::Buffer);
+	SimulationCore core;
+	CompileError error;
+	expect(core.compile(input, error), "Read accepts Write as a source and Write accepts Read as a target");
+	expectState(core, input, 2, 0, 0, "Clock connector path starts low");
+	expectState(core, input, 5, 0, 0, "peer Read output starts low");
+
 	core.advanceTick();
-	expect(core.getStates()[4] == 1, "Write updates target on the following tick");
+	expectState(core, input, 0, 0, 1, "Clock changes on the tick");
+	expectState(core, input, 1, 0, 1, "first Read sees the new Clock state in the same tick");
+	expectState(core, input, 2, 0, 1, "first Trace resolves in the same tick");
+	expectState(core, input, 3, 0, 1, "first Write sees its Trace input in the same tick");
+	expectState(core, input, 4, 0, 1, "peer Read sees its Write source in the same tick");
+	expectState(core, input, 5, 0, 1, "peer Trace resolves in the same tick");
+	expectState(core, input, 6, 0, 1, "second Write sees its Trace input in the same tick");
+	expectState(core, input, 7, 0, 0, "Buffer retains one logical tick of latency");
+
+	core.advanceTick();
+	expectState(core, input, 2, 0, 0, "connector Trace follows the next Clock state without delay");
+	expectState(core, input, 5, 0, 0, "peer connector Trace follows without delay");
+	expectState(core, input, 7, 0, 1, "Buffer receives the prior tick's settled Write input");
+}
+
+void testWriteAcceptsReadInput() {
+	CompileInput input = makeInput(4, 2);
+	setKind(input, 0, 1, ToolKind::Clock);
+	setKind(input, 1, 1, ToolKind::Read);
+	setKind(input, 1, 0, ToolKind::Trace);
+	setKind(input, 2, 1, ToolKind::Write);
+	setKind(input, 3, 1, ToolKind::Buffer);
+	SimulationCore core;
+	CompileError error;
+	expect(core.compile(input, error), "Write accepts a neighboring Read as its single input");
+	expectState(core, input, 1, 0, 0, "Read output Trace starts low");
+
+	core.advanceTick();
+	expectState(core, input, 1, 1, 1, "Read sees the new Clock state in the same tick");
+	expectState(core, input, 1, 0, 1, "Read still drives its Trace output in the same tick");
+	expectState(core, input, 2, 1, 1, "Write sees its direct Read input in the same tick");
+	expectState(core, input, 3, 1, 0, "Buffer retains logical latency after direct Read input");
+
+	core.advanceTick();
+	expectState(core, input, 3, 1, 1, "Buffer receives the prior tick's direct Read input");
 }
 
 void testCrossIsolation() {
@@ -150,12 +203,11 @@ void testRemoteMeshConnectivity() {
 	SimulationCore core;
 	CompileError error;
 	expect(core.compile(input, error), "same-ID Mesh endpoints compile");
+	expectState(core, input, 3, 0, 1, "source Mesh endpoint resolves during reset");
+	expectState(core, input, 5, 0, 1, "remote same-ID Mesh endpoint resolves during reset");
+	expectState(core, input, 6, 0, 1, "remote Mesh drives its attached Trace during reset");
 	core.advanceTick();
-	expectState(core, input, 3, 0, 1, "source Mesh endpoint is powered");
-	expectState(core, input, 5, 0, 1, "remote same-ID Mesh endpoint is powered");
-	expectState(core, input, 6, 0, 1, "remote Mesh drives its attached Trace");
-	core.advanceTick();
-	expectState(core, input, 8, 0, 1, "Write receives the remote Mesh network on the next tick");
+	expectState(core, input, 8, 0, 1, "LED receives the settled remote Write input after one logical tick");
 }
 
 void testRemoteMeshIsolation() {
@@ -214,8 +266,7 @@ void testReadWriteIgnoreUnrelatedNeighbors() {
 	SimulationCore readCore;
 	CompileError error;
 	expect(readCore.compile(readInput, error), "Read ignores unrelated adjacent components");
-	readCore.advanceTick();
-	expectState(readCore, readInput, 2, 1, 1, "Read still drives a valid Trace output");
+	expectState(readCore, readInput, 2, 1, 1, "Read still drives a valid Trace output during reset");
 
 	CompileInput writeInput = makeInput(5, 2);
 	setKind(writeInput, 0, 1, ToolKind::Latch);
@@ -228,8 +279,7 @@ void testReadWriteIgnoreUnrelatedNeighbors() {
 	SimulationCore writeCore;
 	expect(writeCore.compile(writeInput, error), "Write ignores unrelated adjacent components");
 	writeCore.advanceTick();
-	writeCore.advanceTick();
-	expectState(writeCore, writeInput, 4, 1, 1, "Write still drives a valid target");
+	expectState(writeCore, writeInput, 4, 1, 1, "Write still drives a valid target after one logical tick");
 }
 
 void testReadWriteRequireValidPorts() {
@@ -269,6 +319,16 @@ void testReadWriteRequireValidPorts() {
 	SimulationCore writeWithTwoTraceSidesCore;
 	expect(!writeWithTwoTraceSidesCore.compile(writeWithTwoTraceSides, error), "Write rejects two physical Trace sides on one network");
 	expect(error.errorReason == "write_requires_one_trace_input", "Write preserves its physical Trace-side diagnostic");
+
+	CompileInput ambiguousRead = makeInput(3, 2);
+	setKind(ambiguousRead, 0, 0, ToolKind::Trace);
+	setKind(ambiguousRead, 1, 0, ToolKind::Write);
+	setKind(ambiguousRead, 0, 1, ToolKind::Latch);
+	setKind(ambiguousRead, 1, 1, ToolKind::Read);
+	setKind(ambiguousRead, 2, 1, ToolKind::Trace);
+	SimulationCore ambiguousReadCore;
+	expect(!ambiguousReadCore.compile(ambiguousRead, error), "Read rejects simultaneous device and Write sources");
+	expect(error.errorReason == "read_requires_one_source", "Read reports its ambiguous source diagnostic");
 }
 
 void expectMultiWriteAllowed(ToolKind kind, const std::string &name) {
@@ -345,21 +405,21 @@ void testLatchToggle() {
 	expect(toggleError == "not_latch", "non-Latch cell returns its diagnostic");
 
 	expect(core.toggleLatch(1, changes, toggleError), "any cell in a merged Latch toggles its component");
-	expect(changes == std::vector<int32_t>({0, 1, 1, 1, 2, 1}), "Latch toggle returns every immediately changed visible state");
+	expect(changes == std::vector<int32_t>({0, 1, 1, 1, 2, 1, 3, 1}), "Latch toggle immediately resolves connected Read and Trace states");
 	expectState(core, input, 0, 0, 1, "first merged Latch is on after toggle");
 	expectState(core, input, 1, 0, 1, "clicked merged Latch is on after toggle");
-	expectState(core, input, 3, 0, 0, "Latch toggle does not update Read output in the same tick");
+	expectState(core, input, 3, 0, 1, "Latch toggle immediately updates connected Trace output");
 
 	const std::vector<uint8_t> snapshot = core.captureState();
 	core.advanceTick();
-	expectState(core, input, 3, 0, 1, "toggled Latch reaches Read output on the next tick");
+	expectState(core, input, 3, 0, 1, "toggled Latch keeps its resolved Trace output across ticks");
 	std::string restoreError;
 	expect(core.restoreState(snapshot, restoreError), "snapshot restores toggled Latch state");
 	expectState(core, input, 0, 0, 1, "restored snapshot keeps toggled Latch state");
-	expectState(core, input, 3, 0, 0, "restored snapshot keeps pre-tick Trace state");
+	expectState(core, input, 3, 0, 1, "restored snapshot keeps resolved Trace state");
 
 	expect(core.toggleLatch(0, changes, toggleError), "toggled Latch can be toggled off again");
-	expect(changes == std::vector<int32_t>({0, 0, 1, 0, 2, 0}), "second toggle returns every immediately changed off state");
+	expect(changes == std::vector<int32_t>({0, 0, 1, 0, 2, 0, 3, 0}), "second toggle immediately clears connected Trace state");
 	core.reset();
 	expectState(core, input, 0, 0, 0, "reset restores the Latch design state");
 }
@@ -383,28 +443,38 @@ void testZeroWriteGateIdentities() {
 }
 
 void testSnapshotRestore() {
-	CompileInput input = makeInput(3, 1);
-	input.kinds[0] = static_cast<int32_t>(ToolKind::Clock);
-	input.kinds[1] = static_cast<int32_t>(ToolKind::Read);
-	input.kinds[2] = static_cast<int32_t>(ToolKind::Trace);
-	input.clockHoldTicks[0] = 1;
+	CompileInput input = makeInput(4, 2);
+	setKind(input, 0, 1, ToolKind::Clock);
+	setKind(input, 1, 1, ToolKind::Read);
+	setKind(input, 1, 0, ToolKind::Trace);
+	setKind(input, 2, 1, ToolKind::Write);
+	setKind(input, 3, 1, ToolKind::Buffer);
 	SimulationCore core;
 	CompileError error;
-	expect(core.compile(input, error), "Clock source compiles");
+	expect(core.compile(input, error), "direct Read-to-Write chain compiles");
 	core.advanceTick();
 	const std::vector<int32_t> expectedStates = core.getStates();
+	expectState(core, input, 1, 0, 1, "snapshot captures the Read output Trace");
+	expectState(core, input, 2, 1, 1, "snapshot captures the direct Read-to-Write signal");
+	expectState(core, input, 3, 1, 0, "logical target has not advanced at the snapshot tick");
 	const std::vector<uint8_t> snapshot = core.captureState();
 	core.advanceTick();
-	expect(core.getStates() != expectedStates, "second tick changes clock or trace state");
+	expect(core.getStates() != expectedStates, "second tick changes the direct connector chain");
 	std::string restoreError;
 	expect(core.restoreState(snapshot, restoreError), "snapshot restores onto the same topology");
 	expect(core.getStates() == expectedStates, "snapshot restores every visible state");
+	core.reset();
+	expectState(core, input, 1, 0, 0, "reset clears the Read output Trace");
+	expectState(core, input, 2, 1, 0, "reset clears the direct Read-to-Write signal");
+	expectState(core, input, 3, 1, 0, "reset clears the logical target");
 }
 
 } // namespace
 
 int main() {
 	testReadWritePipeline();
+	testReadWriteZeroDelayPeerPorts();
+	testWriteAcceptsReadInput();
 	testCrossIsolation();
 	testCrossChannelIsolation();
 	testMeshIgnoresIncompatibleNeighbors();

@@ -12,6 +12,7 @@ const BehaviorTestEntries := [
 	{"id": "simulationState", "path": "res://scripts/tests/SimulationStateTest.gd"},
 	{"id": "simulationCompileFailure", "path": "res://scripts/tests/SimulationCompileFailureTest.gd"},
 	{"id": "simulationNeighborIgnore", "path": "res://scripts/tests/SimulationNeighborIgnoreTest.gd"},
+	{"id": "simulationPortTiming", "path": "res://scripts/tests/SimulationPortTimingTest.gd"},
 	{"id": "simulationLatchInteraction", "path": "res://scripts/tests/SimulationLatchInteractionTest.gd"},
 	{"id": "selectionMarquee", "path": "res://scripts/tests/SelectionMarqueeTest.gd"},
 	{"id": "selectionDeletion", "path": "res://scripts/tests/SelectionDeletionTest.gd"},
