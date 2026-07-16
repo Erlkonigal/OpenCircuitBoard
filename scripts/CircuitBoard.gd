@@ -7,7 +7,8 @@ const ClipboardHistoryLimit := 4
 const PreviewBuildBatchSize := 64
 const PreviewBuildThreshold := 128
 const ClockHoldTicksMinimum := 1
-const ClockHoldTicksMaximum := 16
+const MeshIdMinimum := 1
+const PositiveIntegerMaximum := 2147483647
 
 enum InteractionMode {
 	Idle,
@@ -22,6 +23,8 @@ signal clipboardChanged(history: Array[Dictionary], selectedIndex: int)
 signal clipboardCopied(history: Array[Dictionary], selectedIndex: int)
 signal selectionChanged(item: Dictionary)
 signal clockHoldTicksChanged(holdTicks: int)
+signal meshIdChanged(meshId: int)
+signal latchInitialStateChanged(isOn: bool)
 
 @export_group("Board")
 @export var CellSize := 64
@@ -42,8 +45,11 @@ signal clockHoldTicksChanged(holdTicks: int)
 var ValidRect := Rect2()
 var Occupancy: Dictionary[Vector2i, Node2D] = {}
 var TileValues: Dictionary[Vector2i, Dictionary] = {}
+var RuntimeTileStates: Dictionary[Vector2i, bool] = {}
 var SelectedTool := "or"
 var ClockHoldTicks := ClockHoldTicksMinimum
+var MeshId := MeshIdMinimum
+var LatchInitialState := true
 var ToolRegistry: Dictionary = {}
 var EditorInputEnabled := true
 var CurrentInteractionMode := InteractionMode.Idle
@@ -228,14 +234,26 @@ func selectTool(toolId: String) -> void:
 	if ToolRegistry.has(toolId):
 		SelectedTool = toolId
 
-func setClockHoldTicks(requestedHoldTicks: int) -> void:
-	var normalizedHoldTicks := clampi(requestedHoldTicks, ClockHoldTicksMinimum, ClockHoldTicksMaximum)
+func setClockHoldTicks(requestedHoldTicks: int) -> bool:
+	if not EditorInputEnabled:
+		return false
+	var normalizedHoldTicks := normalizePositiveInteger(requestedHoldTicks, ClockHoldTicksMinimum)
+	var selectedCoordinates: Variant = getSingleSelectedCoordinatesForTool("clock")
+	if selectedCoordinates is Vector2i:
+		var didUpdateSelectedTile := setTileClockHoldTicks(selectedCoordinates as Vector2i, normalizedHoldTicks)
+		if didUpdateSelectedTile:
+			clockHoldTicksChanged.emit(getClockHoldTicks())
+		return didUpdateSelectedTile
 	if ClockHoldTicks == normalizedHoldTicks:
-		return
+		return false
 	ClockHoldTicks = normalizedHoldTicks
 	clockHoldTicksChanged.emit(ClockHoldTicks)
+	return true
 
 func getClockHoldTicks() -> int:
+	var selectedCoordinates: Variant = getSingleSelectedCoordinatesForTool("clock")
+	if selectedCoordinates is Vector2i:
+		return getTileClockHoldTicks(selectedCoordinates as Vector2i)
 	return ClockHoldTicks
 
 func getTileClockHoldTicks(coordinates: Vector2i) -> int:
@@ -243,6 +261,84 @@ func getTileClockHoldTicks(coordinates: Vector2i) -> int:
 	if String(tileValue.get("toolId", "")) != "clock":
 		return ClockHoldTicksMinimum
 	return int(tileValue.get("clockHoldTicks", ClockHoldTicksMinimum))
+
+func setMeshId(requestedMeshId: int) -> bool:
+	if not EditorInputEnabled:
+		return false
+	var normalizedMeshId := normalizePositiveInteger(requestedMeshId, MeshIdMinimum)
+	var selectedCoordinates: Variant = getSingleSelectedCoordinatesForTool("mesh")
+	if selectedCoordinates is Vector2i:
+		var didUpdateSelectedTile := setTileMeshId(selectedCoordinates as Vector2i, normalizedMeshId)
+		if didUpdateSelectedTile:
+			meshIdChanged.emit(getMeshId())
+		return didUpdateSelectedTile
+	if MeshId == normalizedMeshId:
+		return false
+	MeshId = normalizedMeshId
+	meshIdChanged.emit(MeshId)
+	return true
+
+func getMeshId() -> int:
+	var selectedCoordinates: Variant = getSingleSelectedCoordinatesForTool("mesh")
+	if selectedCoordinates is Vector2i:
+		return getTileMeshId(selectedCoordinates as Vector2i)
+	return MeshId
+
+func getTileMeshId(coordinates: Vector2i) -> int:
+	var tileValue := getTileValueAt(coordinates)
+	if String(tileValue.get("toolId", "")) != "mesh":
+		return MeshIdMinimum
+	return int(tileValue.get("meshId", MeshIdMinimum))
+
+func setLatchInitialState(requestedIsOn: bool) -> bool:
+	if not EditorInputEnabled:
+		return false
+	var selectedCoordinates: Variant = getSingleSelectedCoordinatesForTool("latch")
+	if selectedCoordinates is Vector2i:
+		var didUpdateSelectedTile := setTileLatchInitialState(selectedCoordinates as Vector2i, requestedIsOn)
+		if didUpdateSelectedTile:
+			latchInitialStateChanged.emit(getLatchInitialState())
+		return didUpdateSelectedTile
+	if LatchInitialState == requestedIsOn:
+		return false
+	LatchInitialState = requestedIsOn
+	latchInitialStateChanged.emit(LatchInitialState)
+	return true
+
+func getLatchInitialState() -> bool:
+	var selectedCoordinates: Variant = getSingleSelectedCoordinatesForTool("latch")
+	if selectedCoordinates is Vector2i:
+		return getTileState(selectedCoordinates as Vector2i)
+	return LatchInitialState
+
+func setTileClockHoldTicks(coordinates: Vector2i, requestedHoldTicks: int) -> bool:
+	if getToolIdAt(coordinates) != "clock":
+		return false
+	var tileValue := getTileValueAt(coordinates)
+	var normalizedHoldTicks := normalizePositiveInteger(requestedHoldTicks, ClockHoldTicksMinimum)
+	if int(tileValue.get("clockHoldTicks", ClockHoldTicksMinimum)) == normalizedHoldTicks:
+		return false
+	tileValue["clockHoldTicks"] = normalizedHoldTicks
+	return setTileValueWithHistory(coordinates, tileValue)
+
+func setTileMeshId(coordinates: Vector2i, requestedMeshId: int) -> bool:
+	if getToolIdAt(coordinates) != "mesh":
+		return false
+	var tileValue := getTileValueAt(coordinates)
+	var normalizedMeshId := normalizePositiveInteger(requestedMeshId, MeshIdMinimum)
+	if int(tileValue.get("meshId", MeshIdMinimum)) == normalizedMeshId:
+		return false
+	tileValue["meshId"] = normalizedMeshId
+	return setTileValueWithHistory(coordinates, tileValue)
+
+func setTileLatchInitialState(coordinates: Vector2i, requestedIsOn: bool) -> bool:
+	if getToolIdAt(coordinates) != "latch":
+		return false
+	var tileValue := getTileValueAt(coordinates)
+	if bool(tileValue.get("isOn", false)) == requestedIsOn:
+		return false
+	tileValue["isOn"] = requestedIsOn
+	return setTileValueWithHistory(coordinates, tileValue)
 
 func placeTile(coordinates: Vector2i, toolId := SelectedTool) -> bool:
 	if not isCoordinateValid(coordinates) or TileValues.has(coordinates):
@@ -261,6 +357,22 @@ func getInkAt(coordinates: Vector2i) -> Dictionary:
 	if not isCoordinateValid(coordinates) or not TileValues.has(coordinates):
 		return {}
 	return InkRegistry.getInk(getToolIdAt(coordinates))
+
+func getCursorInfoAt(coordinates: Vector2i) -> Dictionary:
+	var isValid := isCoordinateValid(coordinates)
+	var ink := getInkAt(coordinates) if isValid else {}
+	var toolId := String(ink.get("componentId", ""))
+	var meshId := getTileMeshId(coordinates) if toolId == "mesh" else MeshIdMinimum
+	var hoveredInkTitle := String(ink.get("title", "None"))
+	if toolId == "mesh":
+		hoveredInkTitle = "%s #%d" % [hoveredInkTitle, meshId]
+	return {
+		"coordinates": coordinates,
+		"isValid": isValid,
+		"toolId": toolId,
+		"hoveredInkTitle": hoveredInkTitle,
+		"meshId": meshId,
+	}
 
 func getTileState(coordinates: Vector2i) -> bool:
 	return bool(getTileValueAt(coordinates).get("isOn", false))
@@ -281,6 +393,45 @@ func applyTileStates(updates: Array) -> void:
 		if rawCoordinates is Vector2i and update.has("isOn"):
 			setTileState(rawCoordinates as Vector2i, bool(update["isOn"]))
 
+func applyRuntimeTileStates(updates: Array) -> void:
+	for updateVariant in updates:
+		if not (updateVariant is Dictionary):
+			continue
+		var update := updateVariant as Dictionary
+		var rawCoordinates: Variant = update.get("coordinates", null)
+		if rawCoordinates is Vector2i and update.has("isOn"):
+			setRuntimeTileState(rawCoordinates as Vector2i, bool(update["isOn"]))
+
+func setRuntimeTileState(coordinates: Vector2i, isOn: bool) -> bool:
+	if not TileValues.has(coordinates):
+		return false
+	var designIsOn := getTileState(coordinates)
+	var renderedIsOn := getRuntimeTileState(coordinates)
+	if isOn == designIsOn:
+		RuntimeTileStates.erase(coordinates)
+	else:
+		RuntimeTileStates[coordinates] = isOn
+	if renderedIsOn == isOn:
+		return false
+	var tile := Occupancy.get(coordinates) as Node2D
+	if tile:
+		tile.call("setInkState", isOn)
+	return true
+
+func getRuntimeTileState(coordinates: Vector2i) -> bool:
+	return bool(RuntimeTileStates.get(coordinates, getTileState(coordinates)))
+
+func hasRuntimeTileState(coordinates: Vector2i) -> bool:
+	return RuntimeTileStates.has(coordinates)
+
+func clearRuntimeTileStates() -> void:
+	for coordinatesVariant in RuntimeTileStates.keys():
+		var coordinates := coordinatesVariant as Vector2i
+		var tile := Occupancy.get(coordinates) as Node2D
+		if tile:
+			tile.call("setInkState", getTileState(coordinates))
+	RuntimeTileStates.clear()
+
 func getSimulationTiles() -> Array[Dictionary]:
 	var tiles: Array[Dictionary] = []
 	for coordinates in getSortedCoordinates(TileValues.keys()):
@@ -289,11 +440,25 @@ func getSimulationTiles() -> Array[Dictionary]:
 			"coordinates": coordinates,
 			"toolId": String(tileValue.get("toolId", "")),
 			"isOn": bool(tileValue.get("isOn", false)),
+			"clockHoldTicks": int(tileValue.get("clockHoldTicks", ClockHoldTicksMinimum)),
+			"meshId": int(tileValue.get("meshId", MeshIdMinimum)),
 		}
-		if String(tileValue.get("toolId", "")) == "clock":
-			simulationTile["clockHoldTicks"] = int(tileValue.get("clockHoldTicks", ClockHoldTicksMinimum))
 		tiles.append(simulationTile)
 	return tiles
+
+func getSimulationGrid() -> Dictionary:
+	return {
+		"width": GridWidthCount,
+		"height": GridHeightCount,
+		"origin": getSimulationGridOrigin(),
+		"tiles": getSimulationTiles(),
+	}
+
+func getSimulationGridOrigin() -> Vector2i:
+	return Vector2i(
+		floori(ValidRect.position.x / float(CellSize)),
+		floori(ValidRect.position.y / float(CellSize))
+	)
 
 func exportProjectData() -> Dictionary:
 	var tiles: Array[Dictionary] = []
@@ -307,10 +472,14 @@ func exportProjectData() -> Dictionary:
 		}
 		if String(tileValue.get("toolId", "")) == "clock":
 			projectTile["clockHoldTicks"] = int(tileValue.get("clockHoldTicks", ClockHoldTicksMinimum))
+		if String(tileValue.get("toolId", "")) == "mesh":
+			projectTile["meshId"] = int(tileValue.get("meshId", MeshIdMinimum))
 		tiles.append(projectTile)
 	return {
 		"selectedTool": SelectedTool,
 		"clockHoldTicks": ClockHoldTicks,
+		"meshId": MeshId,
+		"latchInitialState": LatchInitialState,
 		"tiles": tiles,
 	}
 
@@ -318,7 +487,13 @@ func importProjectData(projectData: Dictionary) -> bool:
 	var rawTiles: Variant = projectData.get("tiles", [])
 	if not (rawTiles is Array):
 		return false
-	var requestedClockHoldTicks := clampi(int(projectData.get("clockHoldTicks", ClockHoldTicksMinimum)), ClockHoldTicksMinimum, ClockHoldTicksMaximum)
+	if not isOptionalPositiveInteger(projectData.get("clockHoldTicks", null)):
+		return false
+	if not isOptionalPositiveInteger(projectData.get("meshId", null)):
+		return false
+	var requestedClockHoldTicks := normalizePositiveInteger(projectData.get("clockHoldTicks", null), ClockHoldTicksMinimum)
+	var requestedMeshId := normalizePositiveInteger(projectData.get("meshId", null), MeshIdMinimum)
+	var requestedLatchInitialState := bool(projectData.get("latchInitialState", InkRegistry.getDefaultIsOn("latch")))
 	var nextTiles: Dictionary[Vector2i, Dictionary] = {}
 	for rawTileVariant in rawTiles:
 		if not (rawTileVariant is Dictionary):
@@ -330,12 +505,20 @@ func importProjectData(projectData: Dictionary) -> bool:
 		var toolId := String(rawTile["toolId"])
 		if nextTiles.has(coordinates) or not isCoordinateValid(coordinates) or not ToolRegistry.has(toolId):
 			return false
-		nextTiles[coordinates] = makeTileValue(toolId, rawTile.get("isOn", null), rawTile.get("clockHoldTicks", requestedClockHoldTicks))
+		if toolId == "clock" and not isOptionalPositiveInteger(rawTile.get("clockHoldTicks", null)):
+			return false
+		if toolId == "mesh" and not isOptionalPositiveInteger(rawTile.get("meshId", null)):
+			return false
+		var tileIsOn: Variant = rawTile.get("isOn", requestedLatchInitialState if toolId == "latch" else null)
+		var tileClockHoldTicks: Variant = rawTile.get("clockHoldTicks", requestedClockHoldTicks)
+		var tileMeshId: Variant = rawTile.get("meshId", requestedMeshId)
+		nextTiles[coordinates] = makeTileValue(toolId, tileIsOn, tileClockHoldTicks, tileMeshId)
 	var requestedTool := String(projectData.get("selectedTool", "or"))
 	if not ToolRegistry.has(requestedTool):
-		requestedTool = "or"
+		return false
 	cancelActiveInteraction()
 	clearPreviewTiles()
+	clearRuntimeTileStates()
 	for tile in PlacedTiles.get_children():
 		tile.free()
 	Occupancy.clear()
@@ -345,6 +528,8 @@ func importProjectData(projectData: Dictionary) -> bool:
 			return false
 	SelectedTool = requestedTool
 	ClockHoldTicks = requestedClockHoldTicks
+	MeshId = requestedMeshId
+	LatchInitialState = requestedLatchInitialState
 	UndoStack.clear()
 	RedoStack.clear()
 	SelectedCells.clear()
@@ -355,6 +540,8 @@ func importProjectData(projectData: Dictionary) -> bool:
 	selectionChanged.emit(getSelectionSnapshot())
 	emitClipboardChanged()
 	clockHoldTicksChanged.emit(ClockHoldTicks)
+	meshIdChanged.emit(MeshId)
+	latchInitialStateChanged.emit(LatchInitialState)
 	return true
 
 func clearProjectData() -> void:
@@ -569,6 +756,8 @@ func copySelection() -> bool:
 			}
 			if String(tileValue.get("toolId", "")) == "clock":
 				clipboardTile["clockHoldTicks"] = int(tileValue.get("clockHoldTicks", ClockHoldTicksMinimum))
+			if String(tileValue.get("toolId", "")) == "mesh":
+				clipboardTile["meshId"] = int(tileValue.get("meshId", MeshIdMinimum))
 			tiles.append(clipboardTile)
 	var clipboardItem := {
 		"bounds": Rect2i(Vector2i.ZERO, SelectionBounds.size),
@@ -676,7 +865,12 @@ func getPasteTileMap(anchor: Vector2i, clipboardItem: Dictionary = {}) -> Dictio
 	for entryVariant in clipboardItem.get("tiles", []):
 		var entry := entryVariant as Dictionary
 		var offset: Vector2i = entry.get("offset", entry.get("position", Vector2i.ZERO))
-		tiles[anchor + offset] = makeTileValue(String(entry.get("toolId", "")), entry.get("isOn", null), entry.get("clockHoldTicks", null))
+		tiles[anchor + offset] = makeTileValue(
+			String(entry.get("toolId", "")),
+			entry.get("isOn", null),
+			entry.get("clockHoldTicks", null),
+			entry.get("meshId", null)
+		)
 	return tiles
 
 func isPasteValid(targetTiles: Dictionary[Vector2i, Dictionary]) -> bool:
@@ -963,23 +1157,32 @@ func makeChangesForActiveMap(changeMap: Dictionary) -> Array[Dictionary]:
 		changes.append(changeMap[coordinates])
 	return changes
 
-func makeTileValue(toolId: String, isOn: Variant = null, clockHoldTicks: Variant = null) -> Dictionary:
+func makeTileValue(toolId: String, isOn: Variant = null, clockHoldTicks: Variant = null, meshId: Variant = null) -> Dictionary:
 	if toolId.is_empty():
 		return {}
-	var resolvedIsOn := InkRegistry.getDefaultIsOn(toolId) if isOn == null else bool(isOn)
+	var defaultIsOn := LatchInitialState if toolId == "latch" else InkRegistry.getDefaultIsOn(toolId)
+	var resolvedIsOn := defaultIsOn if isOn == null else bool(isOn)
 	var tileValue := {
 		"toolId": toolId,
 		"isOn": resolvedIsOn,
 	}
 	if toolId == "clock":
-		var resolvedClockHoldTicks := ClockHoldTicks if clockHoldTicks == null else clampi(int(clockHoldTicks), ClockHoldTicksMinimum, ClockHoldTicksMaximum)
+		var resolvedClockHoldTicks := ClockHoldTicks if clockHoldTicks == null else normalizePositiveInteger(clockHoldTicks, ClockHoldTicksMinimum)
 		tileValue["clockHoldTicks"] = resolvedClockHoldTicks
+	if toolId == "mesh":
+		var resolvedMeshId := MeshId if meshId == null else normalizePositiveInteger(meshId, MeshIdMinimum)
+		tileValue["meshId"] = resolvedMeshId
 	return tileValue
 
 func normalizeTileValue(rawValue: Variant) -> Dictionary:
 	if rawValue is Dictionary:
 		var tileValue := rawValue as Dictionary
-		return makeTileValue(String(tileValue.get("toolId", "")), tileValue.get("isOn", null), tileValue.get("clockHoldTicks", null))
+		return makeTileValue(
+			String(tileValue.get("toolId", "")),
+			tileValue.get("isOn", null),
+			tileValue.get("clockHoldTicks", null),
+			tileValue.get("meshId", null)
+		)
 	if rawValue is String:
 		return makeTileValue(String(rawValue))
 	return {}
@@ -1000,17 +1203,21 @@ func setTileValue(coordinates: Vector2i, rawValue: Variant) -> bool:
 			Occupancy[coordinates].queue_free()
 			Occupancy.erase(coordinates)
 		TileValues.erase(coordinates)
+		RuntimeTileStates.erase(coordinates)
 		return true
 	if not isCoordinateValid(coordinates) or TileScene == null or not ToolRegistry.has(toolId):
 		return false
-	var isOn := bool(tileValue.get("isOn", false))
 	if Occupancy.has(coordinates) and getToolIdAt(coordinates) == toolId:
 		TileValues[coordinates] = tileValue.duplicate(true)
-		Occupancy[coordinates].call("setInkState", isOn)
+		if RuntimeTileStates.has(coordinates) and bool(RuntimeTileStates[coordinates]) == getTileState(coordinates):
+			RuntimeTileStates.erase(coordinates)
+		Occupancy[coordinates].call("setInkState", getRuntimeTileState(coordinates))
 		return true
 	if Occupancy.has(coordinates):
 		Occupancy[coordinates].queue_free()
 		Occupancy.erase(coordinates)
+	RuntimeTileStates.erase(coordinates)
+	var isOn := bool(tileValue.get("isOn", false))
 	var tile := TileScene.instantiate() as Node2D
 	PlacedTiles.add_child(tile)
 	tile.position = Vector2(coordinates * CellSize) + Vector2.ONE * CellSize / 2.0
@@ -1020,6 +1227,41 @@ func setTileValue(coordinates: Vector2i, rawValue: Variant) -> bool:
 	Occupancy[coordinates] = tile
 	TileValues[coordinates] = tileValue.duplicate(true)
 	return true
+
+func setTileValueWithHistory(coordinates: Vector2i, rawValue: Variant) -> bool:
+	var beforeTile := getTileValueAt(coordinates)
+	var afterTile := normalizeTileValue(rawValue)
+	if beforeTile == afterTile:
+		return false
+	var selectionSnapshot := getSelectionSnapshot()
+	if not setTileValue(coordinates, afterTile):
+		return false
+	pushHistory([makeChange(coordinates, beforeTile, afterTile)], selectionSnapshot, selectionSnapshot)
+	return true
+
+func getSingleSelectedCoordinatesForTool(toolId: String) -> Variant:
+	if SelectedCells.size() != 1:
+		return null
+	for coordinatesVariant in SelectedCells:
+		var coordinates := coordinatesVariant as Vector2i
+		if getToolIdAt(coordinates) == toolId:
+			return coordinates
+	return null
+
+func normalizePositiveInteger(requestedValue: Variant, fallbackValue: int) -> int:
+	if requestedValue == null:
+		return fallbackValue
+	return clampi(int(requestedValue), ClockHoldTicksMinimum, PositiveIntegerMaximum)
+
+func isOptionalPositiveInteger(rawValue: Variant) -> bool:
+	if rawValue == null:
+		return true
+	if rawValue is int:
+		return int(rawValue) >= ClockHoldTicksMinimum and int(rawValue) <= PositiveIntegerMaximum
+	if rawValue is float:
+		var floatValue := float(rawValue)
+		return floatValue >= float(ClockHoldTicksMinimum) and floatValue <= float(PositiveIntegerMaximum) and floatValue == floorf(floatValue)
+	return false
 
 func getToolIdAt(coordinates: Vector2i) -> String:
 	return String(getTileValueAt(coordinates).get("toolId", ""))

@@ -2,7 +2,6 @@ extends RefCounted
 
 const IconByComponentId := {
 	"cross": preload("res://assets/inks/Cross.svg"),
-	"tunnel": preload("res://assets/inks/Tunnel.svg"),
 	"mesh": preload("res://assets/inks/Mesh.svg"),
 	"bus": preload("res://assets/inks/Bus.svg"),
 	"busRed": preload("res://assets/inks/BusRed.svg"),
@@ -26,8 +25,7 @@ const IconByComponentId := {
 	"nand": preload("res://assets/inks/Nand.svg"),
 	"nor": preload("res://assets/inks/Nor.svg"),
 	"xnor": preload("res://assets/inks/Xnor.svg"),
-	"latchOn": preload("res://assets/inks/LatchOn.svg"),
-	"latchOff": preload("res://assets/inks/LatchOff.svg"),
+	"latch": preload("res://assets/inks/LatchOn.svg"),
 	"clock": preload("res://assets/inks/Clock.svg"),
 	"led": preload("res://assets/inks/Led.svg"),
 }
@@ -38,8 +36,7 @@ static func getInks() -> Array[Dictionary]:
 static func getPaletteInks() -> Array[Dictionary]:
 	return [
 		makeInk("cross", "Cross", "Space Optimization", Color("8da8cf")),
-		makeInk("tunnel", "Tunnel", "Space Optimization", Color("7483a1")),
-		makeInk("mesh", "Mesh", "Space Optimization", Color("91a66c")),
+		makeInk("mesh", "Mesh", "Space Optimization", Color("91a66c"), "", false, true, true),
 		makeInk("bus", "Bus", "Space Optimization", Color("2378f4"), "bus", true),
 		makeInk("read", "Read", "Trace", Color("f04f68")),
 		makeInk("write", "Write", "Trace", Color("4ca8ef")),
@@ -52,8 +49,7 @@ static func getPaletteInks() -> Array[Dictionary]:
 		makeInk("nand", "Nand", "Gates", Color("f59d35")),
 		makeInk("nor", "Nor", "Gates", Color("46d8e5")),
 		makeInk("xnor", "Xnor", "Gates", Color("bf58ee")),
-		makeInk("latchOn", "LatchOn", "General Components", Color("43ec90")),
-		makeInk("latchOff", "LatchOff", "General Components", Color("43ec90"), "", false, false),
+		makeInk("latch", "Latch", "General Components", Color("43ec90"), "", false, true, true),
 		makeInk("clock", "Clock", "General Components", Color("f05b70"), "", false, true, true),
 		makeInk("led", "Led", "General Components", Color("e6edf8")),
 	]

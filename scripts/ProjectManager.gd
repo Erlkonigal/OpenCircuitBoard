@@ -1,6 +1,6 @@
 extends RefCounted
 
-const ProjectFormatVersion := 1
+const ProjectFormatVersion := 2
 const ProjectEntryName := "project.json"
 const RecentProjectsSettingsPath := "user://recentProjects.cfg"
 const RecentProjectsSection := "projects"

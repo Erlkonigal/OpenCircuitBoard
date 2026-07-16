@@ -7,6 +7,6 @@ build/
 *.dblite
 *.import
 *.uid
-ocbsimulation.gdextension
+OcbSimulation.gdextension
 thirdparty/godotcpp/bin/
 thirdparty/godotcpp/gen/

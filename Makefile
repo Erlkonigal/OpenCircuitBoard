@@ -21,14 +21,18 @@ godotExecutable := $(downloadedGodotExecutable)
 godotDownloadPrerequisite := downloadGodot
 endif
 
-.PHONY: help init build frontend backend native clean \
+.PHONY: help init build frontend backend native coreTest nativeTest frontendTest test run clean \
 	checkPlatform checkBackendTools checkGodotExecutable downloadGodot
 
 help:
-	@echo "make frontend targetPlatform=<linux|windows> Build the empty Godot frontend shell"
-	@echo "make backend targetPlatform=<linux|windows>  Configure the empty CMake backend shell"
-	@echo "make build targetPlatform=<linux|windows>    Build both shells"
-	@echo "make native targetPlatform=<linux|windows>   Alias for the backend shell"
+	@echo "make frontend targetPlatform=<linux|windows> Validate the Godot frontend target"
+	@echo "make backend targetPlatform=<linux|windows>  Build the OcbSimulation GDExtension"
+	@echo "make build targetPlatform=<linux|windows>    Build the frontend target and GDExtension"
+	@echo "make coreTest targetPlatform=<linux|windows> Run native SimulationCore tests"
+	@echo "make nativeTest targetPlatform=<linux|windows> Run headless GDExtension smoke tests"
+	@echo "make frontendTest targetPlatform=<linux|windows> Run real-renderer frontend tests"
+	@echo "make test targetPlatform=<linux|windows> Run core, native, and frontend tests"
+	@echo "make native targetPlatform=<linux|windows>   Alias for the backend target"
 	@echo "make downloadGodot targetPlatform=<linux|windows> Download the pinned Godot executable"
 	@echo "make clean                                    Remove generated build outputs"
 
@@ -67,9 +71,35 @@ downloadGodot: checkPlatform
 	if [ ! -f "$(downloadedGodotExecutable)" ]; then echo "Downloaded Godot archive did not contain $(notdir $(downloadedGodotExecutable))."; exit 1; fi
 
 # Build entry points
-build: checkGodotExecutable checkBackendTools
-	@cmake -S "$(projectRoot)/extension" -B "$(backendBuildRoot)" -DGODOTCPPDIR="$(godotCppRoot)" -DOCBOUTPUTDIR="$(targetBuildRoot)"
+frontend: checkGodotExecutable
+	@true
+
+backend: checkGodotExecutable checkBackendTools
+	@mkdir -p "$(targetBuildRoot)"
+	@cd "$(targetBuildRoot)" && "$(godotExecutable)" --headless --quiet --dump-extension-api
+	@mv "$(targetBuildRoot)/extension_api.json" "$(targetBuildRoot)/extensionApi.json"
+	@sed -e 's/enabledClasses/enabled_classes/' -e 's/enabledBuiltinClasses/enabled_builtin_classes/' "$(projectRoot)/BuildProfile.json" > "$(targetBuildRoot)/godotcppProfile.json"
+	@cmake -S "$(projectRoot)/extension" -B "$(backendBuildRoot)" \
+		-DGODOTCPPDIR="$(godotCppRoot)" \
+		-DOCBOUTPUTDIR="$(targetBuildRoot)" \
+		-DGODOTCPP_CUSTOM_API_FILE="$(targetBuildRoot)/extensionApi.json" \
+		-DGODOTCPP_BUILD_PROFILE="$(targetBuildRoot)/godotcppProfile.json"
 	@cmake --build "$(backendBuildRoot)"
+
+build: frontend backend
+
+native: backend
+
+coreTest: backend
+	@ctest --test-dir "$(backendBuildRoot)" --output-on-failure
+
+nativeTest: backend
+	@"$(godotExecutable)" --headless --path "$(projectRoot)" --script "$(projectRoot)/scripts/tests/NativeSimulationTest.gd"
+
+frontendTest: build
+	@"$(godotExecutable)" --rendering-method gl_compatibility --path "$(projectRoot)" --script "$(projectRoot)/scripts/tests/FrontendTest.gd"
+
+test: coreTest nativeTest frontendTest
 
 run: build
 	@"$(godotExecutable)" --path "$(projectRoot)"

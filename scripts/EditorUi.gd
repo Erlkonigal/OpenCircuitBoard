@@ -4,6 +4,7 @@ const DockRegistry := preload("res://scripts/DockRegistry.gd")
 const InkRegistry := preload("res://scripts/InkRegistry.gd")
 const InkButton := preload("res://scripts/InkButton.gd")
 const ProjectManager := preload("res://scripts/ProjectManager.gd")
+const SimulationBridge := preload("res://scripts/SimulationBridge.gd")
 const FilePlusIcon := preload("res://assets/FilePlus.svg")
 const FolderOpenIcon := preload("res://assets/FolderOpen.svg")
 const SaveIcon := preload("res://assets/Save.svg")
@@ -49,7 +50,13 @@ const InkVariantMenuColumns := 3
 const InkVariantMenuButtonSize := Vector2i(28, 28)
 const InkVariantMenuSeparation := 4
 const InkVariantMenuPadding := 14
-const ClockSettingsMenuSize := Vector2i(146, 38)
+const ClockSettingsMenuSize := Vector2i(168, 38)
+const MeshSettingsMenuSize := Vector2i(136, 38)
+const LatchSettingsMenuSize := Vector2i(144, 38)
+const MeshIdMinimum := 1
+const MeshIdMaximum := 2147483647
+const ClockHoldTicksMinimum := 1
+const ClockHoldTicksMaximum := 2147483647
 const LeftDockSide := "left"
 const RightDockSide := "right"
 
@@ -89,9 +96,16 @@ var InkVariantMenuDock: Control
 var InkVariantMenuPaletteToolId := ""
 var InkVariantButtons: Dictionary[String, Button] = {}
 var ClockSettingsMenu: PopupPanel
-var ClockHoldTicksControl: Button
+var ClockHoldTicksControl: SpinBox
 var ClockHoldTicksSuffix: Label
 var ClockSettingsMenuDock: Control
+var MeshSettingsMenu: PopupPanel
+var MeshIdControl: SpinBox
+var MeshSettingsMenuDock: Control
+var LatchSettingsMenu: PopupPanel
+var LatchEnabledStateButton: Button
+var LatchDisabledStateButton: Button
+var LatchSettingsMenuDock: Control
 var LastSelectedInkIdByPaletteToolId: Dictionary[String, String] = {}
 var DockWidth := 272.0
 var RightDockWidth := 272.0
@@ -116,8 +130,7 @@ var SimulationStepLength := SimulationStepLengthMinimum
 var LoopFrequency := 5.0
 var IsDraggingStepLength := false
 var StepLengthDragRemainder := 0.0
-var IsDraggingClockHoldTicks := false
-var ClockHoldTicksDragRemainder := 0.0
+var SimulationBridgeInstance := SimulationBridge.new()
 
 func _ready() -> void:
 	Input.set_use_accumulated_input(false)
@@ -126,6 +139,10 @@ func _ready() -> void:
 	Board.connect("clipboardChanged", updateClipboardHistory)
 	Board.connect("clipboardCopied", showClipboardDock)
 	Board.connect("clockHoldTicksChanged", refreshClockHoldTicksControl)
+	if Board.has_signal("meshIdChanged"):
+		Board.connect("meshIdChanged", refreshMeshIdControl)
+	if Board.has_signal("latchInitialStateChanged"):
+		Board.connect("latchInitialStateChanged", refreshLatchInitialStateControls)
 	NewProjectButton.pressed.connect(createNewProject)
 	OpenProjectButton.pressed.connect(showOpenProjectDialog)
 	SaveProjectButton.pressed.connect(saveProject)
@@ -159,6 +176,8 @@ func _ready() -> void:
 	buildDockMenu()
 	buildInkVariantMenu()
 	buildClockSettingsMenu()
+	buildMeshSettingsMenu()
+	buildLatchSettingsMenu()
 	var initialLeftDockId := String(DockDefinitions[0].dockId)
 	activateDock(initialLeftDockId, LeftDockSide)
 	var initialRightDockId := getInitialRightDockId(initialLeftDockId)
@@ -174,8 +193,11 @@ func _process(_delta: float) -> void:
 	var mousePosition := Board.get_global_mouse_position()
 	var isValid: bool = Board.ValidRect.has_point(mousePosition)
 	var coordinates: Vector2i = Board.call("getGridCoordinates", mousePosition)
+	var cursorInfo: Dictionary = Board.call("getCursorInfoAt", coordinates) if isValid and Board.has_method("getCursorInfoAt") else {}
+	if not cursorInfo.is_empty():
+		isValid = bool(cursorInfo.get("isValid", isValid))
 	var hoveredInk: Dictionary = Board.call("getInkAt", coordinates) if isValid else {}
-	var hoveredInkTitle := String(hoveredInk.get("title", "None"))
+	var hoveredInkTitle := String(cursorInfo.get("hoveredInkTitle", hoveredInk.get("title", "None")))
 	for dock in getActiveDocks():
 		if dock.has_method("updateCursorInfo"):
 			dock.call("updateCursorInfo", coordinates, isValid, hoveredInkTitle)
@@ -304,6 +326,10 @@ func setDockForSide(definition: Dictionary, dockSide: String) -> void:
 			hideInkVariantMenu()
 		if ClockSettingsMenuDock == previousDock:
 			hideClockSettingsMenu()
+		if MeshSettingsMenuDock == previousDock:
+			hideMeshSettingsMenu()
+		if LatchSettingsMenuDock == previousDock:
+			hideLatchSettingsMenu()
 		previousDock.free()
 	var dockScene := definition.scene as PackedScene
 	var nextDock := dockScene.instantiate() as Control
@@ -329,7 +355,9 @@ func connectDockSignals(dock: Control, dockSide: String) -> void:
 		dock.connect("inkSelected", selectInk)
 	if dock.has_signal("inkVariantMenuRequested"):
 		dock.connect("inkVariantMenuRequested", showInkVariantMenu.bind(dock))
-	if dock.has_signal("clockSettingsMenuRequested"):
+	if dock.has_signal("componentSettingsMenuRequested"):
+		dock.connect("componentSettingsMenuRequested", showComponentSettingsMenu.bind(dock))
+	elif dock.has_signal("clockSettingsMenuRequested"):
 		dock.connect("clockSettingsMenuRequested", showClockSettingsMenu.bind(dock))
 	if dock.has_signal("eventRecorded"):
 		dock.connect("eventRecorded", recordEvent)
@@ -339,6 +367,8 @@ func connectDockSignals(dock: Control, dockSide: String) -> void:
 		dock.call("syncLastSelectedInkIds", LastSelectedInkIdByPaletteToolId)
 	if dock.has_method("syncSelectedInk"):
 		dock.call("syncSelectedInk", String(Board.get("SelectedTool")))
+	if dock.has_method("setInkInputEnabled"):
+		dock.call("setInkInputEnabled", not IsSimulating)
 
 func recordEvent(eventText: String) -> void:
 	EventHistory.append(eventText)
@@ -377,6 +407,8 @@ func buildInkVariantMenu() -> void:
 	)
 
 func showInkVariantMenu(anchorButton: Button, paletteToolId: String, dock: Control) -> void:
+	if IsSimulating:
+		return
 	var variants := InkRegistry.getInkVariants(paletteToolId)
 	if variants.size() < 2:
 		return
@@ -412,6 +444,9 @@ func populateInkVariantMenu(variants: Array[Dictionary]) -> void:
 	refreshInkVariantButtons()
 
 func selectInkVariant(ink: Dictionary) -> void:
+	if IsSimulating:
+		hideInkVariantMenu()
+		return
 	if InkVariantMenuDock and InkVariantMenuDock.has_method("selectInk"):
 		InkVariantMenuDock.call("selectInk", ink)
 	hideInkVariantMenu()
@@ -421,6 +456,178 @@ func hideInkVariantMenu() -> void:
 		InkVariantMenu.hide()
 	InkVariantMenuDock = null
 	InkVariantMenuPaletteToolId = ""
+
+func showComponentSettingsMenu(anchorButton: Button, componentId: String, dock: Control) -> void:
+	if IsSimulating:
+		return
+	match componentId:
+		"clock":
+			showClockSettingsMenu(anchorButton, dock)
+		"mesh":
+			showMeshSettingsMenu(anchorButton, dock)
+		"latch":
+			showLatchSettingsMenu(anchorButton, dock)
+		_:
+			return
+
+func buildMeshSettingsMenu() -> void:
+	MeshSettingsMenu = PopupPanel.new()
+	MeshSettingsMenu.transparent_bg = true
+	MeshSettingsMenu.add_theme_stylebox_override("panel", makeMenuBox())
+	$Interface.add_child(MeshSettingsMenu)
+	var content := HBoxContainer.new()
+	content.name = "MeshSettingsMenuContent"
+	content.add_theme_constant_override("separation", 4)
+	MeshSettingsMenu.add_child(content)
+	var idLabel := Label.new()
+	idLabel.name = "MeshIdLabel"
+	idLabel.text = "ID"
+	idLabel.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	idLabel.add_theme_color_override("font_color", Color("b4c1d3"))
+	content.add_child(idLabel)
+	MeshIdControl = SpinBox.new()
+	MeshIdControl.name = "MeshIdControl"
+	MeshIdControl.custom_minimum_size = Vector2(76, 24)
+	MeshIdControl.min_value = MeshIdMinimum
+	MeshIdControl.max_value = MeshIdMaximum
+	MeshIdControl.step = 1.0
+	MeshIdControl.allow_greater = false
+	MeshIdControl.allow_lesser = false
+	MeshIdControl.rounded = true
+	MeshIdControl.value_changed.connect(setMeshId)
+	configureMeshIdControl()
+	content.add_child(MeshIdControl)
+	MeshSettingsMenu.popup_hide.connect(func() -> void:
+		MeshSettingsMenuDock = null
+	)
+	refreshMeshIdControl()
+
+func showMeshSettingsMenu(anchorButton: Button, dock: Control) -> void:
+	if IsSimulating or MeshSettingsMenu == null:
+		return
+	hideInkVariantMenu()
+	hideClockSettingsMenu()
+	hideLatchSettingsMenu()
+	MeshSettingsMenuDock = dock
+	refreshMeshIdControl()
+	MeshSettingsMenu.popup(Rect2i(getSettingsMenuPosition(anchorButton, MeshSettingsMenuSize), MeshSettingsMenuSize))
+
+func hideMeshSettingsMenu() -> void:
+	if MeshSettingsMenu:
+		MeshSettingsMenu.hide()
+	MeshSettingsMenuDock = null
+
+func setMeshId(requestedMeshId: float) -> void:
+	if IsSimulating:
+		refreshMeshIdControl()
+		return
+	Board.call("setMeshId", int(requestedMeshId))
+	refreshMeshIdControl()
+
+func refreshMeshIdControl(_meshId := 0) -> void:
+	if MeshIdControl == null:
+		return
+	MeshIdControl.set_value_no_signal(maxi(MeshIdMinimum, int(Board.call("getMeshId"))))
+
+func configureMeshIdControl() -> void:
+	if MeshIdControl == null:
+		return
+	MeshIdControl.add_theme_icon_override("updown", makeSolidTexture(Vector2i(1, 1), Color.TRANSPARENT))
+	var lineEdit := MeshIdControl.get_line_edit()
+	lineEdit.alignment = HORIZONTAL_ALIGNMENT_CENTER
+	lineEdit.add_theme_font_size_override("font_size", TopBarFontSize)
+	lineEdit.add_theme_color_override("font_color", Color("9aa8bf"))
+	lineEdit.add_theme_color_override("font_selected_color", Color.WHITE)
+	lineEdit.add_theme_stylebox_override("normal", makeStepLengthBox(Color("2a3548")))
+	lineEdit.add_theme_stylebox_override("focus", makeStepLengthBox(Color("35435a")))
+	lineEdit.add_theme_stylebox_override("read_only", makeStepLengthBox(Color("202a38")))
+
+func buildLatchSettingsMenu() -> void:
+	LatchSettingsMenu = PopupPanel.new()
+	LatchSettingsMenu.transparent_bg = true
+	LatchSettingsMenu.add_theme_stylebox_override("panel", makeMenuBox())
+	$Interface.add_child(LatchSettingsMenu)
+	var content := HBoxContainer.new()
+	content.name = "LatchSettingsMenuContent"
+	content.add_theme_constant_override("separation", 4)
+	LatchSettingsMenu.add_child(content)
+	var stateLabel := Label.new()
+	stateLabel.name = "LatchStateLabel"
+	stateLabel.text = "State"
+	stateLabel.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	stateLabel.add_theme_color_override("font_color", Color("b4c1d3"))
+	content.add_child(stateLabel)
+	var stateGroup := ButtonGroup.new()
+	LatchEnabledStateButton = makeLatchStateButton("On")
+	LatchEnabledStateButton.name = "LatchEnabledStateButton"
+	LatchEnabledStateButton.button_group = stateGroup
+	LatchEnabledStateButton.pressed.connect(setLatchInitialState.bind(true))
+	content.add_child(LatchEnabledStateButton)
+	LatchDisabledStateButton = makeLatchStateButton("Off")
+	LatchDisabledStateButton.name = "LatchDisabledStateButton"
+	LatchDisabledStateButton.button_group = stateGroup
+	LatchDisabledStateButton.pressed.connect(setLatchInitialState.bind(false))
+	content.add_child(LatchDisabledStateButton)
+	LatchSettingsMenu.popup_hide.connect(func() -> void:
+		LatchSettingsMenuDock = null
+	)
+	refreshLatchInitialStateControls()
+
+func showLatchSettingsMenu(anchorButton: Button, dock: Control) -> void:
+	if IsSimulating or LatchSettingsMenu == null:
+		return
+	hideInkVariantMenu()
+	hideClockSettingsMenu()
+	hideMeshSettingsMenu()
+	LatchSettingsMenuDock = dock
+	refreshLatchInitialStateControls()
+	LatchSettingsMenu.popup(Rect2i(getSettingsMenuPosition(anchorButton, LatchSettingsMenuSize), LatchSettingsMenuSize))
+
+func hideLatchSettingsMenu() -> void:
+	if LatchSettingsMenu:
+		LatchSettingsMenu.hide()
+	LatchSettingsMenuDock = null
+
+func makeLatchStateButton(buttonText: String) -> Button:
+	var button := Button.new()
+	button.text = buttonText
+	button.toggle_mode = true
+	button.custom_minimum_size = Vector2(36, 24)
+	button.add_theme_font_size_override("font_size", 14)
+	button.add_theme_color_override("font_color", Color("9aa8bf"))
+	button.add_theme_color_override("font_hover_color", Color("e1e9f6"))
+	button.add_theme_color_override("font_pressed_color", Color("111a26"))
+	button.add_theme_stylebox_override("normal", makeStepLengthBox(Color("2a3548")))
+	button.add_theme_stylebox_override("hover", makeStepLengthBox(Color("35435a")))
+	button.add_theme_stylebox_override("pressed", makeStepLengthBox(Color("43ec90")))
+	button.add_theme_stylebox_override("hover_pressed", makeStepLengthBox(Color("5af0a0")))
+	return button
+
+func setLatchInitialState(isOn: bool) -> void:
+	if IsSimulating:
+		refreshLatchInitialStateControls()
+		return
+	Board.call("setLatchInitialState", isOn)
+	refreshLatchInitialStateControls()
+
+func refreshLatchInitialStateControls(_isOn := false) -> void:
+	if LatchEnabledStateButton == null or LatchDisabledStateButton == null:
+		return
+	var isOn := bool(Board.call("getLatchInitialState"))
+	LatchEnabledStateButton.set_pressed_no_signal(isOn)
+	LatchDisabledStateButton.set_pressed_no_signal(not isOn)
+
+func getSettingsMenuPosition(anchorButton: Button, menuSize: Vector2i) -> Vector2i:
+	var anchorRect := anchorButton.get_global_rect()
+	var popupPosition := Vector2i(anchorRect.position + Vector2(anchorRect.size.x + 4.0, 0.0))
+	var viewportSize := get_viewport_rect().size
+	if popupPosition.x + menuSize.x > int(viewportSize.x):
+		popupPosition.x = int(anchorRect.position.x) - menuSize.x - 4
+	if popupPosition.y + menuSize.y > int(viewportSize.y):
+		popupPosition.y = int(anchorRect.end.y) - menuSize.y
+	popupPosition.x = clampi(popupPosition.x, 0, maxi(0, int(viewportSize.x) - menuSize.x))
+	popupPosition.y = clampi(popupPosition.y, 0, maxi(0, int(viewportSize.y) - menuSize.y))
+	return popupPosition
 
 func buildClockSettingsMenu() -> void:
 	ClockSettingsMenu = PopupPanel.new()
@@ -437,10 +644,17 @@ func buildClockSettingsMenu() -> void:
 	holdLabel.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	holdLabel.add_theme_color_override("font_color", Color("b4c1d3"))
 	content.add_child(holdLabel)
-	ClockHoldTicksControl = Button.new()
+	ClockHoldTicksControl = SpinBox.new()
 	ClockHoldTicksControl.name = "ClockHoldTicksControl"
-	ClockHoldTicksControl.custom_minimum_size = Vector2(42, 24)
-	ClockHoldTicksControl.gui_input.connect(handleClockHoldTicksInput)
+	ClockHoldTicksControl.custom_minimum_size = Vector2(76, 24)
+	ClockHoldTicksControl.min_value = ClockHoldTicksMinimum
+	ClockHoldTicksControl.max_value = ClockHoldTicksMaximum
+	ClockHoldTicksControl.step = 1.0
+	ClockHoldTicksControl.allow_greater = false
+	ClockHoldTicksControl.allow_lesser = false
+	ClockHoldTicksControl.rounded = true
+	ClockHoldTicksControl.value_changed.connect(setClockHoldTicks)
+	configureClockHoldTicksControl()
 	content.add_child(ClockHoldTicksControl)
 	var ticksLabel := Label.new()
 	ticksLabel.name = "ClockHoldTicksSuffix"
@@ -452,59 +666,34 @@ func buildClockSettingsMenu() -> void:
 	ClockSettingsMenu.popup_hide.connect(func() -> void:
 		ClockSettingsMenuDock = null
 	)
-	configureClockHoldTicksControl()
 	refreshClockHoldTicksControl()
 
 func showClockSettingsMenu(anchorButton: Button, dock: Control) -> void:
-	if ClockSettingsMenu == null:
+	if IsSimulating or ClockSettingsMenu == null:
 		return
 	hideInkVariantMenu()
+	hideMeshSettingsMenu()
+	hideLatchSettingsMenu()
 	ClockSettingsMenuDock = dock
 	refreshClockHoldTicksControl()
-	var anchorRect := anchorButton.get_global_rect()
-	var popupPosition := Vector2i(anchorRect.position + Vector2(anchorRect.size.x + 4.0, 0.0))
-	var viewportSize := get_viewport_rect().size
-	if popupPosition.x + ClockSettingsMenuSize.x > int(viewportSize.x):
-		popupPosition.x = int(anchorRect.position.x) - ClockSettingsMenuSize.x - 4
-	if popupPosition.y + ClockSettingsMenuSize.y > int(viewportSize.y):
-		popupPosition.y = int(anchorRect.end.y) - ClockSettingsMenuSize.y
-	popupPosition.x = clampi(popupPosition.x, 0, maxi(0, int(viewportSize.x) - ClockSettingsMenuSize.x))
-	popupPosition.y = clampi(popupPosition.y, 0, maxi(0, int(viewportSize.y) - ClockSettingsMenuSize.y))
-	ClockSettingsMenu.popup(Rect2i(popupPosition, ClockSettingsMenuSize))
+	ClockSettingsMenu.popup(Rect2i(getSettingsMenuPosition(anchorButton, ClockSettingsMenuSize), ClockSettingsMenuSize))
 
 func hideClockSettingsMenu() -> void:
 	if ClockSettingsMenu:
 		ClockSettingsMenu.hide()
 	ClockSettingsMenuDock = null
 
-func handleClockHoldTicksInput(event: InputEvent) -> void:
-	var mouseButton := event as InputEventMouseButton
-	if mouseButton and mouseButton.button_index == MOUSE_BUTTON_LEFT:
-		IsDraggingClockHoldTicks = mouseButton.pressed
-		ClockHoldTicksDragRemainder = 0.0
-		get_viewport().set_input_as_handled()
+func setClockHoldTicks(requestedHoldTicks: float) -> void:
+	if IsSimulating:
+		refreshClockHoldTicksControl()
 		return
-	var mouseMotion := event as InputEventMouseMotion
-	if mouseMotion and IsDraggingClockHoldTicks:
-		ClockHoldTicksDragRemainder += mouseMotion.relative.x
-		var adjustment := 0
-		if ClockHoldTicksDragRemainder >= SimulationDragPixelsPerStep:
-			adjustment = floori(ClockHoldTicksDragRemainder / SimulationDragPixelsPerStep)
-		elif ClockHoldTicksDragRemainder <= -SimulationDragPixelsPerStep:
-			adjustment = ceili(ClockHoldTicksDragRemainder / SimulationDragPixelsPerStep)
-		if adjustment != 0:
-			setClockHoldTicks(int(Board.call("getClockHoldTicks")) + adjustment)
-			ClockHoldTicksDragRemainder -= float(adjustment) * SimulationDragPixelsPerStep
-		get_viewport().set_input_as_handled()
-
-func setClockHoldTicks(requestedHoldTicks: int) -> void:
-	Board.call("setClockHoldTicks", requestedHoldTicks)
+	Board.call("setClockHoldTicks", int(requestedHoldTicks))
 	refreshClockHoldTicksControl()
 
 func refreshClockHoldTicksControl(_holdTicks := 0) -> void:
 	var holdTicks := int(Board.call("getClockHoldTicks"))
 	if ClockHoldTicksControl:
-		ClockHoldTicksControl.text = str(holdTicks)
+		ClockHoldTicksControl.set_value_no_signal(maxi(ClockHoldTicksMinimum, holdTicks))
 	if ClockHoldTicksSuffix:
 		ClockHoldTicksSuffix.text = "tick" if holdTicks == 1 else "ticks"
 
@@ -524,6 +713,8 @@ func refreshInkVariantButtons() -> void:
 		button.call("setInkAppearance", ink.get("color", Color.WHITE), isSelected)
 
 func selectInk(ink: Dictionary) -> void:
+	if IsSimulating:
+		return
 	LastSelectedInkIdByPaletteToolId[InkRegistry.getPaletteToolId(ink)] = InkRegistry.getComponentId(ink)
 	Board.call("selectTool", InkRegistry.getComponentId(ink))
 	refreshInkVariantButtons()
@@ -711,11 +902,30 @@ func enterSimulation() -> void:
 	if IsSimulating:
 		return
 	Board.call("cancelActiveInteraction")
+	clearSimulationRuntimeStates()
+	var compileResult := SimulationBridgeInstance.compile(Board)
+	if not bool(compileResult.get("ok", false)):
+		abortSimulationStart(compileResult)
+		return
+	var statesResult := SimulationBridgeInstance.getCurrentUpdates()
+	if not bool(statesResult.get("ok", false)):
+		abortSimulationStart(statesResult)
+		return
+	var snapshotResult := SimulationBridgeInstance.captureState()
+	if not bool(snapshotResult.get("ok", false)):
+		abortSimulationStart(snapshotResult)
+		return
+	applySimulationUpdates(statesResult.get("updates", []) as Array)
+	hideInkVariantMenu()
+	hideClockSettingsMenu()
+	hideMeshSettingsMenu()
+	hideLatchSettingsMenu()
 	Board.call("setEditorInputEnabled", false)
 	IsSimulating = true
+	setCircuitEditorInputEnabled(false)
 	IsLooping = true
 	SimulationTick = 0
-	SimulationTimeline = [captureSimulationSnapshot()]
+	SimulationTimeline = [snapshotResult.get("snapshot", PackedByteArray()) as PackedByteArray]
 	SimulationAccumulator = 0.0
 	refreshSimulationControls()
 
@@ -727,7 +937,10 @@ func leaveSimulation() -> void:
 	SimulationTick = 0
 	SimulationTimeline.clear()
 	SimulationAccumulator = 0.0
+	clearSimulationRuntimeStates()
+	SimulationBridgeInstance.release()
 	Board.call("setEditorInputEnabled", true)
+	setCircuitEditorInputEnabled(true)
 	refreshSimulationControls()
 
 func toggleLoopStepMode() -> void:
@@ -740,19 +953,14 @@ func toggleLoopStepMode() -> void:
 func showPreviousSimulationTick() -> void:
 	if not IsSimulating or IsLooping or SimulationTick <= 0:
 		return
-	SimulationTick = maxi(0, SimulationTick - SimulationStepLength)
-	applySimulationSnapshot(SimulationTick)
-	refreshSimulationControls()
+	if showSimulationTick(maxi(0, SimulationTick - SimulationStepLength)):
+		refreshSimulationControls()
 
 func showNextSimulationTick() -> void:
 	if not IsSimulating or IsLooping:
 		return
-	var targetTick := SimulationTick + SimulationStepLength
-	while SimulationTimeline.size() <= targetTick:
-		advanceSimulationTimeline()
-	SimulationTick = targetTick
-	applySimulationSnapshot(SimulationTick)
-	refreshSimulationControls()
+	if showSimulationTick(SimulationTick + SimulationStepLength):
+		refreshSimulationControls()
 
 func updateSimulation(delta: float) -> void:
 	if not IsSimulating or not IsLooping:
@@ -762,26 +970,90 @@ func updateSimulation(delta: float) -> void:
 	var advancedTickCount := 0
 	while SimulationAccumulator >= tickPeriod and advancedTickCount < SimulationMaxCatchUpTicks:
 		SimulationAccumulator -= tickPeriod
-		advanceSimulationTimeline()
+		if not advanceSimulationTimeline():
+			break
 		advancedTickCount += 1
 	if advancedTickCount > 0:
 		refreshSimulationControls()
 
-func advanceSimulationTimeline() -> void:
-	if SimulationTick < SimulationTimeline.size() - 1:
-		SimulationTick += 1
-		applySimulationSnapshot(SimulationTick)
-		return
-	SimulationTimeline.append(captureSimulationSnapshot())
-	SimulationTick += 1
+func advanceSimulationTimeline() -> bool:
+	return showSimulationTick(SimulationTick + 1)
 
-func captureSimulationSnapshot() -> Array:
-	return (Board.call("getSimulationTiles") as Array).duplicate(true)
+func showSimulationTick(targetTick: int) -> bool:
+	if targetTick < 0 or SimulationTimeline.is_empty():
+		return false
+	if targetTick < SimulationTimeline.size():
+		return applySimulationSnapshot(targetTick)
+	return buildSimulationTimelineTo(targetTick)
 
-func applySimulationSnapshot(snapshotIndex: int) -> void:
+func buildSimulationTimelineTo(targetTick: int) -> bool:
+	var lastTick := SimulationTimeline.size() - 1
+	if not applySimulationSnapshot(lastTick):
+		return false
+	while SimulationTimeline.size() <= targetTick:
+		var advanceResult := SimulationBridgeInstance.advanceTick()
+		if not bool(advanceResult.get("ok", false)):
+			failActiveSimulation(advanceResult)
+			return false
+		applySimulationUpdates(advanceResult.get("updates", []) as Array)
+		var snapshotResult := SimulationBridgeInstance.captureState()
+		if not bool(snapshotResult.get("ok", false)):
+			failActiveSimulation(snapshotResult)
+			return false
+		SimulationTimeline.append(snapshotResult.get("snapshot", PackedByteArray()) as PackedByteArray)
+	SimulationTick = targetTick
+	return true
+
+func captureSimulationSnapshot() -> Dictionary:
+	return SimulationBridgeInstance.captureState()
+
+func applySimulationSnapshot(snapshotIndex: int) -> bool:
 	if snapshotIndex < 0 or snapshotIndex >= SimulationTimeline.size():
-		return
-	Board.call("applyTileStates", SimulationTimeline[snapshotIndex] as Array)
+		return false
+	var snapshotVariant: Variant = SimulationTimeline[snapshotIndex]
+	if not (snapshotVariant is PackedByteArray):
+		failActiveSimulation({"ok": false, "errorReason": "SimulationSnapshotInvalid"})
+		return false
+	var restoreResult := SimulationBridgeInstance.restoreState(snapshotVariant as PackedByteArray)
+	if not bool(restoreResult.get("ok", false)):
+		failActiveSimulation(restoreResult)
+		return false
+	applySimulationUpdates(restoreResult.get("updates", []) as Array)
+	SimulationTick = snapshotIndex
+	return true
+
+func applySimulationUpdates(updates: Array) -> void:
+	if Board.has_method("applyRuntimeTileStates"):
+		Board.call("applyRuntimeTileStates", updates)
+
+func clearSimulationRuntimeStates() -> void:
+	if Board.has_method("clearRuntimeTileStates"):
+		Board.call("clearRuntimeTileStates")
+
+func setCircuitEditorInputEnabled(isEnabled: bool) -> void:
+	for dock in getActiveDocks():
+		if dock.has_method("setInkInputEnabled"):
+			dock.call("setInkInputEnabled", isEnabled)
+
+func abortSimulationStart(result: Dictionary) -> void:
+	clearSimulationRuntimeStates()
+	SimulationBridgeInstance.release()
+	Board.call("setEditorInputEnabled", true)
+	setCircuitEditorInputEnabled(true)
+	recordEvent(getSimulationFailureText(result))
+	refreshSimulationControls()
+
+func failActiveSimulation(result: Dictionary) -> void:
+	recordEvent(getSimulationFailureText(result))
+	leaveSimulation()
+
+func getSimulationFailureText(result: Dictionary) -> String:
+	var reason := String(result.get("errorReason", "SimulationFailed"))
+	var errorX := int(result.get("errorX", -1))
+	var errorY := int(result.get("errorY", -1))
+	if bool(result.get("hasCoordinates", false)):
+		return "Simulation error at (%d, %d): %s" % [errorX, errorY, reason]
+	return "Simulation error: %s" % reason
 
 func setLoopFrequency(requestedFrequency: float) -> void:
 	LoopFrequency = clampf(roundf(requestedFrequency), SimulationFrequencyMinimum, SimulationFrequencyMaximum)
@@ -1019,8 +1291,15 @@ func configureStepLengthControl() -> void:
 
 func configureClockHoldTicksControl() -> void:
 	if ClockHoldTicksControl:
-		configureTickCountControl(ClockHoldTicksControl)
-		ClockHoldTicksControl.tooltip_text = "Drag to change clock hold ticks"
+		ClockHoldTicksControl.add_theme_icon_override("updown", makeSolidTexture(Vector2i(1, 1), Color.TRANSPARENT))
+		var lineEdit := ClockHoldTicksControl.get_line_edit()
+		lineEdit.alignment = HORIZONTAL_ALIGNMENT_CENTER
+		lineEdit.add_theme_font_size_override("font_size", TopBarFontSize)
+		lineEdit.add_theme_color_override("font_color", Color("9aa8bf"))
+		lineEdit.add_theme_color_override("font_selected_color", Color.WHITE)
+		lineEdit.add_theme_stylebox_override("normal", makeStepLengthBox(Color("2a3548")))
+		lineEdit.add_theme_stylebox_override("focus", makeStepLengthBox(Color("35435a")))
+		lineEdit.add_theme_stylebox_override("read_only", makeStepLengthBox(Color("202a38")))
 
 func configureTickCountControl(control: Button) -> void:
 	control.alignment = HORIZONTAL_ALIGNMENT_CENTER

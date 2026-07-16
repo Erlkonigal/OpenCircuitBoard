@@ -3,7 +3,7 @@ extends "res://scripts/DockView.gd"
 signal dockMenuRequested(menuButton: Button)
 signal inkSelected(ink: Dictionary)
 signal inkVariantMenuRequested(anchorButton: Button, paletteToolId: String)
-signal clockSettingsMenuRequested(anchorButton: Button)
+signal componentSettingsMenuRequested(anchorButton: Button, componentId: String)
 signal eventRecorded(eventText: String)
 
 const InkRegistry := preload("res://scripts/InkRegistry.gd")
@@ -178,7 +178,7 @@ func makeInkButton(ink: Dictionary) -> Button:
 	if bool(ink.get("isExpandable", false)):
 		button.gui_input.connect(handleInkButtonInput.bind(button, paletteToolId))
 	elif bool(ink.get("isConfigurable", false)):
-		button.gui_input.connect(handleClockSettingsInput.bind(button))
+		button.gui_input.connect(handleComponentSettingsInput.bind(button, InkRegistry.getComponentId(ink)))
 	InkButtons[paletteToolId] = button
 	return button
 
@@ -240,6 +240,11 @@ func syncLastSelectedInkIds(lastSelectedInkIds: Dictionary) -> void:
 func getSelectedInkId() -> String:
 	return SelectedInkId
 
+func setInkInputEnabled(isEnabled: bool) -> void:
+	for paletteToolId in InkButtons:
+		var button := InkButtons[paletteToolId]
+		button.disabled = not isEnabled
+
 func getLastSelectedInkId(paletteToolId: String) -> String:
 	return InkRegistry.getComponentId(getLastSelectedInk(paletteToolId))
 
@@ -272,12 +277,12 @@ func handleInkButtonInput(event: InputEvent, anchorButton: Button, paletteToolId
 		inkVariantMenuRequested.emit(anchorButton, paletteToolId)
 		accept_event()
 
-func handleClockSettingsInput(event: InputEvent, anchorButton: Button) -> void:
+func handleComponentSettingsInput(event: InputEvent, anchorButton: Button, componentId: String) -> void:
 	var mouseButton := event as InputEventMouseButton
 	if mouseButton == null or mouseButton.button_index != MOUSE_BUTTON_RIGHT:
 		return
 	if mouseButton.pressed:
-		clockSettingsMenuRequested.emit(anchorButton)
+		componentSettingsMenuRequested.emit(anchorButton, componentId)
 		accept_event()
 
 func setHoveredInk(titleText: String) -> void:
