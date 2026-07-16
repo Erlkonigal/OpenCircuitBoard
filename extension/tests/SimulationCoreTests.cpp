@@ -158,6 +158,32 @@ void testWriteAcceptsReadInput() {
 	expectState(core, input, 3, 1, 1, "Buffer receives the prior tick's direct Read input");
 }
 
+void testAlternatingReadWriteChain() {
+	CompileInput input = makeInput(6, 1);
+	setKind(input, 0, 0, ToolKind::Latch);
+	setInitialState(input, 0, 0, 1);
+	setKind(input, 1, 0, ToolKind::Read);
+	setKind(input, 2, 0, ToolKind::Write);
+	setKind(input, 3, 0, ToolKind::Read);
+	setKind(input, 4, 0, ToolKind::Write);
+	setKind(input, 5, 0, ToolKind::Led);
+	SimulationCore core;
+	CompileError error;
+	expect(core.compile(input, error), "alternating Latch-Read-Write-Read-Write-LED chain compiles");
+	expectState(core, input, 1, 0, 1, "first Read resolves from Latch during reset");
+	expectState(core, input, 2, 0, 1, "first Write resolves from first Read during reset");
+	expectState(core, input, 3, 0, 1, "second Read resolves from first Write during reset");
+	expectState(core, input, 4, 0, 1, "second Write resolves from second Read during reset");
+	expectState(core, input, 5, 0, 0, "LED preserves its logical tick delay");
+
+	core.advanceTick();
+	expectState(core, input, 1, 0, 1, "first Read remains resolved after one tick");
+	expectState(core, input, 2, 0, 1, "first Write remains resolved after one tick");
+	expectState(core, input, 3, 0, 1, "second Read remains resolved after one tick");
+	expectState(core, input, 4, 0, 1, "second Write remains resolved after one tick");
+	expectState(core, input, 5, 0, 1, "LED updates after one logical tick");
+}
+
 void testCrossIsolation() {
 	CompileInput input = makeInput(5, 1);
 	setKind(input, 0, 0, ToolKind::Latch);
@@ -523,6 +549,7 @@ int main() {
 	testBatchAdvanceMatchesSingleTicks();
 	testReadWriteZeroDelayPeerPorts();
 	testWriteAcceptsReadInput();
+	testAlternatingReadWriteChain();
 	testCrossIsolation();
 	testCrossChannelIsolation();
 	testMeshIgnoresIncompatibleNeighbors();

@@ -15,6 +15,12 @@ func run(context) -> void:
 	var writeTargetCoordinates := Vector2i(-5, -6)
 	var writeIgnoredBusCoordinates := Vector2i(-7, -7)
 	var writeIgnoredClockCoordinates := Vector2i(-6, -7)
+	var alternatingLatchCoordinates := Vector2i(-8, 10)
+	var alternatingFirstReadCoordinates := Vector2i(-7, 10)
+	var alternatingFirstWriteCoordinates := Vector2i(-6, 10)
+	var alternatingSecondReadCoordinates := Vector2i(-5, 10)
+	var alternatingSecondWriteCoordinates := Vector2i(-4, 10)
+	var alternatingLedCoordinates := Vector2i(-3, 10)
 	var crossSourceCoordinates := Vector2i(-8, 0)
 	var crossReadCoordinates := Vector2i(-7, 0)
 	var crossInputCoordinates := Vector2i(-6, 0)
@@ -40,6 +46,12 @@ func run(context) -> void:
 		{"coordinates": writeTargetCoordinates, "toolId": "led"},
 		{"coordinates": writeIgnoredBusCoordinates, "toolId": "busYellow"},
 		{"coordinates": writeIgnoredClockCoordinates, "toolId": "clock"},
+		{"coordinates": alternatingLatchCoordinates, "toolId": "latch"},
+		{"coordinates": alternatingFirstReadCoordinates, "toolId": "read"},
+		{"coordinates": alternatingFirstWriteCoordinates, "toolId": "write"},
+		{"coordinates": alternatingSecondReadCoordinates, "toolId": "read"},
+		{"coordinates": alternatingSecondWriteCoordinates, "toolId": "write"},
+		{"coordinates": alternatingLedCoordinates, "toolId": "led"},
 		{"coordinates": crossSourceCoordinates, "toolId": "latch"},
 		{"coordinates": crossReadCoordinates, "toolId": "read"},
 		{"coordinates": crossInputCoordinates, "toolId": "trace"},
@@ -67,6 +79,11 @@ func run(context) -> void:
 	assert(bool(board.call("getRuntimeTileState", writeReadCoordinates)))
 	assert(bool(board.call("getRuntimeTileState", writeCoordinates)))
 	assert(not bool(board.call("getRuntimeTileState", writeTargetCoordinates)))
+	assert(bool(board.call("getRuntimeTileState", alternatingFirstReadCoordinates)))
+	assert(bool(board.call("getRuntimeTileState", alternatingFirstWriteCoordinates)))
+	assert(bool(board.call("getRuntimeTileState", alternatingSecondReadCoordinates)))
+	assert(bool(board.call("getRuntimeTileState", alternatingSecondWriteCoordinates)))
+	assert(not bool(board.call("getRuntimeTileState", alternatingLedCoordinates)))
 	assert(bool(board.call("getRuntimeTileState", crossOutputCoordinates)))
 	assert(not bool(board.call("getRuntimeTileState", crossIgnoredBlueCoordinates)))
 	assert(not bool(board.call("getRuntimeTileState", crossIgnoredRedCoordinates)))
@@ -79,6 +96,11 @@ func run(context) -> void:
 	assert(bool(board.call("getRuntimeTileState", readOutputCoordinates)))
 	assert(bool(board.call("getRuntimeTileState", writeReadCoordinates)))
 	assert(bool(board.call("getRuntimeTileState", writeCoordinates)))
+	assert(bool(board.call("getRuntimeTileState", alternatingFirstReadCoordinates)))
+	assert(bool(board.call("getRuntimeTileState", alternatingFirstWriteCoordinates)))
+	assert(bool(board.call("getRuntimeTileState", alternatingSecondReadCoordinates)))
+	assert(bool(board.call("getRuntimeTileState", alternatingSecondWriteCoordinates)))
+	assert(bool(board.call("getRuntimeTileState", alternatingLedCoordinates)))
 	assert(bool(board.call("getRuntimeTileState", crossOutputCoordinates)))
 	assert(not bool(board.call("getRuntimeTileState", crossIgnoredBlueCoordinates)))
 	assert(not bool(board.call("getRuntimeTileState", crossIgnoredRedCoordinates)))
@@ -90,6 +112,7 @@ func run(context) -> void:
 	main.call("showNextSimulationTick")
 	assert(int(main.get("SimulationTick")) == 2)
 	assert(bool(board.call("getRuntimeTileState", writeTargetCoordinates)))
+	assert(bool(board.call("getRuntimeTileState", alternatingLedCoordinates)))
 	main.call("leaveSimulation")
 	for placement in placements:
 		assert(board.call("removeTile", placement["coordinates"]))

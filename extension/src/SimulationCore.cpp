@@ -268,17 +268,6 @@ bool SimulationCore::compile(const CompileInput &input, CompileError &error) {
 		return nextY * width_ + nextX;
 	};
 	const std::array<std::array<int32_t, 2>, 4> directions = {{{-1, 0}, {1, 0}, {0, -1}, {0, 1}}};
-	const auto countTraceNeighbors = [&](int32_t cell) {
-		int32_t traceSides = 0;
-		for (const std::array<int32_t, 2> &direction : directions) {
-			const int32_t neighbor = neighborAt(cell, direction[0], direction[1]);
-			if (neighbor >= 0 && isTrace(static_cast<ToolKind>(kinds_[neighbor]))) {
-				++traceSides;
-			}
-		}
-		return traceSides;
-	};
-
 	DisjointSet componentSet(cellCount);
 	for (int32_t cell = 0; cell < cellCount; ++cell) {
 		const ToolKind kind = static_cast<ToolKind>(kinds_[cell]);
@@ -440,16 +429,24 @@ bool SimulationCore::compile(const CompileInput &input, CompileError &error) {
 	readBindingByCell_.assign(cellCount, -1);
 	writeNetworkByCell_.assign(cellCount, -1);
 	componentInputNetworks_.resize(components_.size());
+	struct ReadPort {
+		int32_t sourceComponent = -1;
+		int32_t sourceWriteCell = -1;
+		std::vector<int32_t> outputNetworks;
+		std::vector<int32_t> adjacentWriteCells;
+	};
+	struct WritePort {
+		int32_t inputNetwork = -1;
+		int32_t inputReadCell = -1;
+		std::vector<int32_t> targetComponents;
+		std::vector<int32_t> adjacentReadCells;
+	};
+	std::vector<ReadPort> readPorts(cellCount);
+	std::vector<WritePort> writePorts(cellCount);
 	for (int32_t cell = 0; cell < cellCount; ++cell) {
 		const ToolKind kind = static_cast<ToolKind>(kinds_[cell]);
-		if (kind != ToolKind::Read && kind != ToolKind::Write) {
-			continue;
-		}
 		if (kind == ToolKind::Read) {
-			std::vector<int32_t> sourceComponents;
-			std::vector<int32_t> sourceWriteCells;
-			std::vector<int32_t> outputNetworks;
-			bool hasDirectWriteOutput = false;
+			ReadPort &port = readPorts[cell];
 			for (const std::array<int32_t, 2> &direction : directions) {
 				const int32_t neighbor = neighborAt(cell, direction[0], direction[1]);
 				if (neighbor < 0) {
@@ -457,42 +454,24 @@ bool SimulationCore::compile(const CompileInput &input, CompileError &error) {
 				}
 				const ToolKind neighborKind = static_cast<ToolKind>(kinds_[neighbor]);
 				if (isTrace(neighborKind)) {
-					appendUnique(outputNetworks, cellNetwork_[neighbor]);
+					appendUnique(port.outputNetworks, cellNetwork_[neighbor]);
 				} else if (neighborKind == ToolKind::Write) {
-					// A Trace-input Write feeds Read. A Write without Trace input consumes Read directly.
-					if (countTraceNeighbors(neighbor) == 1) {
-						appendUnique(sourceWriteCells, neighbor);
-					} else if (countTraceNeighbors(neighbor) == 0) {
-						hasDirectWriteOutput = true;
-					}
+					appendUnique(port.adjacentWriteCells, neighbor);
 				} else if (isReadSource(neighborKind)) {
-					appendUnique(sourceComponents, cellToComponent_[neighbor]);
+					const int32_t component = cellToComponent_[neighbor];
+					if (port.sourceComponent >= 0 && port.sourceComponent != component) {
+						return fail(cell, "read_requires_one_source");
+					}
+					port.sourceComponent = component;
 				}
 			}
-			if (sourceComponents.size() + sourceWriteCells.size() != 1) {
-				return fail(cell, "read_requires_one_source");
-			}
-			if (outputNetworks.empty() && !hasDirectWriteOutput) {
-				return fail(cell, "read_requires_output");
-			}
-			ReadBinding binding;
-			if (!sourceComponents.empty()) {
-				binding.sourceComponent = sourceComponents.front();
-			} else {
-				binding.sourceWriteCell = sourceWriteCells.front();
-			}
-			binding.outputNetworks = std::move(outputNetworks);
-			const int32_t bindingId = static_cast<int32_t>(readBindings_.size());
-			readBindingByCell_[cell] = bindingId;
-			readBindings_.push_back(std::move(binding));
 			continue;
 		}
-
+		if (kind != ToolKind::Write) {
+			continue;
+		}
+		WritePort &port = writePorts[cell];
 		int32_t traceSides = 0;
-		int32_t inputNetwork = -1;
-		std::vector<int32_t> inputReadCells;
-		std::vector<int32_t> targetComponents;
-		std::vector<int32_t> targetReadCells;
 		for (const std::array<int32_t, 2> &direction : directions) {
 			const int32_t neighbor = neighborAt(cell, direction[0], direction[1]);
 			if (neighbor < 0) {
@@ -501,28 +480,138 @@ bool SimulationCore::compile(const CompileInput &input, CompileError &error) {
 			const ToolKind neighborKind = static_cast<ToolKind>(kinds_[neighbor]);
 			if (isTrace(neighborKind)) {
 				++traceSides;
-				inputNetwork = cellNetwork_[neighbor];
+				port.inputNetwork = cellNetwork_[neighbor];
 			} else if (neighborKind == ToolKind::Read) {
-				appendUnique(inputReadCells, neighbor);
-				appendUnique(targetReadCells, neighbor);
+				appendUnique(port.adjacentReadCells, neighbor);
 			} else if (isWriteTarget(neighborKind)) {
-				appendUnique(targetComponents, cellToComponent_[neighbor]);
+				appendUnique(port.targetComponents, cellToComponent_[neighbor]);
 			}
 		}
-		if (traceSides > 1 || (traceSides == 0 && inputReadCells.size() != 1)) {
+		if (traceSides > 1) {
 			return fail(cell, "write_requires_one_input");
 		}
-		const bool hasReadTarget = traceSides == 1 && !targetReadCells.empty();
-		if (targetComponents.empty() && !hasReadTarget) {
+	}
+
+	for (int32_t cell = 0; cell < cellCount; ++cell) {
+		if (static_cast<ToolKind>(kinds_[cell]) != ToolKind::Read) {
+			continue;
+		}
+		ReadPort &readPort = readPorts[cell];
+		for (int32_t writeCell : readPort.adjacentWriteCells) {
+			if (writePorts[writeCell].inputNetwork < 0) {
+				continue;
+			}
+			if (readPort.sourceComponent >= 0 || (readPort.sourceWriteCell >= 0 && readPort.sourceWriteCell != writeCell)) {
+				return fail(cell, "read_requires_one_source");
+			}
+			readPort.sourceWriteCell = writeCell;
+		}
+	}
+
+	// Resolve direct connector direction from device or Trace inputs: Read drives Write, then Write drives Read.
+	bool changed = true;
+	while (changed) {
+		changed = false;
+		for (int32_t cell = 0; cell < cellCount; ++cell) {
+			if (static_cast<ToolKind>(kinds_[cell]) != ToolKind::Read) {
+				continue;
+			}
+			const ReadPort &readPort = readPorts[cell];
+			if (readPort.sourceComponent < 0 && readPort.sourceWriteCell < 0) {
+				continue;
+			}
+			for (int32_t writeCell : readPort.adjacentWriteCells) {
+				WritePort &writePort = writePorts[writeCell];
+				if (readPort.sourceWriteCell == writeCell) {
+					continue;
+				}
+				if (writePort.inputNetwork >= 0) {
+					continue;
+				}
+				if (writePort.inputReadCell >= 0) {
+					if (writePort.inputReadCell != cell) {
+						return fail(writeCell, "write_requires_one_input");
+					}
+					continue;
+				}
+				writePort.inputReadCell = cell;
+				changed = true;
+			}
+		}
+		for (int32_t cell = 0; cell < cellCount; ++cell) {
+			if (static_cast<ToolKind>(kinds_[cell]) != ToolKind::Write) {
+				continue;
+			}
+			const WritePort &writePort = writePorts[cell];
+			if (writePort.inputNetwork < 0 && writePort.inputReadCell < 0) {
+				continue;
+			}
+			for (int32_t readCell : writePort.adjacentReadCells) {
+				if (readCell == writePort.inputReadCell) {
+					continue;
+				}
+				ReadPort &readPort = readPorts[readCell];
+				if (readPort.sourceComponent >= 0 || (readPort.sourceWriteCell >= 0 && readPort.sourceWriteCell != cell)) {
+					return fail(readCell, "read_requires_one_source");
+				}
+				if (readPort.sourceWriteCell < 0) {
+					readPort.sourceWriteCell = cell;
+					changed = true;
+				}
+			}
+		}
+	}
+
+	for (int32_t cell = 0; cell < cellCount; ++cell) {
+		if (static_cast<ToolKind>(kinds_[cell]) != ToolKind::Read) {
+			continue;
+		}
+		const ReadPort &readPort = readPorts[cell];
+		if ((readPort.sourceComponent >= 0) == (readPort.sourceWriteCell >= 0)) {
+			return fail(cell, "read_requires_one_source");
+		}
+		bool hasDirectWriteOutput = false;
+		for (int32_t writeCell : readPort.adjacentWriteCells) {
+			if (writePorts[writeCell].inputReadCell == cell) {
+				hasDirectWriteOutput = true;
+				break;
+			}
+		}
+		if (readPort.outputNetworks.empty() && !hasDirectWriteOutput) {
+			return fail(cell, "read_requires_output");
+		}
+		ReadBinding readBinding;
+		readBinding.sourceComponent = readPort.sourceComponent;
+		readBinding.sourceWriteCell = readPort.sourceWriteCell;
+		readBinding.outputNetworks = readPort.outputNetworks;
+		const int32_t bindingId = static_cast<int32_t>(readBindings_.size());
+		readBindingByCell_[cell] = bindingId;
+		readBindings_.push_back(std::move(readBinding));
+	}
+
+	for (int32_t cell = 0; cell < cellCount; ++cell) {
+		if (static_cast<ToolKind>(kinds_[cell]) != ToolKind::Write) {
+			continue;
+		}
+		const WritePort &writePort = writePorts[cell];
+		if (writePort.inputNetwork < 0 && writePort.inputReadCell < 0) {
+			return fail(cell, "write_requires_one_input");
+		}
+		bool hasDirectedReadTarget = false;
+		for (int32_t readCell : writePort.adjacentReadCells) {
+			if (readCell != writePort.inputReadCell && readPorts[readCell].sourceWriteCell == cell) {
+				hasDirectedReadTarget = true;
+				break;
+			}
+		}
+		if (writePort.targetComponents.empty() && !hasDirectedReadTarget) {
 			return fail(cell, "write_requires_target");
 		}
 		WriteBinding binding;
 		binding.cell = cell;
-		binding.inputNetwork = inputNetwork;
-		if (traceSides == 0) {
-			binding.inputReadCell = inputReadCells.front();
-		}
-		binding.targetComponents = std::move(targetComponents);
+		binding.inputNetwork = writePort.inputNetwork;
+		binding.inputReadCell = writePort.inputReadCell;
+		binding.targetComponents = writePort.targetComponents;
 		writeBindings_.push_back(std::move(binding));
 	}
 
