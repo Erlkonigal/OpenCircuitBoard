@@ -8,7 +8,10 @@ func run(context) -> void:
 	var main := context.MainSceneRoot as Control
 	var board := context.CircuitBoard as Node2D
 	var projectTitle := context.getNodeRef(NodePath("Interface/TopBar/ProjectTitle")) as Label
+	var initialGridBounds := board.call("getGridBounds") as Rect2i
 	assert(projectTitle.text == "New Project - Open Circuit Board")
+	var resizedGridBounds := Rect2i(Vector2i(-24, -17), Vector2i(52, 34))
+	assert(board.call("setGridBounds", resizedGridBounds))
 	assert(board.call("placeTile", Vector2i(-3, 2), "xor"))
 	assert(board.call("placeTile", Vector2i(4, -1), "latch"))
 	main.call("setClockHoldTicks", 4)
@@ -19,10 +22,13 @@ func run(context) -> void:
 	board.call("selectTool", "busMagenta")
 	var expectedProjectData := board.call("exportProjectData") as Dictionary
 	var projectPath := "user://frontendTestProject.ocb"
+	var legacyProjectPath := "user://frontendTestProjectWithoutGrid.ocb"
 	var unsupportedProjectPath := "user://frontendTestUnsupportedV1.ocb"
 	var recentProjectsPath := "user://recentProjects.cfg"
 	var hadProject := FileAccess.file_exists(projectPath)
 	var previousProject := FileAccess.get_file_as_bytes(projectPath) if hadProject else PackedByteArray()
+	var hadLegacyProject := FileAccess.file_exists(legacyProjectPath)
+	var previousLegacyProject := FileAccess.get_file_as_bytes(legacyProjectPath) if hadLegacyProject else PackedByteArray()
 	var hadUnsupportedProject := FileAccess.file_exists(unsupportedProjectPath)
 	var previousUnsupportedProject := FileAccess.get_file_as_bytes(unsupportedProjectPath) if hadUnsupportedProject else PackedByteArray()
 	var hadRecentProjects := FileAccess.file_exists(recentProjectsPath)
@@ -33,13 +39,21 @@ func run(context) -> void:
 	assert(getProjectFormatVersion(projectPath) == ProjectManager.ProjectFormatVersion)
 	board.call("clearProjectData")
 	assert((board.call("getSimulationTiles") as Array).is_empty())
+	assert((board.call("getGridBounds") as Rect2i) == initialGridBounds)
 	main.set("PendingProjectFileAction", "open")
 	main.call("handleProjectFileSelected", projectPath)
 	assert(projectTitle.text == "frontendTestProject.ocb - Open Circuit Board")
 	var restoredProjectData := board.call("exportProjectData") as Dictionary
 	assert(JSON.stringify(restoredProjectData) == JSON.stringify(expectedProjectData))
+	assert((board.call("getGridBounds") as Rect2i) == resizedGridBounds)
 	assert(int(board.call("getTileClockHoldTicks", Vector2i(6, 3))) == 4)
 	assert(int(board.call("getTileMeshId", Vector2i(-6, 3))) == 17)
+	var legacyProjectData := expectedProjectData.duplicate(true)
+	legacyProjectData.erase("grid")
+	writeProjectArchive(legacyProjectPath, ProjectManager.ProjectFormatVersion, legacyProjectData)
+	var legacyLoadResult := ProjectManager.new().loadProject(board, legacyProjectPath)
+	assert(bool(legacyLoadResult.get("ok", false)))
+	assert((board.call("getGridBounds") as Rect2i) == initialGridBounds)
 	writeProjectArchive(unsupportedProjectPath, 1, expectedProjectData)
 	var unsupportedLoadResult := ProjectManager.new().loadProject(board, unsupportedProjectPath)
 	assert(not bool(unsupportedLoadResult.get("ok", false)))
@@ -47,6 +61,7 @@ func run(context) -> void:
 	main.call("createNewProject")
 	assert(projectTitle.text == "New Project - Open Circuit Board")
 	restoreFile(projectPath, hadProject, previousProject)
+	restoreFile(legacyProjectPath, hadLegacyProject, previousLegacyProject)
 	restoreFile(unsupportedProjectPath, hadUnsupportedProject, previousUnsupportedProject)
 	restoreFile(recentProjectsPath, hadRecentProjects, previousRecentProjects)
 

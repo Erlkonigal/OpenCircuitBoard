@@ -33,9 +33,21 @@ func setup(board: Node2D, coordinates: Vector2i, size: float) -> void:
 func updateGridCoordinates(board: Node2D, coordinates: Vector2i) -> int:
 	GridCoordinates = coordinates
 	var gridWidth := 1000
+	var gridOrigin := Vector2i.ZERO
 	if "GridWidthCount" in board:
 		gridWidth = int(board.GridWidthCount)
-	z_index = gridWidth - coordinates.x
+	if board.has_method("getGridBounds"):
+		var gridBoundsVariant: Variant = board.call("getGridBounds")
+		if gridBoundsVariant is Rect2i:
+			gridOrigin = (gridBoundsVariant as Rect2i).position
+	z_index = gridWidth - (coordinates.x - gridOrigin.x)
+	var faceLayerOffset := gridWidth + 1
+	if ShadowBlock:
+		ShadowBlock.z_index = 0
+	if BaseBlock:
+		BaseBlock.z_index = faceLayerOffset
+	if IconRect:
+		IconRect.z_index = faceLayerOffset + 1
 	return gridWidth
 
 func buildGeometry() -> void:

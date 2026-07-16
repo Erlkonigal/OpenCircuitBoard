@@ -2,6 +2,7 @@ extends Node2D
 
 const InkRegistry := preload("res://scripts/InkRegistry.gd")
 const SelectionOverlayScript := preload("res://scripts/SelectionOverlay.gd")
+const CanvasResizeOverlayScript := preload("res://scripts/CanvasResizeOverlay.gd")
 const CircuitTile := preload("res://scripts/CircuitTile.gd")
 const ClipboardHistoryLimit := 4
 const PreviewBuildBatchSize := 64
@@ -9,6 +10,9 @@ const PreviewBuildThreshold := 128
 const ClockHoldTicksMinimum := 1
 const MeshIdMinimum := 1
 const PositiveIntegerMaximum := 2147483647
+const MinimumGridSize := Vector2i(4, 4)
+const CanvasResizeHitRadiusPixels := 18.0
+const CanvasResizeHandleRadiusPixels := 7.0
 
 enum InteractionMode {
 	Idle,
@@ -17,7 +21,17 @@ enum InteractionMode {
 	Selecting,
 	Moving,
 	Pasting,
+	ResizingCanvas,
 }
+
+enum CanvasResizeCorner {
+	TopLeft,
+	TopRight,
+	BottomLeft,
+	BottomRight,
+}
+
+const CanvasResizeCornerNone := -1
 
 signal clipboardChanged(history: Array[Dictionary], selectedIndex: int)
 signal clipboardCopied(history: Array[Dictionary], selectedIndex: int)
@@ -43,6 +57,8 @@ signal latchInitialStateChanged(isOn: bool)
 @onready var PlacedTiles: Node2D = $PlacedTiles
 
 var ValidRect := Rect2()
+var GridBounds := Rect2i()
+var InitialGridBounds := Rect2i()
 var Occupancy: Dictionary[Vector2i, Node2D] = {}
 var TileValues: Dictionary[Vector2i, Dictionary] = {}
 var RuntimeTileStates: Dictionary[Vector2i, bool] = {}
@@ -72,16 +88,53 @@ var UndoStack: Array[Dictionary] = []
 var RedoStack: Array[Dictionary] = []
 var SelectionOverlay: Node2D
 var PreviewTiles: Node2D
+var CanvasResizeOverlay: Node2D
 var PreviewTileByCoordinates: Dictionary[Vector2i, Node2D] = {}
 var PreviewBuildGeneration := 0
 var PreviewBuildState: Dictionary = {}
 var IsPastePreviewBuilding := false
+var CanvasResizeStartBounds := Rect2i()
+var CanvasResizeHoveredCorner := CanvasResizeCornerNone
+var CanvasResizeActiveCorner := CanvasResizeCornerNone
 
 func _ready() -> void:
 	ToolRegistry = InkRegistry.getBoardToolRegistry()
 	CircuitTile.warmGeometry(float(CellSize))
-	var boardSize := Vector2(GridWidthCount * CellSize, GridHeightCount * CellSize)
-	ValidRect = Rect2(-boardSize / 2.0, boardSize)
+	InitialGridBounds = makeCenteredGridBounds(GridWidthCount, GridHeightCount)
+	applyGridBounds(InitialGridBounds)
+	Selector.size = Vector2.ONE * CellSize
+	PreviewTiles = createPreviewTiles()
+	SelectionOverlay = SelectionOverlayScript.new()
+	SelectionOverlay.name = "SelectionOverlay"
+	add_child(SelectionOverlay)
+	CanvasResizeOverlay = CanvasResizeOverlayScript.new()
+	CanvasResizeOverlay.name = "CanvasResizeOverlay"
+	add_child(CanvasResizeOverlay)
+	refreshGridLayers()
+	refreshCanvasResizeOverlay()
+
+func makeCenteredGridBounds(width: int, height: int) -> Rect2i:
+	var gridSize := Vector2i(maxi(MinimumGridSize.x, width), maxi(MinimumGridSize.y, height))
+	var origin := Vector2i(-floori(float(gridSize.x) / 2.0), -floori(float(gridSize.y) / 2.0))
+	return Rect2i(origin, gridSize)
+
+func getGridBounds() -> Rect2i:
+	return GridBounds
+
+func setGridBounds(requestedBounds: Rect2i) -> bool:
+	if not isGridBoundsValid(requestedBounds) or not doesGridBoundsContainTiles(requestedBounds):
+		return false
+	if requestedBounds == GridBounds:
+		return false
+	applyGridBounds(requestedBounds)
+	return true
+
+func applyGridBounds(nextBounds: Rect2i) -> void:
+	GridBounds = nextBounds
+	GridWidthCount = GridBounds.size.x
+	GridHeightCount = GridBounds.size.y
+	var boardSize := Vector2(GridBounds.size) * float(CellSize)
+	ValidRect = Rect2(Vector2(GridBounds.position) * float(CellSize), boardSize)
 	configurePatternCanvas(
 		CanvasBackground,
 		boardSize + Vector2.ONE * CanvasBackgroundMargin * 2.0,
@@ -92,13 +145,35 @@ func _ready() -> void:
 	configurePatternCanvas(CanvasBoard, boardSize, ValidRect.position, CanvasCornerRadius)
 	if BoardCamera and BoardCamera.has_method("setDragBounds"):
 		BoardCamera.call("setDragBounds", ValidRect)
-	Selector.size = Vector2.ONE * CellSize
+	refreshGridLayers()
+	refreshCanvasResizeOverlay()
+
+func isGridBoundsValid(bounds: Rect2i) -> bool:
+	return bounds.size.x >= MinimumGridSize.x and bounds.size.y >= MinimumGridSize.y
+
+func doesGridBoundsContainTiles(bounds: Rect2i) -> bool:
+	for coordinatesVariant in TileValues:
+		if not bounds.has_point(coordinatesVariant as Vector2i):
+			return false
+	return true
+
+func refreshGridLayers() -> void:
 	Selector.z_index = min(GridWidthCount * 2 + 100, RenderingServer.CANVAS_ITEM_Z_MAX)
-	PreviewTiles = createPreviewTiles()
-	SelectionOverlay = SelectionOverlayScript.new()
-	SelectionOverlay.name = "SelectionOverlay"
-	SelectionOverlay.z_index = min(GridWidthCount * 4 + 100, RenderingServer.CANVAS_ITEM_Z_MAX)
-	add_child(SelectionOverlay)
+	if PreviewTiles:
+		PreviewTiles.z_index = GridWidthCount * 3
+		for previewTileVariant in PreviewTiles.get_children():
+			var previewTile := previewTileVariant as Node2D
+			if previewTile and previewTile.has_method("updateGridCoordinates"):
+				previewTile.call("updateGridCoordinates", self, previewTile.get("GridCoordinates") as Vector2i)
+	if SelectionOverlay:
+		SelectionOverlay.z_index = min(GridWidthCount * 4 + 100, RenderingServer.CANVAS_ITEM_Z_MAX)
+	if CanvasResizeOverlay:
+		CanvasResizeOverlay.z_index = min(GridWidthCount * 4 + 110, RenderingServer.CANVAS_ITEM_Z_MAX)
+	for coordinatesVariant in Occupancy:
+		var coordinates := coordinatesVariant as Vector2i
+		var tile := Occupancy[coordinates] as Node2D
+		if tile and tile.has_method("updateGridCoordinates"):
+			tile.call("updateGridCoordinates", self, coordinates)
 
 func configurePatternCanvas(patternCanvas: ColorRect, patternCanvasSize: Vector2, patternCanvasPosition: Vector2, radius: float) -> void:
 	if patternCanvas == null:
@@ -125,6 +200,135 @@ func configureCanvasShadow(boardSize: Vector2) -> void:
 		material.set_shader_parameter("BoardOffset", shadowMargin)
 		material.set_shader_parameter("CornerRadius", CanvasCornerRadius)
 
+func getCanvasResizeHandleRadius() -> float:
+	var zoom := BoardCamera.zoom.x if BoardCamera else 1.0
+	return CanvasResizeHandleRadiusPixels / maxf(zoom, 0.01)
+
+func getCanvasResizeHitRadius() -> float:
+	var zoom := BoardCamera.zoom.x if BoardCamera else 1.0
+	return CanvasResizeHitRadiusPixels / maxf(zoom, 0.01)
+
+func getCanvasResizeCornerAt(boardPosition: Vector2) -> int:
+	if not EditorInputEnabled:
+		return CanvasResizeCornerNone
+	var corners := getCanvasResizeCorners()
+	var hitRadiusSquared := pow(getCanvasResizeHitRadius(), 2.0)
+	var closestCorner := CanvasResizeCornerNone
+	var closestDistanceSquared := INF
+	for cornerIndex in range(corners.size()):
+		var distanceSquared := boardPosition.distance_squared_to(corners[cornerIndex] as Vector2)
+		if distanceSquared <= hitRadiusSquared and distanceSquared < closestDistanceSquared:
+			closestCorner = cornerIndex
+			closestDistanceSquared = distanceSquared
+	return closestCorner
+
+func getCanvasResizeCorners() -> Array[Vector2]:
+	return [
+		ValidRect.position,
+		Vector2(ValidRect.end.x, ValidRect.position.y),
+		Vector2(ValidRect.position.x, ValidRect.end.y),
+		ValidRect.end,
+	]
+
+func beginCanvasResizeAt(boardPosition: Vector2) -> bool:
+	if not EditorInputEnabled or CurrentInteractionMode != InteractionMode.Idle:
+		return false
+	var corner := getCanvasResizeCornerAt(boardPosition)
+	if corner == CanvasResizeCornerNone:
+		return false
+	CanvasResizeStartBounds = GridBounds
+	CanvasResizeHoveredCorner = corner
+	CanvasResizeActiveCorner = corner
+	CurrentInteractionMode = InteractionMode.ResizingCanvas
+	refreshCanvasResizeOverlay()
+	return true
+
+func updateCanvasResizeAt(boardPosition: Vector2) -> bool:
+	if CurrentInteractionMode != InteractionMode.ResizingCanvas or CanvasResizeActiveCorner == CanvasResizeCornerNone:
+		return false
+	var requestedBounds := getResizedGridBounds(boardPosition)
+	if requestedBounds == GridBounds:
+		return false
+	var didResize := setGridBounds(requestedBounds)
+	refreshCanvasResizeOverlay()
+	return didResize
+
+func finishCanvasResize() -> bool:
+	if CurrentInteractionMode != InteractionMode.ResizingCanvas:
+		return false
+	CanvasResizeStartBounds = Rect2i()
+	CanvasResizeActiveCorner = CanvasResizeCornerNone
+	CurrentInteractionMode = InteractionMode.Idle
+	updateCanvasResizeHover(get_global_mouse_position())
+	return true
+
+func cancelCanvasResize() -> void:
+	if CurrentInteractionMode != InteractionMode.ResizingCanvas:
+		return
+	applyGridBounds(CanvasResizeStartBounds)
+	CanvasResizeStartBounds = Rect2i()
+	CanvasResizeActiveCorner = CanvasResizeCornerNone
+	CurrentInteractionMode = InteractionMode.Idle
+	updateCanvasResizeHover(get_global_mouse_position())
+
+func getResizedGridBounds(boardPosition: Vector2) -> Rect2i:
+	var snappedBoundary := Vector2i(
+		roundi(boardPosition.x / float(CellSize)),
+		roundi(boardPosition.y / float(CellSize))
+	)
+	var left := CanvasResizeStartBounds.position.x
+	var top := CanvasResizeStartBounds.position.y
+	var right := CanvasResizeStartBounds.end.x
+	var bottom := CanvasResizeStartBounds.end.y
+	match CanvasResizeActiveCorner:
+		CanvasResizeCorner.TopLeft:
+			left = mini(snappedBoundary.x, right - MinimumGridSize.x)
+			top = mini(snappedBoundary.y, bottom - MinimumGridSize.y)
+		CanvasResizeCorner.TopRight:
+			right = maxi(snappedBoundary.x, left + MinimumGridSize.x)
+			top = mini(snappedBoundary.y, bottom - MinimumGridSize.y)
+		CanvasResizeCorner.BottomLeft:
+			left = mini(snappedBoundary.x, right - MinimumGridSize.x)
+			bottom = maxi(snappedBoundary.y, top + MinimumGridSize.y)
+		CanvasResizeCorner.BottomRight:
+			right = maxi(snappedBoundary.x, left + MinimumGridSize.x)
+			bottom = maxi(snappedBoundary.y, top + MinimumGridSize.y)
+		_:
+			return GridBounds
+	return constrainGridBoundsToTiles(Rect2i(Vector2i(left, top), Vector2i(right - left, bottom - top)))
+
+func constrainGridBoundsToTiles(bounds: Rect2i) -> Rect2i:
+	var left := bounds.position.x
+	var top := bounds.position.y
+	var right := bounds.end.x
+	var bottom := bounds.end.y
+	for coordinatesVariant in TileValues:
+		var coordinates := coordinatesVariant as Vector2i
+		left = mini(left, coordinates.x)
+		top = mini(top, coordinates.y)
+		right = maxi(right, coordinates.x + 1)
+		bottom = maxi(bottom, coordinates.y + 1)
+	return Rect2i(Vector2i(left, top), Vector2i(right - left, bottom - top))
+
+func updateCanvasResizeHover(boardPosition: Vector2) -> void:
+	var nextHoveredCorner := CanvasResizeActiveCorner if CurrentInteractionMode == InteractionMode.ResizingCanvas else getCanvasResizeCornerAt(boardPosition)
+	if CanvasResizeHoveredCorner == nextHoveredCorner:
+		return
+	CanvasResizeHoveredCorner = nextHoveredCorner
+	refreshCanvasResizeOverlay()
+
+func refreshCanvasResizeOverlay() -> void:
+	if CanvasResizeOverlay == null:
+		return
+	CanvasResizeOverlay.call(
+		"setResizeState",
+		ValidRect,
+		getCanvasResizeHandleRadius(),
+		CanvasResizeHoveredCorner,
+		CanvasResizeActiveCorner,
+		EditorInputEnabled
+	)
+
 func createPreviewTiles() -> Node2D:
 	var tiles := Node2D.new()
 	tiles.name = "PreviewTiles"
@@ -134,6 +338,7 @@ func createPreviewTiles() -> Node2D:
 
 func _process(_delta: float) -> void:
 	updateSelectorPosition()
+	updateCanvasResizeHover(get_global_mouse_position())
 
 func _unhandled_input(event: InputEvent) -> void:
 	if not EditorInputEnabled:
@@ -182,6 +387,11 @@ func handleKeyInput(event: InputEventKey) -> void:
 func handleMouseButton(event: InputEventMouseButton) -> void:
 	if event.button_index != MOUSE_BUTTON_LEFT and event.button_index != MOUSE_BUTTON_RIGHT:
 		return
+	if CurrentInteractionMode == InteractionMode.ResizingCanvas:
+		if event.button_index == MOUSE_BUTTON_LEFT and not event.pressed:
+			finishCanvasResize()
+			get_viewport().set_input_as_handled()
+		return
 	if CurrentInteractionMode == InteractionMode.Pasting:
 		if event.pressed and event.button_index == MOUSE_BUTTON_LEFT:
 			confirmPastePreview()
@@ -199,6 +409,9 @@ func handleMouseButton(event: InputEventMouseButton) -> void:
 			get_viewport().set_input_as_handled()
 		return
 	if event.pressed:
+		if beginCanvasResizeAt(get_global_mouse_position()):
+			get_viewport().set_input_as_handled()
+			return
 		var coordinates := getGridCoordinates(get_global_mouse_position())
 		if handleLeftButtonPress(coordinates, event.shift_pressed):
 			get_viewport().set_input_as_handled()
@@ -214,6 +427,10 @@ func handleMouseButton(event: InputEventMouseButton) -> void:
 	get_viewport().set_input_as_handled()
 
 func handleMouseMotion(event: InputEventMouseMotion) -> void:
+	if CurrentInteractionMode == InteractionMode.ResizingCanvas:
+		updateCanvasResizeAt(get_global_mouse_position())
+		get_viewport().set_input_as_handled()
+		return
 	if CurrentInteractionMode == InteractionMode.Pasting and event.button_mask & MOUSE_BUTTON_MASK_MIDDLE:
 		return
 	var coordinates := getGridCoordinates(get_global_mouse_position())
@@ -463,10 +680,7 @@ func getSimulationGrid() -> Dictionary:
 	}
 
 func getSimulationGridOrigin() -> Vector2i:
-	return Vector2i(
-		floori(ValidRect.position.x / float(CellSize)),
-		floori(ValidRect.position.y / float(CellSize))
-	)
+	return GridBounds.position
 
 func exportProjectData() -> Dictionary:
 	var tiles: Array[Dictionary] = []
@@ -488,13 +702,52 @@ func exportProjectData() -> Dictionary:
 		"clockHoldTicks": ClockHoldTicks,
 		"meshId": MeshId,
 		"latchInitialState": LatchInitialState,
+		"grid": makeProjectGridData(GridBounds),
 		"tiles": tiles,
 	}
+
+func makeProjectGridData(bounds: Rect2i) -> Dictionary:
+	return {
+		"originX": bounds.position.x,
+		"originY": bounds.position.y,
+		"width": bounds.size.x,
+		"height": bounds.size.y,
+	}
+
+func parseProjectGridBounds(projectData: Dictionary) -> Variant:
+	if not projectData.has("grid"):
+		return InitialGridBounds
+	var rawGrid: Variant = projectData.get("grid", null)
+	if not (rawGrid is Dictionary):
+		return null
+	var grid := rawGrid as Dictionary
+	for key in ["originX", "originY", "width", "height"]:
+		if not grid.has(key) or not isGridInteger(grid[key]):
+			return null
+	var bounds := Rect2i(
+		Vector2i(int(grid["originX"]), int(grid["originY"])),
+		Vector2i(int(grid["width"]), int(grid["height"]))
+	)
+	return bounds if isGridBoundsValid(bounds) else null
+
+func isGridInteger(rawValue: Variant) -> bool:
+	if rawValue is int:
+		return true
+	if rawValue is float:
+		return float(rawValue) == floorf(float(rawValue))
+	return false
+
+func isCoordinateValidInBounds(coordinates: Vector2i, bounds: Rect2i) -> bool:
+	return bounds.has_point(coordinates)
 
 func importProjectData(projectData: Dictionary) -> bool:
 	var rawTiles: Variant = projectData.get("tiles", [])
 	if not (rawTiles is Array):
 		return false
+	var requestedGridBoundsVariant: Variant = parseProjectGridBounds(projectData)
+	if not (requestedGridBoundsVariant is Rect2i):
+		return false
+	var requestedGridBounds := requestedGridBoundsVariant as Rect2i
 	if not isOptionalPositiveInteger(projectData.get("clockHoldTicks", null)):
 		return false
 	if not isOptionalPositiveInteger(projectData.get("meshId", null)):
@@ -511,7 +764,7 @@ func importProjectData(projectData: Dictionary) -> bool:
 			return false
 		var coordinates := Vector2i(int(rawTile["x"]), int(rawTile["y"]))
 		var toolId := String(rawTile["toolId"])
-		if nextTiles.has(coordinates) or not isCoordinateValid(coordinates) or not ToolRegistry.has(toolId):
+		if nextTiles.has(coordinates) or not isCoordinateValidInBounds(coordinates, requestedGridBounds) or not ToolRegistry.has(toolId):
 			return false
 		if toolId == "clock" and not isOptionalPositiveInteger(rawTile.get("clockHoldTicks", null)):
 			return false
@@ -531,6 +784,7 @@ func importProjectData(projectData: Dictionary) -> bool:
 		tile.free()
 	Occupancy.clear()
 	TileValues.clear()
+	applyGridBounds(requestedGridBounds)
 	for coordinates in getSortedCoordinates(nextTiles.keys()):
 		if not setTileValue(coordinates, nextTiles[coordinates]):
 			return false
@@ -553,7 +807,11 @@ func importProjectData(projectData: Dictionary) -> bool:
 	return true
 
 func clearProjectData() -> void:
-	importProjectData({"selectedTool": "or", "tiles": []})
+	importProjectData({
+		"selectedTool": "or",
+		"grid": makeProjectGridData(InitialGridBounds),
+		"tiles": [],
+	})
 
 func setEditorInputEnabled(isEnabled: bool) -> void:
 	if EditorInputEnabled == isEnabled:
@@ -561,6 +819,7 @@ func setEditorInputEnabled(isEnabled: bool) -> void:
 	EditorInputEnabled = isEnabled
 	if not EditorInputEnabled:
 		cancelActiveInteraction()
+	refreshCanvasResizeOverlay()
 
 func getClipboardItem() -> Dictionary:
 	return getSelectedClipboardItem().duplicate(true)
@@ -916,6 +1175,8 @@ func cancelActiveInteraction() -> void:
 			cancelPastePreview()
 		InteractionMode.Moving:
 			clearPreviewTiles()
+		InteractionMode.ResizingCanvas:
+			cancelCanvasResize()
 		_:
 			pass
 	ActiveChanges.clear()
@@ -923,6 +1184,7 @@ func cancelActiveInteraction() -> void:
 	HasLastStrokeCoordinates = false
 	CurrentInteractionMode = InteractionMode.Idle
 	refreshSelectionOverlay()
+	refreshCanvasResizeOverlay()
 
 func rollbackActiveChanges() -> void:
 	for change in getActiveChanges():
@@ -1275,8 +1537,7 @@ func getToolIdAt(coordinates: Vector2i) -> String:
 	return String(getTileValueAt(coordinates).get("toolId", ""))
 
 func isCoordinateValid(coordinates: Vector2i) -> bool:
-	var cellCenter := Vector2(coordinates * CellSize) + Vector2.ONE * CellSize * 0.5
-	return ValidRect.has_point(cellCenter)
+	return GridBounds.has_point(coordinates)
 
 func makeGridRect(first: Vector2i, second: Vector2i) -> Rect2i:
 	var origin := Vector2i(mini(first.x, second.x), mini(first.y, second.y))
