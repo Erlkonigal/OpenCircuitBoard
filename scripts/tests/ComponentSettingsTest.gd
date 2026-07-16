@@ -32,9 +32,11 @@ func run(context) -> void:
 	var latchCoordinates := Vector2i(-12, -12)
 	assert(board.call("placeTile", latchCoordinates))
 	assert(not bool(board.call("getTileState", latchCoordinates)))
+	assertLatchIcon(board, latchCoordinates, false)
 	board.call("setSelection", Rect2i(latchCoordinates, Vector2i.ONE))
 	latchEnabledStateButton.emit_signal("pressed")
 	assert(bool(board.call("getTileState", latchCoordinates)))
+	assertLatchIcon(board, latchCoordinates, true)
 	board.call("clearSelection")
 	assert(not bool(board.call("getLatchInitialState")))
 	main.call("hideLatchSettingsMenu")
@@ -64,3 +66,9 @@ func run(context) -> void:
 	assert(int(board.call("getMeshId")) == 7)
 	assert(board.call("removeTile", latchCoordinates))
 	assert(board.call("removeTile", meshCoordinates))
+
+func assertLatchIcon(board: Node2D, coordinates: Vector2i, isOn: bool) -> void:
+	var occupancy: Dictionary = board.get("Occupancy")
+	var latchTile := occupancy.get(coordinates) as Node2D
+	var iconRect := latchTile.get_node("Icon") as TextureRect
+	assert(iconRect.texture == InkRegistry.getInkIcon("latch", isOn))

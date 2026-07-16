@@ -95,9 +95,12 @@ static func getIconColor(baseColor: Color, nextIsOn: bool) -> Color:
 
 func setAttributes(icon: Texture2D, baseColor: Color, nextIsOn := true) -> void:
 	InkColor = baseColor
+	setIcon(icon)
+	setInkState(nextIsOn)
+
+func setIcon(icon: Texture2D) -> void:
 	IconRect.texture = icon
 	IconRect.visible = icon != null
-	setInkState(nextIsOn)
 
 func setInkState(nextIsOn: bool) -> void:
 	IsOn = nextIsOn

@@ -281,6 +281,9 @@ bool SimulationCore::compile(const CompileInput &input, CompileError &error) {
 			if (kind == ToolKind::Clock && clockHoldTicks_[cell] != clockHoldTicks_[neighbor]) {
 				continue;
 			}
+			if (kind == ToolKind::Latch && (initialStates_[cell] != 0) != (initialStates_[neighbor] != 0)) {
+				continue;
+			}
 			componentSet.unite(cell, neighbor);
 		}
 	}
@@ -307,9 +310,6 @@ bool SimulationCore::compile(const CompileInput &input, CompileError &error) {
 			componentId = found->second;
 		}
 		Component &component = components_[componentId];
-		if (kind == ToolKind::Latch && component.latchInitialState != (initialStates_[cell] != 0 ? 1 : 0)) {
-			return fail(cell, "latch_initial_state_conflict");
-		}
 		component.cells.push_back(cell);
 		cellToComponent_[cell] = componentId;
 	}
@@ -333,28 +333,25 @@ bool SimulationCore::compile(const CompileInput &input, CompileError &error) {
 	std::vector<int32_t> crossVerticalRepresentative(cellCount, -1);
 	const auto connectCrossPair = [&](int32_t cross, int32_t first, int32_t second, std::vector<int32_t> &representatives) {
 		if (first < 0 || second < 0) {
-			return true;
+			return;
 		}
 		const ToolKind firstKind = static_cast<ToolKind>(kinds_[first]);
 		const ToolKind secondKind = static_cast<ToolKind>(kinds_[second]);
 		if (!isConductor(firstKind) || !isConductor(secondKind)) {
-			return true;
+			return;
 		}
 		if (colorForKind(firstKind) != colorForKind(secondKind)) {
-			return false;
+			return;
 		}
 		conductorSet.unite(first, second);
 		representatives[cross] = first;
-		return true;
 	};
 	for (int32_t cell = 0; cell < cellCount; ++cell) {
 		if (static_cast<ToolKind>(kinds_[cell]) != ToolKind::Cross) {
 			continue;
 		}
-		if (!connectCrossPair(cell, neighborAt(cell, -1, 0), neighborAt(cell, 1, 0), crossHorizontalRepresentative) ||
-				!connectCrossPair(cell, neighborAt(cell, 0, -1), neighborAt(cell, 0, 1), crossVerticalRepresentative)) {
-			return fail(cell, "cross_color_mismatch");
-		}
+		connectCrossPair(cell, neighborAt(cell, -1, 0), neighborAt(cell, 1, 0), crossHorizontalRepresentative);
+		connectCrossPair(cell, neighborAt(cell, 0, -1), neighborAt(cell, 0, 1), crossVerticalRepresentative);
 	}
 
 	std::vector<int32_t> meshAnchorRepresentative(cellCount, -1);
@@ -364,6 +361,7 @@ bool SimulationCore::compile(const CompileInput &input, CompileError &error) {
 			continue;
 		}
 		std::vector<int32_t> traceNeighbors;
+		// A Mesh carries one channel, selected by the first Trace in W/E/N/S order.
 		int32_t color = 0;
 		for (const std::array<int32_t, 2> &direction : directions) {
 			const int32_t neighbor = neighborAt(cell, direction[0], direction[1]);
@@ -371,11 +369,12 @@ bool SimulationCore::compile(const CompileInput &input, CompileError &error) {
 				continue;
 			}
 			const int32_t neighborColor = colorForKind(static_cast<ToolKind>(kinds_[neighbor]));
-			if (color != 0 && color != neighborColor) {
-				return fail(cell, "mesh_requires_one_trace_color");
+			if (color == 0) {
+				color = neighborColor;
 			}
-			color = neighborColor;
-			traceNeighbors.push_back(neighbor);
+			if (color == neighborColor) {
+				traceNeighbors.push_back(neighbor);
+			}
 		}
 		if (traceNeighbors.empty()) {
 			continue;
@@ -448,8 +447,6 @@ bool SimulationCore::compile(const CompileInput &input, CompileError &error) {
 					appendUnique(outputNetworks, cellNetwork_[neighbor]);
 				} else if (isReadSource(neighborKind)) {
 					appendUnique(sourceComponents, cellToComponent_[neighbor]);
-				} else if (neighborKind != ToolKind::Empty) {
-					return fail(cell, "read_invalid_neighbor");
 				}
 			}
 			if (sourceComponents.size() != 1) {
@@ -484,8 +481,6 @@ bool SimulationCore::compile(const CompileInput &input, CompileError &error) {
 				inputNetwork = cellNetwork_[neighbor];
 			} else if (isWriteTarget(neighborKind)) {
 				appendUnique(targetComponents, cellToComponent_[neighbor]);
-			} else if (neighborKind != ToolKind::Empty) {
-				return fail(cell, "write_invalid_neighbor");
 			}
 		}
 		if (traceSides != 1) {
@@ -498,9 +493,9 @@ bool SimulationCore::compile(const CompileInput &input, CompileError &error) {
 		binding.inputNetwork = inputNetwork;
 		binding.targetComponents = std::move(targetComponents);
 		for (int32_t component : binding.targetComponents) {
-			componentInputNetworks_[component].push_back(inputNetwork);
+			componentInputNetworks_[component].push_back(binding.inputNetwork);
 		}
-		writeNetworkByCell_[cell] = inputNetwork;
+		writeNetworkByCell_[cell] = binding.inputNetwork;
 		writeBindings_.push_back(std::move(binding));
 	}
 

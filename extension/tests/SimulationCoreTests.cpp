@@ -70,21 +70,20 @@ void testReadWritePipeline() {
 }
 
 void testCrossIsolation() {
-	CompileInput input = makeInput(3, 3);
-	const auto trace = static_cast<int32_t>(ToolKind::Trace);
-	input.kinds[3] = trace;
-	input.kinds[4] = static_cast<int32_t>(ToolKind::Cross);
-	input.kinds[5] = trace;
-	input.kinds[1] = static_cast<int32_t>(ToolKind::TraceRed);
-	input.kinds[7] = static_cast<int32_t>(ToolKind::TraceRed);
+	CompileInput input = makeInput(5, 1);
+	setKind(input, 0, 0, ToolKind::Latch);
+	setInitialState(input, 0, 0, 1);
+	setKind(input, 1, 0, ToolKind::Read);
+	setKind(input, 2, 0, ToolKind::Trace);
+	setKind(input, 3, 0, ToolKind::Cross);
+	setKind(input, 4, 0, ToolKind::TraceRed);
 	SimulationCore core;
 	CompileError error;
-	expect(core.compile(input, error), "Cross topology compiles");
-	const std::vector<int32_t> states = core.getStates();
-	expect(states[4] == 0, "Cross begins low without a source");
-	input.kinds[5] = static_cast<int32_t>(ToolKind::TraceRed);
-	expect(!core.compile(input, error), "Cross does not join different colors");
-	expect(error.errorReason == "cross_color_mismatch", "Cross returns its color diagnostic");
+	expect(core.compile(input, error), "Cross ignores incompatible conductor colors");
+	core.advanceTick();
+	expectState(core, input, 2, 0, 1, "Cross input Trace is powered");
+	expectState(core, input, 3, 0, 0, "Cross does not conduct between mismatched colors");
+	expectState(core, input, 4, 0, 0, "mismatched Cross output stays isolated");
 }
 
 void testCrossChannelIsolation() {
@@ -107,16 +106,23 @@ void testCrossChannelIsolation() {
 	expectState(core, input, 3, 2, 0, "Cross keeps both vertical endpoints isolated");
 }
 
-void testMeshColorValidation() {
-	CompileInput input = makeInput(3, 1);
-	input.kinds[0] = static_cast<int32_t>(ToolKind::TraceRed);
-	input.kinds[1] = static_cast<int32_t>(ToolKind::Mesh);
-	input.kinds[2] = static_cast<int32_t>(ToolKind::TraceBlue);
-	input.meshIds[1] = 1;
+void testMeshIgnoresIncompatibleNeighbors() {
+	CompileInput input = makeInput(5, 2);
+	setKind(input, 0, 1, ToolKind::Latch);
+	setInitialState(input, 0, 1, 1);
+	setKind(input, 1, 1, ToolKind::Read);
+	setKind(input, 2, 1, ToolKind::TraceRed);
+	setKind(input, 3, 1, ToolKind::Mesh);
+	input.meshIds[cellIndex(input, 3, 1)] = 1;
+	setKind(input, 4, 1, ToolKind::TraceBlue);
+	setKind(input, 3, 0, ToolKind::Buffer);
 	SimulationCore core;
 	CompileError error;
-	expect(!core.compile(input, error), "mixed-color Mesh is rejected");
-	expect(error.errorReason == "mesh_requires_one_trace_color", "Mesh returns its diagnostic reason");
+	expect(core.compile(input, error), "Mesh ignores incompatible Trace colors and non-Trace neighbors");
+	core.advanceTick();
+	expectState(core, input, 2, 1, 1, "selected Mesh Trace color is powered");
+	expectState(core, input, 3, 1, 1, "Mesh follows the first compatible Trace color in direction order");
+	expectState(core, input, 4, 1, 0, "incompatible Mesh Trace color remains isolated");
 }
 
 void testCompileErrorCoordinates() {
@@ -198,23 +204,71 @@ void testBusIsLocalOnly() {
 	expectState(core, input, 8, 0, 0, "separate Bus cannot drive Write remotely");
 }
 
-void testReadWriteRequireTraceEdges() {
+void testReadWriteIgnoreUnrelatedNeighbors() {
+	CompileInput readInput = makeInput(3, 2);
+	setKind(readInput, 0, 1, ToolKind::Latch);
+	setInitialState(readInput, 0, 1, 1);
+	setKind(readInput, 1, 1, ToolKind::Read);
+	setKind(readInput, 2, 1, ToolKind::Trace);
+	setKind(readInput, 1, 0, ToolKind::BusYellow);
+	SimulationCore readCore;
+	CompileError error;
+	expect(readCore.compile(readInput, error), "Read ignores unrelated adjacent components");
+	readCore.advanceTick();
+	expectState(readCore, readInput, 2, 1, 1, "Read still drives a valid Trace output");
+
+	CompileInput writeInput = makeInput(5, 2);
+	setKind(writeInput, 0, 1, ToolKind::Latch);
+	setInitialState(writeInput, 0, 1, 1);
+	setKind(writeInput, 1, 1, ToolKind::Read);
+	setKind(writeInput, 2, 1, ToolKind::Trace);
+	setKind(writeInput, 3, 1, ToolKind::Write);
+	setKind(writeInput, 4, 1, ToolKind::Led);
+	setKind(writeInput, 3, 0, ToolKind::Clock);
+	SimulationCore writeCore;
+	expect(writeCore.compile(writeInput, error), "Write ignores unrelated adjacent components");
+	writeCore.advanceTick();
+	writeCore.advanceTick();
+	expectState(writeCore, writeInput, 4, 1, 1, "Write still drives a valid target");
+}
+
+void testReadWriteRequireValidPorts() {
 	CompileInput readInput = makeInput(3, 1);
 	setKind(readInput, 0, 0, ToolKind::Latch);
 	setKind(readInput, 1, 0, ToolKind::Read);
 	setKind(readInput, 2, 0, ToolKind::BusYellow);
 	SimulationCore readCore;
 	CompileError error;
-	expect(!readCore.compile(readInput, error), "Read rejects a direct Bus edge");
-	expect(error.errorReason == "read_invalid_neighbor", "Read reports a non-Trace edge");
+	expect(!readCore.compile(readInput, error), "Read still requires a valid Trace output");
+	expect(error.errorReason == "read_requires_trace_output", "Read keeps its missing output diagnostic");
 
 	CompileInput writeInput = makeInput(3, 1);
 	setKind(writeInput, 0, 0, ToolKind::BusYellow);
 	setKind(writeInput, 1, 0, ToolKind::Write);
 	setKind(writeInput, 2, 0, ToolKind::Led);
 	SimulationCore writeCore;
-	expect(!writeCore.compile(writeInput, error), "Write rejects a direct Bus edge");
-	expect(error.errorReason == "write_invalid_neighbor", "Write reports a non-Trace edge");
+	expect(!writeCore.compile(writeInput, error), "Write still requires a valid Trace input");
+	expect(error.errorReason == "write_requires_one_trace_input", "Write keeps its missing input diagnostic");
+
+	CompileInput writeWithoutTarget = makeInput(3, 1);
+	setKind(writeWithoutTarget, 0, 0, ToolKind::Trace);
+	setKind(writeWithoutTarget, 1, 0, ToolKind::Write);
+	setKind(writeWithoutTarget, 2, 0, ToolKind::BusYellow);
+	SimulationCore writeWithoutTargetCore;
+	expect(!writeWithoutTargetCore.compile(writeWithoutTarget, error), "Write still requires a valid target");
+	expect(error.errorReason == "write_requires_target", "Write keeps its missing target diagnostic");
+
+	CompileInput writeWithTwoTraceSides = makeInput(3, 3);
+	setKind(writeWithTwoTraceSides, 0, 1, ToolKind::Trace);
+	setKind(writeWithTwoTraceSides, 1, 1, ToolKind::Write);
+	setKind(writeWithTwoTraceSides, 2, 1, ToolKind::Trace);
+	setKind(writeWithTwoTraceSides, 1, 0, ToolKind::Led);
+	setKind(writeWithTwoTraceSides, 0, 2, ToolKind::Trace);
+	setKind(writeWithTwoTraceSides, 1, 2, ToolKind::Trace);
+	setKind(writeWithTwoTraceSides, 2, 2, ToolKind::Trace);
+	SimulationCore writeWithTwoTraceSidesCore;
+	expect(!writeWithTwoTraceSidesCore.compile(writeWithTwoTraceSides, error), "Write rejects two physical Trace sides on one network");
+	expect(error.errorReason == "write_requires_one_trace_input", "Write preserves its physical Trace-side diagnostic");
 }
 
 void expectMultiWriteAllowed(ToolKind kind, const std::string &name) {
@@ -249,7 +303,7 @@ void testWriteMultiplicity() {
 	expect(error.errorReason == "multiple_write_inputs", "single-write target returns its diagnostic");
 }
 
-void testLatchInitialStateConflict() {
+void testLatchInitialStateVariantsRemainSeparate() {
 	CompileInput input = makeInput(2, 1);
 	setKind(input, 0, 0, ToolKind::Latch);
 	setKind(input, 1, 0, ToolKind::Latch);
@@ -257,8 +311,16 @@ void testLatchInitialStateConflict() {
 	setInitialState(input, 1, 0, 0);
 	SimulationCore core;
 	CompileError error;
-	expect(!core.compile(input, error), "adjacent Latches with mixed initial state are rejected");
-	expect(error.errorReason == "latch_initial_state_conflict", "Latch conflict returns its diagnostic");
+	std::vector<int32_t> changes;
+	std::string toggleError;
+	expect(core.compile(input, error), "adjacent Latch state variants compile as separate components");
+	expectState(core, input, 0, 0, 1, "On Latch keeps its design state");
+	expectState(core, input, 1, 0, 0, "Off Latch keeps its design state");
+	expect(core.toggleLatch(0, changes, toggleError), "On Latch toggles independently");
+	expect(changes == std::vector<int32_t>({0, 0}), "On Latch toggle does not change adjacent Off Latch");
+	expectState(core, input, 1, 0, 0, "adjacent Off Latch remains unchanged");
+	expect(core.toggleLatch(1, changes, toggleError), "Off Latch toggles independently");
+	expect(changes == std::vector<int32_t>({1, 1}), "Off Latch toggle does not change adjacent Latch");
 }
 
 void testLatchToggle() {
@@ -345,14 +407,15 @@ int main() {
 	testReadWritePipeline();
 	testCrossIsolation();
 	testCrossChannelIsolation();
-	testMeshColorValidation();
+	testMeshIgnoresIncompatibleNeighbors();
 	testCompileErrorCoordinates();
 	testRemoteMeshConnectivity();
 	testRemoteMeshIsolation();
 	testBusIsLocalOnly();
-	testReadWriteRequireTraceEdges();
+	testReadWriteIgnoreUnrelatedNeighbors();
+	testReadWriteRequireValidPorts();
 	testWriteMultiplicity();
-	testLatchInitialStateConflict();
+	testLatchInitialStateVariantsRemainSeparate();
 	testLatchToggle();
 	testZeroWriteGateIdentities();
 	testSnapshotRestore();

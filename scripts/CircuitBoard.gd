@@ -413,9 +413,7 @@ func setRuntimeTileState(coordinates: Vector2i, isOn: bool) -> bool:
 		RuntimeTileStates[coordinates] = isOn
 	if renderedIsOn == isOn:
 		return false
-	var tile := Occupancy.get(coordinates) as Node2D
-	if tile:
-		tile.call("setInkState", isOn)
+	updateTileVisualState(coordinates, isOn)
 	return true
 
 func getRuntimeTileState(coordinates: Vector2i) -> bool:
@@ -427,10 +425,20 @@ func hasRuntimeTileState(coordinates: Vector2i) -> bool:
 func clearRuntimeTileStates() -> void:
 	for coordinatesVariant in RuntimeTileStates.keys():
 		var coordinates := coordinatesVariant as Vector2i
-		var tile := Occupancy.get(coordinates) as Node2D
-		if tile:
-			tile.call("setInkState", getTileState(coordinates))
+		updateTileVisualState(coordinates, getTileState(coordinates))
 	RuntimeTileStates.clear()
+
+func getTileIcon(toolId: String, isOn: bool) -> Texture2D:
+	return InkRegistry.getInkIcon(toolId, isOn)
+
+func updateTileVisualState(coordinates: Vector2i, isOn: bool) -> void:
+	var tile := Occupancy.get(coordinates) as Node2D
+	if tile == null:
+		return
+	var toolId := getToolIdAt(coordinates)
+	if toolId == "latch":
+		tile.call("setIcon", getTileIcon(toolId, isOn))
+	tile.call("setInkState", isOn)
 
 func getSimulationTiles() -> Array[Dictionary]:
 	var tiles: Array[Dictionary] = []
@@ -1031,7 +1039,7 @@ func configurePreviewTile(tile: Node2D, coordinates: Vector2i, tileValue: Dictio
 	var isOn := bool(tileValue.get("isOn", false))
 	if String(tile.get_meta("previewToolId", "")) != toolId or bool(tile.get_meta("previewIsOn", false)) != isOn:
 		var attributes: Dictionary = ToolRegistry[toolId]
-		tile.call("setAttributes", attributes["icon"], attributes["color"], isOn)
+		tile.call("setAttributes", getTileIcon(toolId, isOn), attributes["color"], isOn)
 		tile.set_meta("previewToolId", toolId)
 		tile.set_meta("previewIsOn", isOn)
 	tile.modulate = previewColor
@@ -1211,7 +1219,7 @@ func setTileValue(coordinates: Vector2i, rawValue: Variant) -> bool:
 		TileValues[coordinates] = tileValue.duplicate(true)
 		if RuntimeTileStates.has(coordinates) and bool(RuntimeTileStates[coordinates]) == getTileState(coordinates):
 			RuntimeTileStates.erase(coordinates)
-		Occupancy[coordinates].call("setInkState", getRuntimeTileState(coordinates))
+		updateTileVisualState(coordinates, getRuntimeTileState(coordinates))
 		return true
 	if Occupancy.has(coordinates):
 		Occupancy[coordinates].queue_free()
@@ -1223,7 +1231,7 @@ func setTileValue(coordinates: Vector2i, rawValue: Variant) -> bool:
 	tile.position = Vector2(coordinates * CellSize) + Vector2.ONE * CellSize / 2.0
 	tile.call("setup", self, coordinates, float(CellSize))
 	var attributes: Dictionary = ToolRegistry[toolId]
-	tile.call("setAttributes", attributes["icon"], attributes["color"], isOn)
+	tile.call("setAttributes", getTileIcon(toolId, isOn), attributes["color"], isOn)
 	Occupancy[coordinates] = tile
 	TileValues[coordinates] = tileValue.duplicate(true)
 	return true

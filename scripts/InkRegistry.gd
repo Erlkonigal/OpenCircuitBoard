@@ -30,6 +30,8 @@ const IconByComponentId := {
 	"led": preload("res://assets/inks/Led.svg"),
 }
 
+const LatchOffIcon := preload("res://assets/inks/LatchOff.svg")
+
 static func getInks() -> Array[Dictionary]:
 	return getPaletteInks()
 
@@ -102,7 +104,9 @@ static func getComponentId(ink: Dictionary) -> String:
 static func getPaletteToolId(ink: Dictionary) -> String:
 	return String(ink.get("paletteToolId", getComponentId(ink)))
 
-static func getInkIcon(componentId: String) -> Texture2D:
+static func getInkIcon(componentId: String, isOn := true) -> Texture2D:
+	if componentId == "latch" and not isOn:
+		return LatchOffIcon
 	return IconByComponentId[componentId] as Texture2D
 
 static func getDefaultIsOn(componentId: String) -> bool:

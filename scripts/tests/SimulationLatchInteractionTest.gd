@@ -1,5 +1,7 @@
 extends RefCounted
 
+const InkRegistry := preload("res://scripts/InkRegistry.gd")
+
 func run(context) -> void:
 	await context.resetMain()
 	await context.waitFrames(1)
@@ -12,6 +14,7 @@ func run(context) -> void:
 	assert(board.call("placeTile", readCoordinates, "read"))
 	assert(board.call("placeTile", traceCoordinates, "trace"))
 	assert(bool(board.call("getTileState", latchCoordinates)))
+	assertLatchIcon(board, latchCoordinates, true)
 
 	main.call("enterSimulation")
 	assert(bool(main.get("IsSimulating")))
@@ -30,6 +33,7 @@ func run(context) -> void:
 	await context.waitFrames(1)
 	assert(not bool(board.call("getRuntimeTileState", latchCoordinates)))
 	assert(bool(board.call("getTileState", latchCoordinates)))
+	assertLatchIcon(board, latchCoordinates, false)
 	assert((main.get("SimulationTimeline") as Array).size() == 1)
 
 	main.call("showNextSimulationTick")
@@ -39,6 +43,7 @@ func run(context) -> void:
 	assert(int(main.get("SimulationTick")) == 0)
 	assert(main.call("toggleSimulationLatchAt", latchCoordinates))
 	assert(bool(board.call("getRuntimeTileState", latchCoordinates)))
+	assertLatchIcon(board, latchCoordinates, true)
 	assert((main.get("SimulationTimeline") as Array).size() == 1)
 	main.call("showNextSimulationTick")
 	assert(bool(board.call("getRuntimeTileState", traceCoordinates)))
@@ -50,3 +55,9 @@ func run(context) -> void:
 	assert(board.call("removeTile", latchCoordinates))
 	assert(board.call("removeTile", readCoordinates))
 	assert(board.call("removeTile", traceCoordinates))
+
+func assertLatchIcon(board: Node2D, coordinates: Vector2i, isOn: bool) -> void:
+	var occupancy: Dictionary = board.get("Occupancy")
+	var latchTile := occupancy.get(coordinates) as Node2D
+	var iconRect := latchTile.get_node("Icon") as TextureRect
+	assert(iconRect.texture == InkRegistry.getInkIcon("latch", isOn))

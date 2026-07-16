@@ -28,6 +28,8 @@ func run(context) -> void:
 	assert(not toolRegistry.has("tunnel"))
 	assert(not toolRegistry.has("latchOn"))
 	assert(not toolRegistry.has("latchOff"))
+	assert(InkRegistry.getInkIcon("latch", true) != InkRegistry.getInkIcon("latch", false))
+	assert(InkRegistry.getInkIcon("latch", false).get_size() == Vector2(64, 64))
 	assert(bool(InkRegistry.getInk("mesh").get("isConfigurable", false)))
 	assert(bool(InkRegistry.getInk("latch").get("isConfigurable", false)))
 	assert(InkRegistry.getInkVariants("trace").size() == 6)

@@ -2,6 +2,7 @@ extends RefCounted
 class_name FrontendTestContext
 
 const CircuitTile := preload("res://scripts/CircuitTile.gd")
+const InkRegistry := preload("res://scripts/InkRegistry.gd")
 const MainScene := preload("res://Main.tscn")
 
 const BoardPath := NodePath("BoardViewport/SubViewport/CircuitBoard")
@@ -354,7 +355,7 @@ func assertInkButton(button: Button, ink: Dictionary, isSelected: bool) -> void:
 
 func assertTileIcon(tile: Node2D, ink: Dictionary, cellSize: float, isOn := true) -> void:
 	var iconRect := tile.get_node("Icon") as TextureRect
-	var expectedIcon := ink.get("icon") as Texture2D
+	var expectedIcon := InkRegistry.getInkIcon(InkRegistry.getComponentId(ink), isOn)
 	var inkColor: Color = ink.get("color", Color.WHITE)
 	assert(iconRect != null)
 	assert(expectedIcon != null)

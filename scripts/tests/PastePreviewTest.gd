@@ -1,5 +1,7 @@
 extends RefCounted
 
+const InkRegistry := preload("res://scripts/InkRegistry.gd")
+
 func run(context) -> void:
 	await context.resetMain()
 	await context.waitFrames(1)
@@ -8,8 +10,9 @@ func run(context) -> void:
 	var data := context.TestData as Dictionary
 	var source := Vector2i(-12, -10)
 	var sourceOther := source + Vector2i(2, 0)
-	assert(board.call("placeTile", source, "or"))
+	assert(board.call("placeTile", source, "latch"))
 	assert(board.call("placeTile", sourceOther, "xor"))
+	assert(board.call("setTileState", source, false))
 	assert(board.call("setTileState", sourceOther, false))
 	board.call("setSelection", Rect2i(source, Vector2i(3, 1)))
 	context.sendCtrlShortcut(board, KEY_C)
@@ -39,6 +42,7 @@ func run(context) -> void:
 		assert(previewTile.position.is_equal_approx(previewPositions[index] + Vector2.RIGHT * float(board.get("CellSize"))))
 	board.call("updatePastePreview", pasteAnchor)
 	var firstPreviewTile := previewTiles.get_child(0) as Node2D
+	context.assertTileIcon(firstPreviewTile, InkRegistry.getInk("latch"), float(board.get("CellSize")), false)
 	board.call("confirmPastePreview")
 	var tileData: Dictionary = board.get("TileValues")
 	assert(tileData.has(pasteAnchor))
@@ -50,6 +54,7 @@ func run(context) -> void:
 	assert(firstPreviewTile.get_parent() == placedTiles)
 	assert(firstPreviewTile.get_parent() != board.get("PreviewTiles"))
 	var occupancy: Dictionary = board.get("Occupancy")
+	context.assertTileIcon(occupancy[pasteAnchor] as Node2D, InkRegistry.getInk("latch"), float(board.get("CellSize")), false)
 	for pastedCoordinates in [pasteAnchor, pasteAnchor + Vector2i(2, 0)]:
 		var pastedTile := occupancy[pastedCoordinates] as Node2D
 		assert(pastedTile.get_parent() == placedTiles)
