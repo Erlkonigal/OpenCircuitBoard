@@ -12,7 +12,6 @@ const MeshIdMinimum := 1
 const PositiveIntegerMaximum := 2147483647
 const MinimumGridSize := Vector2i(4, 4)
 const CanvasResizeHitRadiusPixels := 18.0
-const CanvasResizeHandleRadiusPixels := 7.0
 
 enum InteractionMode {
 	Idle,
@@ -200,10 +199,6 @@ func configureCanvasShadow(boardSize: Vector2) -> void:
 		material.set_shader_parameter("BoardOffset", shadowMargin)
 		material.set_shader_parameter("CornerRadius", CanvasCornerRadius)
 
-func getCanvasResizeHandleRadius() -> float:
-	var zoom := BoardCamera.zoom.x if BoardCamera else 1.0
-	return CanvasResizeHandleRadiusPixels / maxf(zoom, 0.01)
-
 func getCanvasResizeHitRadius() -> float:
 	var zoom := BoardCamera.zoom.x if BoardCamera else 1.0
 	return CanvasResizeHitRadiusPixels / maxf(zoom, 0.01)
@@ -323,7 +318,6 @@ func refreshCanvasResizeOverlay() -> void:
 	CanvasResizeOverlay.call(
 		"setResizeState",
 		ValidRect,
-		getCanvasResizeHandleRadius(),
 		CanvasResizeHoveredCorner,
 		CanvasResizeActiveCorner,
 		EditorInputEnabled
