@@ -668,15 +668,18 @@ func setSimulationStepLength(requestedStepLength: int) -> void:
 	StepLengthControl.text = str(SimulationStepLength)
 
 func refreshSimulationControls() -> void:
+	var canEditStepLength := IsSimulating and not IsLooping
+	var canEditLoopFrequency := IsSimulating and IsLooping
 	SimulationModeButton.text = "Edit" if IsSimulating else "Simulate"
 	SimulationModeButton.tooltip_text = "Exit simulation" if IsSimulating else "Enter simulation"
 	configureSimulationModeButton()
 	PreviousTickButton.disabled = not IsSimulating or IsLooping or SimulationTick <= 0
 	LoopStepButton.disabled = not IsSimulating
 	NextTickButton.disabled = not IsSimulating or IsLooping
-	StepLengthControl.disabled = not IsSimulating
-	LoopFrequencySlider.mouse_filter = Control.MOUSE_FILTER_STOP if IsSimulating else Control.MOUSE_FILTER_IGNORE
-	LoopFrequencySlider.modulate = Color.WHITE if IsSimulating else Color(1.0, 1.0, 1.0, 0.38)
+	StepLengthControl.disabled = not canEditStepLength
+	LoopFrequencySlider.mouse_filter = Control.MOUSE_FILTER_STOP if canEditLoopFrequency else Control.MOUSE_FILTER_IGNORE
+	LoopFrequencySlider.focus_mode = Control.FOCUS_ALL if canEditLoopFrequency else Control.FOCUS_NONE
+	LoopFrequencySlider.modulate = Color.WHITE if canEditLoopFrequency else Color(1.0, 1.0, 1.0, 0.38)
 	LoopStepButton.tooltip_text = "Switch to step mode" if IsLooping else "Switch to loop mode"
 	LoopStepButton.add_theme_color_override("icon_normal_color", Color("e2eaf7") if IsLooping else SimulationStepColor)
 	LoopStepButton.add_theme_color_override("icon_hover_color", Color.WHITE if IsLooping else Color("ffd878"))
