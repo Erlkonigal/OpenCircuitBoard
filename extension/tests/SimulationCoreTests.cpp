@@ -114,6 +114,28 @@ void testBatchAdvanceMatchesSingleTicks() {
 	expect(batchCore.getStates() == statesBeforeNoOp, "non-positive batch does not advance state");
 }
 
+void testConnectorQueueEventEncoding() {
+	CompileInput input = makeInput(5, 1);
+	setKind(input, 0, 0, ToolKind::Clock);
+	setKind(input, 1, 0, ToolKind::Read);
+	setKind(input, 2, 0, ToolKind::Trace);
+	setKind(input, 3, 0, ToolKind::Write);
+	setKind(input, 4, 0, ToolKind::Buffer);
+	input.clockHoldTicks[0] = 2;
+	SimulationCore core;
+	CompileError error;
+	expect(core.compile(input, error), "Clock pipeline compiles for connector event encoding");
+	expect(core.advanceTick().empty(), "idle tick does not replay a drained event");
+	expect(
+			core.advanceTick() == std::vector<int32_t>({0, 1, 1, 1, 2, 1, 3, 1}),
+			"node zero high event propagates through the connector queue");
+	expect(core.advanceTick() == std::vector<int32_t>({4, 1}), "scheduled Buffer event is retained for the next tick");
+	expect(
+			core.advanceTick() == std::vector<int32_t>({0, 0, 1, 0, 2, 0, 3, 0}),
+			"node zero low event propagates through the connector queue");
+	expect(core.advanceTick() == std::vector<int32_t>({4, 0}), "drained low event is not replayed");
+}
+
 void testSilentAdvanceDrainsOnlyFinalChanges() {
 	CompileInput input = makeInput(5, 1);
 	setKind(input, 0, 0, ToolKind::Clock);
@@ -703,6 +725,7 @@ void testSnapshotRestore() {
 int main() {
 	testReadWritePipeline();
 	testBatchAdvanceMatchesSingleTicks();
+	testConnectorQueueEventEncoding();
 	testSilentAdvanceDrainsOnlyFinalChanges();
 	testDeferredVisibleStateMaterialization();
 	testGraphOrderingPreservesExternalStatesAndDeltas();

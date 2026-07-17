@@ -103,6 +103,10 @@ private:
 	static bool isWriteTarget(ToolKind kind);
 	static bool allowsMultipleWrites(ToolKind kind);
 	static int32_t colorForKind(ToolKind kind);
+	// Nonnegative events encode high states; bitwise complements encode low states.
+	static int32_t encodeConnectorEvent(int32_t node, uint8_t state) {
+		return state != 0 ? node : ~node;
+	}
 
 	uint8_t evaluateComponent(int32_t node) const;
 	void buildExecutionGraph();
@@ -110,8 +114,14 @@ private:
 	void propagateStateChange(int32_t sourceNode, uint8_t oldState, uint8_t newState);
 	void drainConnectorQueue();
 	void enqueueComponentGate(int32_t componentNode);
-	void setNodeState(int32_t node, uint8_t state);
 	void markVisibleNodeDirty(int32_t node);
+	void setChangedNodeState(int32_t node, uint8_t state) {
+		nodeStates_[node] = state;
+		if (nodeHasVisibleCells_[node] != 0) {
+			markVisibleNodeDirty(node);
+		}
+	}
+	void setNodeState(int32_t node, uint8_t state);
 	void markAllVisibleNodesDirty();
 	void materializeVisibleStates() const;
 	void updateVisibleCell(int32_t cell) const;
@@ -168,10 +178,7 @@ private:
 	std::vector<uint64_t> nextGateSummaryWords_;
 	std::vector<uint64_t> currentGateWords_;
 	std::vector<uint64_t> currentGateSummaryWords_;
-	std::vector<int32_t> pendingStateNodes_;
-	std::vector<uint8_t> pendingNextStates_;
-	std::vector<int32_t> connectorQueueNodes_;
-	std::vector<int8_t> connectorQueueDeltas_;
+	std::vector<int32_t> connectorQueueEvents_;
 	std::vector<size_t> visibleCellOffsets_;
 	std::vector<int32_t> visibleCellIndices_;
 	std::vector<int32_t> cellPrimaryNode_;

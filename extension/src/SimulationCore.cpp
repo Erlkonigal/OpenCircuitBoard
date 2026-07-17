@@ -382,10 +382,7 @@ void SimulationCore::clear() {
 	nextGateSummaryWords_.clear();
 	currentGateWords_.clear();
 	currentGateSummaryWords_.clear();
-	pendingStateNodes_.clear();
-	pendingNextStates_.clear();
-	connectorQueueNodes_.clear();
-	connectorQueueDeltas_.clear();
+	connectorQueueEvents_.clear();
 	visibleCellOffsets_.clear();
 	visibleCellIndices_.clear();
 	cellPrimaryNode_.clear();
@@ -1064,14 +1061,8 @@ void SimulationCore::buildExecutionGraph() {
 	nextGateSummaryWords_.assign(gateSummaryWordCount, 0);
 	currentGateWords_.assign(gateWordCount, 0);
 	currentGateSummaryWords_.assign(gateSummaryWordCount, 0);
-	pendingStateNodes_.clear();
-	pendingStateNodes_.reserve(originalNodeCount);
-	pendingNextStates_.clear();
-	pendingNextStates_.reserve(originalNodeCount);
-	connectorQueueNodes_.clear();
-	connectorQueueNodes_.reserve(originalNodeCount);
-	connectorQueueDeltas_.clear();
-	connectorQueueDeltas_.reserve(originalNodeCount);
+	connectorQueueEvents_.clear();
+	connectorQueueEvents_.reserve(originalNodeCount);
 	nodeStates_.assign(originalNodeCount, 0);
 	clockPhases_.assign(originalNodeCount, 0);
 	cellPrimaryNode_.assign(kinds_.size(), -1);
@@ -1237,10 +1228,7 @@ void SimulationCore::setNodeState(int32_t node, uint8_t state) {
 	if (nodeStates_[node] == state) {
 		return;
 	}
-	nodeStates_[node] = state;
-	if (nodeHasVisibleCells_[node] != 0) {
-		markVisibleNodeDirty(node);
-	}
+	setChangedNodeState(node, state);
 }
 
 void SimulationCore::enqueueComponentGate(int32_t componentNode) {
@@ -1259,18 +1247,18 @@ void SimulationCore::propagateStateChange(int32_t sourceNode, uint8_t oldState, 
 	if (oldState == newState) {
 		return;
 	}
-	connectorQueueNodes_.clear();
-	connectorQueueDeltas_.clear();
-	connectorQueueNodes_.push_back(sourceNode);
-	connectorQueueDeltas_.push_back(newState != 0 ? 1 : -1);
+	connectorQueueEvents_.clear();
+	connectorQueueEvents_.push_back(encodeConnectorEvent(sourceNode, newState));
 	drainConnectorQueue();
 }
 
 void SimulationCore::drainConnectorQueue() {
-	size_t queueSize = connectorQueueNodes_.size();
+	size_t queueSize = connectorQueueEvents_.size();
 	for (size_t cursor = 0; cursor < queueSize; ++cursor) {
-		const int32_t source = connectorQueueNodes_[cursor];
-		const int32_t stateDelta = connectorQueueDeltas_[cursor];
+		const int32_t event = connectorQueueEvents_[cursor];
+		const bool highState = event >= 0;
+		const int32_t source = highState ? event : ~event;
+		const int32_t stateDelta = highState ? 1 : -1;
 		const int32_t componentEdgeEnd = outgoingComponentEnds_[source];
 		for (int32_t edge = outgoingOffsets_[source]; edge < componentEdgeEnd; ++edge) {
 			const int32_t target = outgoingTargets_[edge];
@@ -1287,12 +1275,11 @@ void SimulationCore::drainConnectorQueue() {
 			if (previousState == nextState) {
 				continue;
 			}
-			setNodeState(target, nextState);
+			setChangedNodeState(target, nextState);
 			if (outgoingOffsets_[target] == outgoingOffsets_[target + 1]) {
 				continue;
 			}
-			connectorQueueNodes_.push_back(target);
-			connectorQueueDeltas_.push_back(nextState != 0 ? 1 : -1);
+			connectorQueueEvents_.push_back(encodeConnectorEvent(target, nextState));
 			++queueSize;
 		}
 	}
@@ -1305,16 +1292,14 @@ void SimulationCore::rebuildDerivedState(const std::vector<uint8_t> &componentSt
 	std::fill(nextGateSummaryWords_.begin(), nextGateSummaryWords_.end(), 0);
 	std::fill(currentGateWords_.begin(), currentGateWords_.end(), 0);
 	std::fill(currentGateSummaryWords_.begin(), currentGateSummaryWords_.end(), 0);
-	connectorQueueNodes_.clear();
-	connectorQueueDeltas_.clear();
+	connectorQueueEvents_.clear();
 	for (int32_t index = 0; index < static_cast<int32_t>(componentNodes_.size()); ++index) {
 		const int32_t node = componentNodes_[index];
 		nodeStates_[node] = componentStates[index];
 	}
 	for (int32_t node : componentNodes_) {
 		if (nodeStates_[node] != 0) {
-			connectorQueueNodes_.push_back(node);
-			connectorQueueDeltas_.push_back(1);
+			connectorQueueEvents_.push_back(encodeConnectorEvent(node, 1));
 		}
 	}
 	drainConnectorQueue();
@@ -1328,8 +1313,7 @@ void SimulationCore::resetInternal() {
 	std::fill(nextGateSummaryWords_.begin(), nextGateSummaryWords_.end(), 0);
 	std::fill(currentGateWords_.begin(), currentGateWords_.end(), 0);
 	std::fill(currentGateSummaryWords_.begin(), currentGateSummaryWords_.end(), 0);
-	connectorQueueNodes_.clear();
-	connectorQueueDeltas_.clear();
+	connectorQueueEvents_.clear();
 	for (int32_t node = 0; node < static_cast<int32_t>(nodeStates_.size()); ++node) {
 		if (nodeStates_[node] != 0) {
 			setNodeState(node, 0);
@@ -1348,8 +1332,7 @@ void SimulationCore::resetInternal() {
 	}
 	for (int32_t node : componentNodes_) {
 		if (nodeStates_[node] != 0) {
-			connectorQueueNodes_.push_back(node);
-			connectorQueueDeltas_.push_back(1);
+			connectorQueueEvents_.push_back(encodeConnectorEvent(node, 1));
 		}
 	}
 	drainConnectorQueue();
@@ -1427,8 +1410,7 @@ void SimulationCore::advanceState() {
 	currentGateSummaryWords_.swap(nextGateSummaryWords_);
 	std::fill(nextGateWords_.begin(), nextGateWords_.end(), 0);
 	std::fill(nextGateSummaryWords_.begin(), nextGateSummaryWords_.end(), 0);
-	pendingStateNodes_.clear();
-	pendingNextStates_.clear();
+	connectorQueueEvents_.clear();
 	for (size_t summaryWordIndex = 0; summaryWordIndex < currentGateSummaryWords_.size(); ++summaryWordIndex) {
 		uint64_t summary = currentGateSummaryWords_[summaryWordIndex];
 		while (summary != 0) {
@@ -1450,8 +1432,7 @@ void SimulationCore::advanceState() {
 				const uint8_t nextState = evaluateComponent(node);
 				const uint8_t previousState = nodeStates_[node];
 				if (nextState != previousState) {
-					pendingStateNodes_.push_back(node);
-					pendingNextStates_.push_back(nextState);
+					connectorQueueEvents_.push_back(encodeConnectorEvent(node, nextState));
 				}
 			}
 		}
@@ -1462,19 +1443,15 @@ void SimulationCore::advanceState() {
 			phase = 0;
 			const uint8_t previousState = nodeStates_[node];
 			const uint8_t nextState = previousState == 0 ? 1 : 0;
-			pendingStateNodes_.push_back(node);
-			pendingNextStates_.push_back(nextState);
+			connectorQueueEvents_.push_back(encodeConnectorEvent(node, nextState));
 		}
 		clockPhases_[node] = phase;
 	}
-	for (size_t index = 0; index < pendingStateNodes_.size(); ++index) {
-		setNodeState(pendingStateNodes_[index], pendingNextStates_[index]);
-	}
-	connectorQueueNodes_.clear();
-	connectorQueueDeltas_.clear();
-	for (size_t index = 0; index < pendingStateNodes_.size(); ++index) {
-		connectorQueueNodes_.push_back(pendingStateNodes_[index]);
-		connectorQueueDeltas_.push_back(pendingNextStates_[index] != 0 ? 1 : -1);
+	const size_t pendingStateCount = connectorQueueEvents_.size();
+	for (size_t index = 0; index < pendingStateCount; ++index) {
+		const int32_t event = connectorQueueEvents_[index];
+		const bool highState = event >= 0;
+		setChangedNodeState(highState ? event : ~event, highState ? 1 : 0);
 	}
 	drainConnectorQueue();
 	++tickCount_;
