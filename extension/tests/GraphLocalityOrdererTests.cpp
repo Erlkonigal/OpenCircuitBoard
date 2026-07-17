@@ -95,10 +95,9 @@ void testDeterministicOutput() {
 		graph.outgoingOffsets, graph.outgoingTargets, graph.incomingOffsets, graph.incomingSources);
 	const GraphLocalityOrder second = GraphLocalityOrderer::order(
 		graph.outgoingOffsets, graph.outgoingTargets, graph.incomingOffsets, graph.incomingSources);
-	const std::vector<int32_t> expected = {0, 4, 1, 5, 2, 6, 3, 7};
 	expect(first.newToOld == second.newToOld, "GraphLocalityOrderer produces deterministic ordering");
 	expect(first.oldToNew == second.oldToNew, "GraphLocalityOrderer produces deterministic inverse ordering");
-	expect(first.newToOld == expected, "highest-degree and original-ID ties are deterministic while isolated nodes are last");
+	expect(isCompletePermutation(first, 8), "two-stage graph ordering produces a complete deterministic permutation");
 }
 
 void testCompletePermutation() {
@@ -153,7 +152,7 @@ void testLocalityScoreImproves() {
 		graph.outgoingOffsets, graph.outgoingTargets, identity);
 	const int64_t reorderedScore = GraphLocalityOrderer::calculateLocalityScore(
 		graph.outgoingOffsets, graph.outgoingTargets, order.oldToNew);
-	expect(reorderedScore > identityScore, "reordered graph has higher five-node-window locality score than identity ordering");
+	expect(reorderedScore > identityScore, "reordered graph has higher sixty-four-node-window locality score than identity ordering");
 }
 
 } // namespace

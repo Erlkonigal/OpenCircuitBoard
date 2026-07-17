@@ -14,7 +14,7 @@ struct GraphLocalityOrder {
 
 class GraphLocalityOrderer {
 public:
-	static constexpr int32_t WindowSize = 5;
+	static constexpr int32_t WindowSize = 64;
 
 	static GraphLocalityOrder order(
 		int32_t nodeCount,

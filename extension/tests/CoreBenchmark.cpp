@@ -28,14 +28,22 @@ struct BenchmarkConfig {
 	int32_t pipelineCount = 512;
 	int32_t warmupTicks = 128;
 	int32_t measurementTicks = 1024;
-	int32_t sampleCount = 3;
+	int32_t sampleCount = 5;
 	bool compareOrdering = false;
+};
+
+struct CoreBenchmarkSample {
+	double advanceSeconds = 0.0;
+	double drainSeconds = 0.0;
+	uint64_t stateChecksum = 0;
 };
 
 struct CoreBenchmarkResult {
 	double ticksPerSecond = 0.0;
 	double minimumTicksPerSecond = 0.0;
 	double maximumTicksPerSecond = 0.0;
+	double advanceTicksPerSecond = 0.0;
+	double medianDrainMilliseconds = 0.0;
 	uint64_t stateChecksum = 0;
 };
 
@@ -177,41 +185,72 @@ uint64_t calculateStateChecksum(const std::vector<int32_t> &states) {
 	return checksum;
 }
 
-CoreBenchmarkResult benchmarkCore(SimulationCore &core, const BenchmarkConfig &config) {
-	std::vector<double> samples;
-	samples.reserve(config.sampleCount);
-	uint64_t checksum = 0;
-	for (int32_t sample = 0; sample < config.sampleCount; ++sample) {
-		static_cast<void>(core.reset());
-		core.advanceTicksSilent(config.warmupTicks);
-		static_cast<void>(core.drainStateChanges());
-
-		const auto start = std::chrono::steady_clock::now();
-		core.advanceTicksSilent(config.measurementTicks);
-		static_cast<void>(core.drainStateChanges());
-		const auto finish = std::chrono::steady_clock::now();
-
-		const std::chrono::duration<double> elapsed = finish - start;
-		samples.push_back(static_cast<double>(config.measurementTicks) / elapsed.count());
-		checksum = calculateStateChecksum(core.getStates());
-	}
-	std::sort(samples.begin(), samples.end());
-	const size_t medianIndex = samples.size() / 2U;
-	CoreBenchmarkResult result;
-	result.ticksPerSecond = samples[medianIndex];
-	result.minimumTicksPerSecond = samples.front();
-	result.maximumTicksPerSecond = samples.back();
-	result.stateChecksum = checksum;
-	return result;
-}
-
-bool compileBenchmarkCore(SimulationCore &core, const CompileInput &input, const char *label) {
+bool compileBenchmarkCore(SimulationCore &core, const CompileInput &input, const char *label, double &compileSeconds) {
+	const auto start = std::chrono::steady_clock::now();
 	CompileError error;
-	if (core.compile(input, error)) {
+	const bool compiled = core.compile(input, error);
+	compileSeconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count();
+	if (compiled) {
 		return true;
 	}
 	std::cerr << "coreBenchmark " << label << " compile failed at (" << error.errorX << ", " << error.errorY << "): " << error.errorReason << '\n';
 	return false;
+}
+
+CoreBenchmarkSample benchmarkSample(SimulationCore &core, const BenchmarkConfig &config) {
+	static_cast<void>(core.reset());
+	core.advanceTicksSilent(config.warmupTicks);
+	static_cast<void>(core.drainStateChanges());
+
+	const auto advanceStart = std::chrono::steady_clock::now();
+	core.advanceTicksSilent(config.measurementTicks);
+	const auto advanceFinish = std::chrono::steady_clock::now();
+	static_cast<void>(core.drainStateChanges());
+	const auto finish = std::chrono::steady_clock::now();
+
+	CoreBenchmarkSample result;
+	result.advanceSeconds = std::chrono::duration<double>(advanceFinish - advanceStart).count();
+	result.drainSeconds = std::chrono::duration<double>(finish - advanceFinish).count();
+	result.stateChecksum = calculateStateChecksum(core.getStates());
+	return result;
+}
+
+double median(std::vector<double> values) {
+	std::sort(values.begin(), values.end());
+	return values[values.size() / 2U];
+}
+
+bool summarizeSamples(const std::vector<CoreBenchmarkSample> &samples, int32_t measurementTicks, CoreBenchmarkResult &result) {
+	if (samples.empty()) {
+		return false;
+	}
+	std::vector<double> totalTicksPerSecond;
+	std::vector<double> advanceTicksPerSecond;
+	std::vector<double> drainMilliseconds;
+	totalTicksPerSecond.reserve(samples.size());
+	advanceTicksPerSecond.reserve(samples.size());
+	drainMilliseconds.reserve(samples.size());
+	const uint64_t checksum = samples.front().stateChecksum;
+	for (const CoreBenchmarkSample &sample : samples) {
+		if (sample.stateChecksum != checksum || sample.advanceSeconds <= 0.0) {
+			return false;
+		}
+		const double totalSeconds = sample.advanceSeconds + sample.drainSeconds;
+		if (totalSeconds <= 0.0) {
+			return false;
+		}
+		totalTicksPerSecond.push_back(static_cast<double>(measurementTicks) / totalSeconds);
+		advanceTicksPerSecond.push_back(static_cast<double>(measurementTicks) / sample.advanceSeconds);
+		drainMilliseconds.push_back(sample.drainSeconds * 1000.0);
+	}
+	std::sort(totalTicksPerSecond.begin(), totalTicksPerSecond.end());
+	result.ticksPerSecond = totalTicksPerSecond[totalTicksPerSecond.size() / 2U];
+	result.minimumTicksPerSecond = totalTicksPerSecond.front();
+	result.maximumTicksPerSecond = totalTicksPerSecond.back();
+	result.advanceTicksPerSecond = median(std::move(advanceTicksPerSecond));
+	result.medianDrainMilliseconds = median(std::move(drainMilliseconds));
+	result.stateChecksum = checksum;
+	return true;
 }
 
 double percentageImprovement(double before, double after) {
@@ -221,9 +260,12 @@ double percentageImprovement(double before, double after) {
 	return (after - before) * 100.0 / before;
 }
 
-void printResult(const char *label, const CoreBenchmarkResult &result) {
+void printResult(const char *label, const CoreBenchmarkResult &result, double compileSeconds) {
 	std::cout << "SimulationCore TPS (" << label << "): median=" << result.ticksPerSecond
 			  << ", min=" << result.minimumTicksPerSecond << ", max=" << result.maximumTicksPerSecond
+			  << ", advanceMedian=" << result.advanceTicksPerSecond
+			  << ", drainMedianMs=" << result.medianDrainMilliseconds
+			  << ", compileSeconds=" << compileSeconds
 			  << ", target100K=" << (result.ticksPerSecond >= TargetTicksPerSecond ? "met" : "not_met") << '\n';
 	std::cout << "SimulationCore state checksum (" << label << "): " << result.stateChecksum << '\n';
 }
@@ -249,34 +291,77 @@ int main(int argc, char **argv) {
 
 	const CompileInput input = makeBenchmarkInput(config);
 	SimulationCore baselineCore(false);
-	if (!compileBenchmarkCore(baselineCore, input, "baseline")) {
+	double baselineCompileSeconds = 0.0;
+	if (!compileBenchmarkCore(baselineCore, input, "identity", baselineCompileSeconds)) {
 		return 1;
 	}
-	const CoreBenchmarkResult baselineResult = benchmarkCore(baselineCore, config);
+
+	SimulationCore reorderedCore(true);
+	double reorderedCompileSeconds = 0.0;
+	if (config.compareOrdering && !compileBenchmarkCore(reorderedCore, input, "reordered", reorderedCompileSeconds)) {
+		return 1;
+	}
+
+	std::vector<CoreBenchmarkSample> baselineSamples(config.sampleCount);
+	std::vector<CoreBenchmarkSample> reorderedSamples;
+	if (config.compareOrdering) {
+		reorderedSamples.resize(config.sampleCount);
+	}
+	for (int32_t sample = 0; sample < config.sampleCount; ++sample) {
+		const bool reorderedFirst = config.compareOrdering && (sample % 2 != 0);
+		if (reorderedFirst) {
+			reorderedSamples[sample] = benchmarkSample(reorderedCore, config);
+		}
+		baselineSamples[sample] = benchmarkSample(baselineCore, config);
+		if (config.compareOrdering && !reorderedFirst) {
+			reorderedSamples[sample] = benchmarkSample(reorderedCore, config);
+		}
+	}
+
+	CoreBenchmarkResult baselineResult;
+	if (!summarizeSamples(baselineSamples, config.measurementTicks, baselineResult)) {
+		std::cerr << "coreBenchmark identity produced inconsistent samples\n";
+		return 1;
+	}
+	CoreBenchmarkResult reorderedResult;
+	if (config.compareOrdering && !summarizeSamples(reorderedSamples, config.measurementTicks, reorderedResult)) {
+		std::cerr << "coreBenchmark reordered produced inconsistent samples\n";
+		return 1;
+	}
 
 	std::cout << std::fixed << std::setprecision(2);
 	std::cout << "Core benchmark: " << config.boardWidth << 'x' << config.boardHeight << ", " << config.pipelineCount
 			  << " continuously toggling pipelines, activeCells=" << activeCellCount(config)
 			  << ", warmup=" << config.warmupTicks << ", measured=" << config.measurementTicks
-			  << ", samples=" << config.sampleCount << "\n";
-	printResult("identity", baselineResult);
+			  << ", pairedSamples=" << config.sampleCount << "\n";
+	printResult("identity", baselineResult, baselineCompileSeconds);
 	std::cout << "SimulationCore execution graph locality (identity): " << baselineCore.getGraphLocalityScore() << '\n';
 
 	if (!config.compareOrdering) {
 		return 0;
 	}
-
-	SimulationCore reorderedCore(true);
-	if (!compileBenchmarkCore(reorderedCore, input, "reordered")) {
-		return 1;
-	}
-	const CoreBenchmarkResult reorderedResult = benchmarkCore(reorderedCore, config);
 	if (baselineResult.stateChecksum != reorderedResult.stateChecksum) {
 		std::cerr << "coreBenchmark reordered runtime changed the visible state result\n";
 		return 1;
 	}
-	printResult("reordered", reorderedResult);
-	std::cout << "SimulationCore TPS ordering improvement: "
+	printResult("candidate", reorderedResult, reorderedCompileSeconds);
+	const bool orderingApplied = reorderedCore.isGraphLocalityOrderingApplied();
+	std::cout << "SimulationCore graph locality ordering (candidate): "
+			  << (orderingApplied ? "applied" : "rejected") << '\n';
+	if (!orderingApplied) {
+		std::cout << "SimulationCore paired TPS ordering improvement: not_measured (candidate_rejected)\n";
+		return 0;
+	}
+	std::vector<double> pairedImprovements;
+	pairedImprovements.reserve(config.sampleCount);
+	for (int32_t sample = 0; sample < config.sampleCount; ++sample) {
+		const double baselineSeconds = baselineSamples[sample].advanceSeconds + baselineSamples[sample].drainSeconds;
+		const double reorderedSeconds = reorderedSamples[sample].advanceSeconds + reorderedSamples[sample].drainSeconds;
+		pairedImprovements.push_back((baselineSeconds / reorderedSeconds - 1.0) * 100.0);
+	}
+	std::cout << "SimulationCore paired TPS ordering improvement: median=" << median(pairedImprovements)
+			  << "%\n";
+	std::cout << "SimulationCore median TPS ordering improvement: "
 			  << percentageImprovement(baselineResult.ticksPerSecond, reorderedResult.ticksPerSecond) << "%\n";
 	std::cout << "SimulationCore execution graph locality (reordered): " << reorderedCore.getGraphLocalityScore() << '\n';
 	return 0;

@@ -212,6 +212,10 @@ void testGraphOrderingPreservesExternalStatesAndDeltas() {
 	CompileError error;
 	expect(baselineCore.compile(input, error), "unreordered reference circuit compiles");
 	expect(orderedCore.compile(input, error), "reordered reference circuit compiles");
+	expect(orderedCore.isGraphLocalityOrderingApplied(), "ordering applies when it improves the compact typed layout locality score");
+	expect(
+			orderedCore.getGraphLocalityScore() > baselineCore.getGraphLocalityScore(),
+			"accepted ordering improves the execution graph locality score");
 	expect(orderedCore.getStates() == baselineCore.getStates(), "reordered compile preserves initial visible states");
 	for (int32_t tick = 0; tick < 12; ++tick) {
 		const std::vector<int32_t> baselineChanges = baselineCore.advanceTick();

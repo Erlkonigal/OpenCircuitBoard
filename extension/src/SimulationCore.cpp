@@ -112,6 +112,25 @@ bool appendUnique(std::vector<int32_t> &values, int32_t value) {
 	return true;
 }
 
+GraphLocalityOrder makeTypeStableOrder(const GraphLocalityOrder &gorderOrder, int32_t componentCount) {
+	GraphLocalityOrder result;
+	result.newToOld.reserve(gorderOrder.newToOld.size());
+	result.oldToNew.resize(gorderOrder.oldToNew.size(), -1);
+	for (int32_t oldNode : gorderOrder.newToOld) {
+		if (oldNode < componentCount) {
+			result.oldToNew[oldNode] = static_cast<int32_t>(result.newToOld.size());
+			result.newToOld.push_back(oldNode);
+		}
+	}
+	for (int32_t oldNode : gorderOrder.newToOld) {
+		if (oldNode >= componentCount) {
+			result.oldToNew[oldNode] = static_cast<int32_t>(result.newToOld.size());
+			result.newToOld.push_back(oldNode);
+		}
+	}
+	return result;
+}
+
 void hashInt(uint64_t &hash, int32_t value) {
 	const uint32_t unsignedValue = static_cast<uint32_t>(value);
 	for (int32_t shift = 0; shift < 32; shift += 8) {
@@ -320,6 +339,7 @@ void SimulationCore::clear() {
 	width_ = 0;
 	height_ = 0;
 	compiled_ = false;
+	graphLocalityOrderingApplied_ = false;
 	topologySignature_ = 0;
 	tickCount_ = 0;
 	graphLocalityScore_ = 0;
@@ -346,16 +366,14 @@ void SimulationCore::clear() {
 	nodeKinds_.clear();
 	nodeClockHoldTicks_.clear();
 	nodeLatchInitialStates_.clear();
-	componentIndexByNode_.clear();
-	componentStates_.clear();
-	componentInputCounts_.clear();
-	componentInputHighCounts_.clear();
+	nodeInputCounts_.clear();
 	nodeInputHighCounts_.clear();
 	outgoingOffsets_.clear();
 	outgoingTargets_.clear();
 	incomingOffsets_.clear();
 	incomingSources_.clear();
 	componentNodes_.clear();
+	gateIndexByNode_.clear();
 	connectorNodes_.clear();
 	snapshotComponentNodes_.clear();
 	snapshotConnectorNodes_.clear();
@@ -900,18 +918,26 @@ void SimulationCore::buildExecutionGraph() {
 	std::vector<int32_t> originalIncomingSources;
 	flattenCsr(originalIncoming, originalIncomingOffsets, originalIncomingSources);
 	GraphLocalityOrder order;
+	order.newToOld.resize(originalNodeCount);
+	order.oldToNew.resize(originalNodeCount);
+	std::iota(order.newToOld.begin(), order.newToOld.end(), 0);
+	std::iota(order.oldToNew.begin(), order.oldToNew.end(), 0);
 	if (useGraphLocalityOrdering_) {
-		order = GraphLocalityOrderer::order(
+		const GraphLocalityOrder gorderOrder = GraphLocalityOrderer::order(
 				originalNodeCount,
 				originalOutgoingOffsets,
 				originalOutgoingTargets,
 				originalIncomingOffsets,
 				originalIncomingSources);
-	} else {
-		order.newToOld.resize(originalNodeCount);
-		order.oldToNew.resize(originalNodeCount);
-		std::iota(order.newToOld.begin(), order.newToOld.end(), 0);
-		std::iota(order.oldToNew.begin(), order.oldToNew.end(), 0);
+		GraphLocalityOrder candidateOrder = makeTypeStableOrder(gorderOrder, originalComponentCount);
+		const int64_t identityScore = GraphLocalityOrderer::calculateLocalityScore(
+				originalNodeCount, originalOutgoingOffsets, originalOutgoingTargets, order.oldToNew);
+		const int64_t candidateScore = GraphLocalityOrderer::calculateLocalityScore(
+				originalNodeCount, originalOutgoingOffsets, originalOutgoingTargets, candidateOrder.oldToNew);
+		if (candidateScore > identityScore) {
+			order = std::move(candidateOrder);
+			graphLocalityOrderingApplied_ = true;
+		}
 	}
 	graphLocalityScore_ = GraphLocalityOrderer::calculateLocalityScore(
 			originalNodeCount,
@@ -1015,15 +1041,13 @@ void SimulationCore::buildExecutionGraph() {
 		}
 	}
 
-	componentIndexByNode_.assign(originalNodeCount, -1);
-	componentStates_.assign(componentNodes_.size(), 0);
-	componentInputCounts_.assign(componentNodes_.size(), 0);
-	componentInputHighCounts_.assign(componentNodes_.size(), 0);
+	nodeInputCounts_.assign(originalNodeCount, 0);
 	nodeInputHighCounts_.assign(originalNodeCount, 0);
-	for (int32_t component = 0; component < static_cast<int32_t>(componentNodes_.size()); ++component) {
-		const int32_t node = componentNodes_[component];
-		componentIndexByNode_[node] = component;
-		componentInputCounts_[component] = incomingOffsets_[node + 1] - incomingOffsets_[node];
+	gateIndexByNode_.assign(originalNodeCount, -1);
+	for (int32_t componentIndex = 0; componentIndex < static_cast<int32_t>(componentNodes_.size()); ++componentIndex) {
+		const int32_t node = componentNodes_[componentIndex];
+		nodeInputCounts_[node] = incomingOffsets_[node + 1] - incomingOffsets_[node];
+		gateIndexByNode_[node] = componentIndex;
 	}
 	const size_t gateWordCount = (componentNodes_.size() + 63U) / 64U;
 	const size_t gateSummaryWordCount = (gateWordCount + 63U) / 64U;
@@ -1102,9 +1126,8 @@ void SimulationCore::buildExecutionGraph() {
 }
 
 uint8_t SimulationCore::evaluateComponent(int32_t node) const {
-	const int32_t component = componentIndexByNode_[node];
-	const int32_t inputCount = componentInputCounts_[component];
-	const int32_t highInputCount = componentInputHighCounts_[component];
+	const int32_t inputCount = nodeInputCounts_[node];
+	const int32_t highInputCount = nodeInputHighCounts_[node];
 	const uint8_t firstInput = highInputCount != 0 ? 1 : 0;
 	const bool allHigh = highInputCount == inputCount;
 	const bool anyHigh = highInputCount != 0;
@@ -1127,7 +1150,7 @@ uint8_t SimulationCore::evaluateComponent(int32_t node) const {
 		case ToolKind::Xnor:
 			return parity ? 0 : 1;
 		case ToolKind::Latch:
-			return inputCount == 0 ? componentStates_[component] : firstInput;
+			return inputCount == 0 ? nodeStates_[node] : firstInput;
 		case ToolKind::Led:
 			return firstInput;
 		default:
@@ -1203,9 +1226,6 @@ void SimulationCore::setNodeState(int32_t node, uint8_t state) {
 		return;
 	}
 	nodeStates_[node] = state;
-	if (nodeIsComponent_[node] != 0) {
-		componentStates_[componentIndexByNode_[node]] = state;
-	}
 	markVisibleNodeDirty(node);
 }
 
@@ -1214,9 +1234,12 @@ void SimulationCore::enqueueGate(int32_t node) {
 			nodeKinds_[node] == ToolKind::Clock) {
 		return;
 	}
-	const int32_t component = componentIndexByNode_[node];
-	const size_t wordIndex = static_cast<size_t>(component) / 64U;
-	const uint64_t gateMask = uint64_t{1} << (static_cast<size_t>(component) % 64U);
+	const int32_t gateIndex = gateIndexByNode_[node];
+	if (gateIndex < 0) {
+		return;
+	}
+	const size_t wordIndex = static_cast<size_t>(gateIndex) / 64U;
+	const uint64_t gateMask = uint64_t{1} << (static_cast<size_t>(gateIndex) % 64U);
 	if ((nextGateWords_[wordIndex] & gateMask) != 0) {
 		return;
 	}
@@ -1243,7 +1266,7 @@ void SimulationCore::drainConnectorQueue() {
 		for (int32_t edge = outgoingOffsets_[source]; edge < outgoingOffsets_[source + 1]; ++edge) {
 			const int32_t target = outgoingTargets_[edge];
 			if (nodeIsComponent_[target] != 0) {
-				componentInputHighCounts_[componentIndexByNode_[target]] += stateDelta;
+				nodeInputHighCounts_[target] += stateDelta;
 				enqueueGate(target);
 				continue;
 			}
@@ -1264,8 +1287,6 @@ void SimulationCore::drainConnectorQueue() {
 void SimulationCore::rebuildDerivedState(const std::vector<uint8_t> &componentStates) {
 	nodeStates_.assign(nodeStates_.size(), 0);
 	nodeInputHighCounts_.assign(nodeInputHighCounts_.size(), 0);
-	componentStates_.assign(componentStates_.size(), 0);
-	componentInputHighCounts_.assign(componentInputHighCounts_.size(), 0);
 	std::fill(nextGateWords_.begin(), nextGateWords_.end(), 0);
 	std::fill(nextGateSummaryWords_.begin(), nextGateSummaryWords_.end(), 0);
 	std::fill(currentGateWords_.begin(), currentGateWords_.end(), 0);
@@ -1275,7 +1296,6 @@ void SimulationCore::rebuildDerivedState(const std::vector<uint8_t> &componentSt
 	for (int32_t index = 0; index < static_cast<int32_t>(componentNodes_.size()); ++index) {
 		const int32_t node = componentNodes_[index];
 		nodeStates_[node] = componentStates[index];
-		componentStates_[index] = componentStates[index];
 	}
 	for (int32_t node : componentNodes_) {
 		if (nodeStates_[node] != 0) {
@@ -1290,7 +1310,6 @@ void SimulationCore::resetInternal() {
 	tickCount_ = 0;
 	std::fill(clockPhases_.begin(), clockPhases_.end(), 0);
 	std::fill(nodeInputHighCounts_.begin(), nodeInputHighCounts_.end(), 0);
-	std::fill(componentInputHighCounts_.begin(), componentInputHighCounts_.end(), 0);
 	std::fill(nextGateWords_.begin(), nextGateWords_.end(), 0);
 	std::fill(nextGateSummaryWords_.begin(), nextGateSummaryWords_.end(), 0);
 	std::fill(currentGateWords_.begin(), currentGateWords_.end(), 0);
@@ -1381,7 +1400,7 @@ bool SimulationCore::toggleLatch(int32_t cellIndex, std::vector<int32_t> &change
 		errorReason = "not_latch";
 		return false;
 	}
-	const uint8_t previousState = componentStates_[componentIndexByNode_[node]];
+	const uint8_t previousState = nodeStates_[node];
 	const uint8_t nextState = previousState == 0 ? 1 : 0;
 	setNodeState(node, nextState);
 	propagateStateChange(node, previousState, nextState);
@@ -1409,13 +1428,13 @@ void SimulationCore::advanceState() {
 			while (gates != 0) {
 				const int32_t gateOffset = countTrailingZeros(gates);
 				gates &= gates - 1U;
-				const size_t component = gateWordIndex * 64U + static_cast<size_t>(gateOffset);
-				if (component >= componentNodes_.size()) {
+				const size_t componentIndex = gateWordIndex * 64U + static_cast<size_t>(gateOffset);
+				if (componentIndex >= componentNodes_.size()) {
 					continue;
 				}
-				const int32_t node = componentNodes_[component];
+				const int32_t node = componentNodes_[componentIndex];
 				const uint8_t nextState = evaluateComponent(node);
-				const uint8_t previousState = componentStates_[component];
+				const uint8_t previousState = nodeStates_[node];
 				if (nextState != previousState) {
 					pendingStateNodes_.push_back(node);
 					pendingNextStates_.push_back(nextState);
@@ -1427,7 +1446,7 @@ void SimulationCore::advanceState() {
 		int32_t phase = clockPhases_[node] + 1;
 		if (phase >= nodeClockHoldTicks_[node]) {
 			phase = 0;
-			const uint8_t previousState = componentStates_[componentIndexByNode_[node]];
+			const uint8_t previousState = nodeStates_[node];
 			const uint8_t nextState = previousState == 0 ? 1 : 0;
 			pendingStateNodes_.push_back(node);
 			pendingNextStates_.push_back(nextState);
@@ -1604,6 +1623,10 @@ bool SimulationCore::restoreState(const std::vector<uint8_t> &snapshot, std::str
 
 bool SimulationCore::isCompiled() const {
 	return compiled_;
+}
+
+bool SimulationCore::isGraphLocalityOrderingApplied() const {
+	return graphLocalityOrderingApplied_;
 }
 
 int64_t SimulationCore::getGraphLocalityScore() const {

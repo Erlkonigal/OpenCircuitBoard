@@ -68,6 +68,7 @@ public:
 	std::vector<uint8_t> captureState() const;
 	bool restoreState(const std::vector<uint8_t> &snapshot, std::string &errorReason);
 	bool isCompiled() const;
+	bool isGraphLocalityOrderingApplied() const;
 	int64_t getGraphLocalityScore() const;
 
 private:
@@ -123,6 +124,7 @@ private:
 	int32_t width_ = 0;
 	int32_t height_ = 0;
 	bool compiled_ = false;
+	bool graphLocalityOrderingApplied_ = false;
 	uint64_t topologySignature_ = 0;
 	uint64_t tickCount_ = 0;
 	int64_t graphLocalityScore_ = 0;
@@ -150,16 +152,14 @@ private:
 	std::vector<ToolKind> nodeKinds_;
 	std::vector<int32_t> nodeClockHoldTicks_;
 	std::vector<uint8_t> nodeLatchInitialStates_;
-	std::vector<int32_t> componentIndexByNode_;
-	std::vector<uint8_t> componentStates_;
-	std::vector<int32_t> componentInputCounts_;
-	std::vector<int32_t> componentInputHighCounts_;
+	std::vector<int32_t> nodeInputCounts_;
 	std::vector<int32_t> nodeInputHighCounts_;
 	std::vector<int32_t> outgoingOffsets_;
 	std::vector<int32_t> outgoingTargets_;
 	std::vector<int32_t> incomingOffsets_;
 	std::vector<int32_t> incomingSources_;
 	std::vector<int32_t> componentNodes_;
+	std::vector<int32_t> gateIndexByNode_;
 	std::vector<int32_t> connectorNodes_;
 	std::vector<int32_t> snapshotComponentNodes_;
 	std::vector<int32_t> snapshotConnectorNodes_;
