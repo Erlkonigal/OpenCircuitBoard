@@ -181,6 +181,147 @@ void testDirectComponentTargetsPreserveTickBarrier() {
 	expectState(core, input, 8, 0, 1, "second Buffer evaluates the first Buffer's prior state");
 }
 
+void testSharedConnectorMultipleSourceDelta() {
+	CompileInput input = makeInput(7, 3);
+	setKind(input, 0, 0, ToolKind::Clock);
+	setKind(input, 1, 0, ToolKind::Read);
+	for (int32_t x = 2; x <= 4; ++x) {
+		setKind(input, x, 0, ToolKind::Trace);
+	}
+	setKind(input, 5, 0, ToolKind::Read);
+	setKind(input, 6, 0, ToolKind::Clock);
+	setKind(input, 3, 1, ToolKind::Write);
+	setKind(input, 3, 2, ToolKind::Buffer);
+	SimulationCore core;
+	CompileError error;
+	expect(core.compile(input, error), "shared connector multiple-source circuit compiles");
+	expect(
+			core.advanceTick() == std::vector<int32_t>({0, 1, 1, 1, 2, 1, 3, 1, 4, 1, 5, 1, 6, 1, 10, 1}),
+			"two high source transitions produce one high connector output");
+	expect(
+			core.advanceTick() == std::vector<int32_t>({0, 0, 1, 0, 2, 0, 3, 0, 4, 0, 5, 0, 6, 0, 10, 0, 17, 1}),
+			"two low source transitions produce one low connector output");
+	expect(
+			core.advanceTick() == std::vector<int32_t>({0, 1, 1, 1, 2, 1, 3, 1, 4, 1, 5, 1, 6, 1, 10, 1, 17, 0}),
+			"shared connector output delta preserves the delayed Buffer input count");
+}
+
+void testOppositeClockFanoutPreservesResolvedConnector() {
+	constexpr int32_t FanoutCount = 8;
+	constexpr int32_t Width = FanoutCount * 2 + 3;
+	CompileInput input = makeInput(Width, 3);
+	setKind(input, 0, 0, ToolKind::Clock);
+	input.clockHoldTicks[cellIndex(input, 0, 0)] = 1;
+	setKind(input, 1, 0, ToolKind::Read);
+	for (int32_t x = 2; x <= FanoutCount * 2; ++x) {
+		setKind(input, x, 0, ToolKind::Trace);
+	}
+	setKind(input, Width - 2, 0, ToolKind::Read);
+	setKind(input, Width - 1, 0, ToolKind::Clock);
+	input.clockHoldTicks[cellIndex(input, Width - 1, 0)] = 2;
+	for (int32_t branch = 0; branch < FanoutCount; ++branch) {
+		const int32_t x = 2 + branch * 2;
+		setKind(input, x, 1, ToolKind::Write);
+		setKind(input, x, 2, ToolKind::Buffer);
+	}
+	SimulationCore core;
+	CompileError error;
+	expect(core.compile(input, error), "opposite-clock fanout compiles");
+
+	std::vector<int32_t> expected = {0, 1, 1, 1};
+	for (int32_t x = 2; x <= FanoutCount * 2; ++x) {
+		expected.push_back(x);
+		expected.push_back(1);
+	}
+	for (int32_t branch = 0; branch < FanoutCount; ++branch) {
+		expected.push_back(Width + 2 + branch * 2);
+		expected.push_back(1);
+	}
+	expect(core.advanceTick() == expected, "first clock drives the shared fanout Trace");
+
+	expect(
+			core.advanceTick() == std::vector<int32_t>({0, 0, 1, 0, 17, 1, 18, 1, 40, 1, 42, 1, 44, 1, 46, 1, 48, 1, 50, 1, 52, 1, 54, 1}),
+			"opposite same-tick clock edges preserve the high shared Trace");
+	for (int32_t branch = 0; branch < FanoutCount; ++branch) {
+		const int32_t x = 2 + branch * 2;
+		expectState(core, input, x, 0, 1, "shared Trace remains high after cancelling edges");
+		expectState(core, input, x, 1, 1, "each fanout Write remains high after cancelling edges");
+		expectState(core, input, x, 2, 1, "each Buffer commits the prior high input");
+	}
+	expect(
+			core.advanceTick() == std::vector<int32_t>({0, 1, 1, 1}),
+			"cancelled fanout transition creates no delayed Buffer work");
+
+	expected = {0, 0, 1, 0};
+	for (int32_t x = 2; x <= FanoutCount * 2; ++x) {
+		expected.push_back(x);
+		expected.push_back(0);
+	}
+	expected.insert(expected.end(), {17, 0, 18, 0});
+	for (int32_t branch = 0; branch < FanoutCount; ++branch) {
+		expected.push_back(Width + 2 + branch * 2);
+		expected.push_back(0);
+	}
+	expect(core.advanceTick() == expected, "both clocks falling clears the shared Trace but retains delayed Buffers");
+	for (int32_t branch = 0; branch < FanoutCount; ++branch) {
+		expectState(core, input, 2 + branch * 2, 2, 1, "Buffers retain their prior value until the next tick");
+	}
+
+	expected = {0, 1, 1, 1};
+	for (int32_t x = 2; x <= FanoutCount * 2; ++x) {
+		expected.push_back(x);
+		expected.push_back(1);
+	}
+	for (int32_t branch = 0; branch < FanoutCount; ++branch) {
+		expected.push_back(Width + 2 + branch * 2);
+		expected.push_back(1);
+	}
+	for (int32_t branch = 0; branch < FanoutCount; ++branch) {
+		expected.push_back(Width * 2 + 2 + branch * 2);
+		expected.push_back(0);
+	}
+	expect(core.advanceTick() == expected, "new Trace edge and delayed Buffer low preserve the tick barrier");
+}
+
+void testUnequalDepthConnectorDiamondConverges() {
+	CompileInput input = makeInput(8, 6);
+	setKind(input, 5, 0, ToolKind::Write);
+	setKind(input, 6, 0, ToolKind::Read);
+	setKind(input, 5, 1, ToolKind::Trace);
+	setKind(input, 6, 1, ToolKind::TraceRed);
+	setKind(input, 7, 1, ToolKind::TraceRed);
+	setKind(input, 3, 2, ToolKind::Read);
+	setKind(input, 4, 2, ToolKind::Trace);
+	setKind(input, 5, 2, ToolKind::Read);
+	setKind(input, 6, 2, ToolKind::Clock);
+	setKind(input, 7, 2, ToolKind::TraceRed);
+	setKind(input, 3, 3, ToolKind::Write);
+	setKind(input, 4, 3, ToolKind::Write);
+	setKind(input, 7, 3, ToolKind::TraceRed);
+	setKind(input, 3, 4, ToolKind::TraceRed);
+	setKind(input, 4, 4, ToolKind::Buffer);
+	setKind(input, 7, 4, ToolKind::TraceRed);
+	for (int32_t x = 3; x <= 7; ++x) {
+		setKind(input, x, 5, ToolKind::TraceRed);
+	}
+	SimulationCore core;
+	CompileError error;
+	expect(core.compile(input, error), "unequal-depth connector diamond compiles");
+	expect(
+			core.advanceTick() == std::vector<int32_t>({5, 1, 6, 1, 13, 1, 14, 1, 15, 1, 19, 1, 20, 1, 21, 1, 22, 1, 23, 1, 27, 1, 28, 1, 31, 1, 35, 1, 39, 1, 43, 1, 44, 1, 45, 1, 46, 1, 47, 1}),
+			"diamond routes both high paths into the convergence Trace");
+	expectState(core, input, 4, 2, 1, "convergence Trace starts high");
+	expectState(core, input, 4, 4, 0, "downstream Buffer stays delayed");
+	expect(
+			core.advanceTick() == std::vector<int32_t>({5, 0, 6, 0, 13, 0, 14, 0, 15, 0, 19, 0, 20, 0, 21, 0, 22, 0, 23, 0, 27, 0, 28, 0, 31, 0, 35, 0, 36, 1, 39, 0, 43, 0, 44, 0, 45, 0, 46, 0, 47, 0}),
+			"late indirect low delta clears the diamond convergence Trace");
+	expectState(core, input, 4, 2, 0, "convergence Trace clears after both path deltas");
+	expectState(core, input, 4, 4, 1, "Buffer receives the prior high convergence state");
+	expect(
+			core.advanceTick() == std::vector<int32_t>({5, 1, 6, 1, 13, 1, 14, 1, 15, 1, 19, 1, 20, 1, 21, 1, 22, 1, 23, 1, 27, 1, 28, 1, 31, 1, 35, 1, 36, 0, 39, 1, 43, 1, 44, 1, 45, 1, 46, 1, 47, 1}),
+			"diamond low propagation schedules the downstream Buffer before the next high edge");
+}
+
 void testTerminalConnectorAliases() {
 	CompileInput pipelineInput = makeInput(6, 1);
 	setKind(pipelineInput, 0, 0, ToolKind::Clock);
@@ -960,6 +1101,9 @@ int main() {
 	testConnectorQueueEventEncoding();
 	testGateAndClockCommitBeforeDrain();
 	testDirectComponentTargetsPreserveTickBarrier();
+	testSharedConnectorMultipleSourceDelta();
+	testOppositeClockFanoutPreservesResolvedConnector();
+	testUnequalDepthConnectorDiamondConverges();
 	testTerminalConnectorAliases();
 	testSilentAdvanceDrainsOnlyFinalChanges();
 	testDeferredVisibleStateMaterialization();

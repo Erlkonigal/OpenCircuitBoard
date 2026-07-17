@@ -1,5 +1,6 @@
 #pragma once
 
+#include <algorithm>
 #include <cstddef>
 #include <cstdint>
 #include <string>
@@ -151,11 +152,41 @@ private:
 	}
 
 	uint8_t evaluateComponent(int32_t node) const;
+	uint8_t evaluateComponent(int32_t node, int32_t highInputCount) const;
 	void buildExecutionGraph();
 	void rebuildDerivedState(const std::vector<uint8_t> &componentStates);
 	void propagateStateChange(int32_t sourceNode, uint8_t oldState, uint8_t newState);
 	void drainConnectorQueue();
-	void enqueueComponentGate(int32_t componentNode) {
+	void beginPropagationBatch();
+	void flushComponentInputDeltas();
+	bool isComponentGateQueued(int32_t componentNode) const {
+		const size_t gateIndex = static_cast<size_t>(componentNode);
+		return (nextGateWords_[gateIndex / 64U] & (uint64_t{1} << (gateIndex % 64U))) != 0;
+	}
+	void accumulateComponentInputDelta(int32_t componentNode, int32_t stateDelta) {
+		if (componentInputStamps_[componentNode] != propagationStamp_) {
+			componentInputStamps_[componentNode] = propagationStamp_;
+			pendingComponentInputDeltas_[componentNode] = stateDelta;
+			pendingComponentInputs_.push_back(componentNode);
+			return;
+		}
+		pendingComponentInputDeltas_[componentNode] += stateDelta;
+	}
+	void accumulateConnectorDelta(int32_t connectorNode, int32_t stateDelta) {
+		if (connectorDeltaStamps_[connectorNode] == propagationStamp_) {
+			pendingConnectorDeltas_[connectorNode] += stateDelta;
+			return;
+		}
+		connectorDeltaStamps_[connectorNode] = propagationStamp_;
+		pendingConnectorDeltas_[connectorNode] = stateDelta;
+		connectorWorkHeap_.push_back(connectorNode);
+		const auto laterTopologicalRank = [this](int32_t left, int32_t right) {
+			return connectorTopologicalRanks_[left] > connectorTopologicalRanks_[right];
+		};
+		std::push_heap(connectorWorkHeap_.begin(), connectorWorkHeap_.end(), laterTopologicalRank);
+	}
+	void enqueueComponentGate(int32_t componentNode, uint8_t nextState) {
+		nextGateStates_[componentNode] = nextState;
 		const size_t gateIndex = static_cast<size_t>(componentNode);
 		const size_t wordIndex = gateIndex / 64U;
 		const uint64_t gateMask = uint64_t{1} << (gateIndex % 64U);
@@ -229,6 +260,7 @@ private:
 	std::vector<int32_t> incomingSources_;
 	std::vector<int32_t> componentNodes_;
 	std::vector<int32_t> connectorNodes_;
+	std::vector<int32_t> connectorTopologicalRanks_;
 	std::vector<int32_t> snapshotComponentNodes_;
 	std::vector<int32_t> snapshotConnectorNodes_;
 	std::vector<int32_t> clockNodes_;
@@ -236,7 +268,16 @@ private:
 	std::vector<uint64_t> nextGateSummaryWords_;
 	std::vector<uint64_t> currentGateWords_;
 	std::vector<uint64_t> currentGateSummaryWords_;
+	std::vector<uint8_t> nextGateStates_;
+	std::vector<uint8_t> currentGateStates_;
 	ConnectorEventQueue connectorQueueEvents_;
+	std::vector<int32_t> pendingComponentInputDeltas_;
+	std::vector<uint32_t> componentInputStamps_;
+	std::vector<int32_t> pendingComponentInputs_;
+	std::vector<int32_t> pendingConnectorDeltas_;
+	std::vector<uint32_t> connectorDeltaStamps_;
+	std::vector<int32_t> connectorWorkHeap_;
+	uint32_t propagationStamp_ = 1;
 	std::vector<size_t> visibleCellOffsets_;
 	std::vector<int32_t> visibleCellIndices_;
 	std::vector<int32_t> cellPrimaryNode_;

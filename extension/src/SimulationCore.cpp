@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cassert>
 #include <limits>
 #include <numeric>
 #include <unordered_map>
@@ -376,6 +377,7 @@ void SimulationCore::clear() {
 	incomingSources_.clear();
 	componentNodes_.clear();
 	connectorNodes_.clear();
+	connectorTopologicalRanks_.clear();
 	snapshotComponentNodes_.clear();
 	snapshotConnectorNodes_.clear();
 	clockNodes_.clear();
@@ -383,7 +385,16 @@ void SimulationCore::clear() {
 	nextGateSummaryWords_.clear();
 	currentGateWords_.clear();
 	currentGateSummaryWords_.clear();
+	nextGateStates_.clear();
+	currentGateStates_.clear();
 	connectorQueueEvents_.clear();
+	pendingComponentInputDeltas_.clear();
+	componentInputStamps_.clear();
+	pendingComponentInputs_.clear();
+	pendingConnectorDeltas_.clear();
+	connectorDeltaStamps_.clear();
+	connectorWorkHeap_.clear();
+	propagationStamp_ = 1;
 	visibleCellOffsets_.clear();
 	visibleCellIndices_.clear();
 	cellPrimaryNode_.clear();
@@ -1052,6 +1063,32 @@ void SimulationCore::buildExecutionGraph() {
 			clockNodes_.push_back(node);
 		}
 	}
+	// Connector SCCs are condensed above, so their remaining zero-delay edges form a DAG.
+	connectorTopologicalRanks_.assign(originalNodeCount, -1);
+	std::vector<int32_t> connectorIncomingCounts(originalNodeCount, 0);
+	for (int32_t source : connectorNodes_) {
+		for (int32_t edge = outgoingComponentEnds_[source]; edge < outgoingOffsets_[source + 1]; ++edge) {
+			++connectorIncomingCounts[outgoingTargets_[edge]];
+		}
+	}
+	std::vector<int32_t> connectorTopologicalQueue;
+	connectorTopologicalQueue.reserve(connectorNodes_.size());
+	for (int32_t node : connectorNodes_) {
+		if (connectorIncomingCounts[node] == 0) {
+			connectorTopologicalQueue.push_back(node);
+		}
+	}
+	for (size_t cursor = 0; cursor < connectorTopologicalQueue.size(); ++cursor) {
+		const int32_t source = connectorTopologicalQueue[cursor];
+		connectorTopologicalRanks_[source] = static_cast<int32_t>(cursor);
+		for (int32_t edge = outgoingComponentEnds_[source]; edge < outgoingOffsets_[source + 1]; ++edge) {
+			const int32_t target = outgoingTargets_[edge];
+			if (--connectorIncomingCounts[target] == 0) {
+				connectorTopologicalQueue.push_back(target);
+			}
+		}
+	}
+	assert(connectorTopologicalQueue.size() == connectorNodes_.size());
 	for (int32_t &component : cellToComponent_) {
 		if (component >= 0) {
 			component = order.oldToNew[component];
@@ -1146,8 +1183,19 @@ void SimulationCore::buildExecutionGraph() {
 	nextGateSummaryWords_.assign(gateSummaryWordCount, 0);
 	currentGateWords_.assign(gateWordCount, 0);
 	currentGateSummaryWords_.assign(gateSummaryWordCount, 0);
+	nextGateStates_.assign(originalComponentCount, 0);
+	currentGateStates_.assign(originalComponentCount, 0);
 	connectorQueueEvents_.clear();
 	connectorQueueEvents_.reserve(originalNodeCount);
+	pendingComponentInputDeltas_.assign(originalNodeCount, 0);
+	componentInputStamps_.assign(originalNodeCount, 0);
+	pendingComponentInputs_.clear();
+	pendingComponentInputs_.reserve(componentNodes_.size());
+	pendingConnectorDeltas_.assign(originalNodeCount, 0);
+	connectorDeltaStamps_.assign(originalNodeCount, 0);
+	connectorWorkHeap_.clear();
+	connectorWorkHeap_.reserve(connectorNodes_.size());
+	propagationStamp_ = 1;
 	nodeStates_.assign(originalNodeCount, 0);
 	clockPhases_.assign(originalNodeCount, 0);
 	cellPrimaryNode_.assign(kinds_.size(), -1);
@@ -1216,7 +1264,10 @@ void SimulationCore::buildExecutionGraph() {
 }
 
 uint8_t SimulationCore::evaluateComponent(int32_t node) const {
-	const int32_t highInputCount = nodeInputHighCounts_[node];
+	return evaluateComponent(node, nodeInputHighCounts_[node]);
+}
+
+uint8_t SimulationCore::evaluateComponent(int32_t node, int32_t highInputCount) const {
 	const EvaluationMode mode = nodeEvaluationModes_[node];
 	if (mode == EvaluationMode::High) {
 		return highInputCount != 0 ? 1 : 0;
@@ -1315,37 +1366,82 @@ void SimulationCore::propagateStateChange(int32_t sourceNode, uint8_t oldState, 
 	drainConnectorQueue();
 }
 
+void SimulationCore::beginPropagationBatch() {
+	pendingComponentInputs_.clear();
+	connectorWorkHeap_.clear();
+	++propagationStamp_;
+	if (propagationStamp_ != 0) {
+		return;
+	}
+	std::fill(componentInputStamps_.begin(), componentInputStamps_.end(), 0);
+	std::fill(connectorDeltaStamps_.begin(), connectorDeltaStamps_.end(), 0);
+	propagationStamp_ = 1;
+}
+
+void SimulationCore::flushComponentInputDeltas() {
+	for (int32_t node : pendingComponentInputs_) {
+		const int32_t inputDelta = pendingComponentInputDeltas_[node];
+		const bool gateAlreadyQueued = isComponentGateQueued(node);
+		if (inputDelta == 0 && nodeKinds_[node] != ToolKind::Latch && nodeEvaluationModes_[node] != EvaluationMode::State &&
+				!gateAlreadyQueued) {
+			continue;
+		}
+		const int32_t nextHighInputCount = nodeInputHighCounts_[node] + inputDelta;
+		nodeInputHighCounts_[node] = nextHighInputCount;
+		const uint8_t nextState = evaluateComponent(node, nextHighInputCount);
+		if (nodeKinds_[node] == ToolKind::Latch || nodeEvaluationModes_[node] == EvaluationMode::State ||
+				gateAlreadyQueued || nextState != nodeStates_[node]) {
+			enqueueComponentGate(node, nextState);
+		}
+	}
+}
+
 void SimulationCore::drainConnectorQueue() {
-	size_t queueSize = connectorQueueEvents_.size();
-	for (size_t cursor = 0; cursor < queueSize; ++cursor) {
+	beginPropagationBatch();
+	// Seed every component transition before committing connectors, so converging paths share one final delta.
+	const size_t initialQueueSize = connectorQueueEvents_.size();
+	for (size_t cursor = 0; cursor < initialQueueSize; ++cursor) {
 		const int32_t event = connectorQueueEvents_[cursor];
 		const bool highState = event >= 0;
 		const int32_t source = highState ? event : ~event;
 		const int32_t stateDelta = highState ? 1 : -1;
 		const int32_t componentEdgeEnd = outgoingComponentEnds_[source];
 		for (int32_t edge = outgoingOffsets_[source]; edge < componentEdgeEnd; ++edge) {
-			const int32_t target = outgoingTargets_[edge];
-			nodeInputHighCounts_[target] += stateDelta;
-			enqueueComponentGate(target);
+			accumulateComponentInputDelta(outgoingTargets_[edge], stateDelta);
 		}
 		for (int32_t edge = componentEdgeEnd; edge < outgoingOffsets_[source + 1]; ++edge) {
-			const int32_t target = outgoingTargets_[edge];
-			int32_t &highInputCount = nodeInputHighCounts_[target];
-			const int32_t previousHighInputCount = highInputCount;
-			highInputCount += stateDelta;
-			const uint8_t previousState = previousHighInputCount != 0 ? 1 : 0;
-			const uint8_t nextState = highInputCount != 0 ? 1 : 0;
-			if (previousState == nextState) {
-				continue;
-			}
-			setChangedNodeState(target, nextState);
-			if (outgoingOffsets_[target] == outgoingOffsets_[target + 1]) {
-				continue;
-			}
-			connectorQueueEvents_.push_back(encodeConnectorEvent(target, nextState));
-			++queueSize;
+			accumulateConnectorDelta(outgoingTargets_[edge], stateDelta);
 		}
 	}
+	connectorQueueEvents_.clear();
+
+	const auto laterTopologicalRank = [this](int32_t left, int32_t right) {
+		return connectorTopologicalRanks_[left] > connectorTopologicalRanks_[right];
+	};
+	while (!connectorWorkHeap_.empty()) {
+		std::pop_heap(connectorWorkHeap_.begin(), connectorWorkHeap_.end(), laterTopologicalRank);
+		const int32_t source = connectorWorkHeap_.back();
+		connectorWorkHeap_.pop_back();
+		const int32_t stateDelta = pendingConnectorDeltas_[source];
+		int32_t &highInputCount = nodeInputHighCounts_[source];
+		const int32_t previousHighInputCount = highInputCount;
+		highInputCount += stateDelta;
+		const uint8_t previousState = previousHighInputCount != 0 ? 1 : 0;
+		const uint8_t nextState = highInputCount != 0 ? 1 : 0;
+		if (previousState == nextState) {
+			continue;
+		}
+		setChangedNodeState(source, nextState);
+		const int32_t outputStateDelta = nextState != 0 ? 1 : -1;
+		const int32_t componentEdgeEnd = outgoingComponentEnds_[source];
+		for (int32_t edge = outgoingOffsets_[source]; edge < componentEdgeEnd; ++edge) {
+			accumulateComponentInputDelta(outgoingTargets_[edge], outputStateDelta);
+		}
+		for (int32_t edge = componentEdgeEnd; edge < outgoingOffsets_[source + 1]; ++edge) {
+			accumulateConnectorDelta(outgoingTargets_[edge], outputStateDelta);
+		}
+	}
+	flushComponentInputDeltas();
 }
 
 void SimulationCore::rebuildDerivedState(const std::vector<uint8_t> &componentStates) {
@@ -1355,6 +1451,8 @@ void SimulationCore::rebuildDerivedState(const std::vector<uint8_t> &componentSt
 	std::fill(nextGateSummaryWords_.begin(), nextGateSummaryWords_.end(), 0);
 	std::fill(currentGateWords_.begin(), currentGateWords_.end(), 0);
 	std::fill(currentGateSummaryWords_.begin(), currentGateSummaryWords_.end(), 0);
+	std::fill(nextGateStates_.begin(), nextGateStates_.end(), 0);
+	std::fill(currentGateStates_.begin(), currentGateStates_.end(), 0);
 	connectorQueueEvents_.clear();
 	for (int32_t index = 0; index < static_cast<int32_t>(componentNodes_.size()); ++index) {
 		const int32_t node = componentNodes_[index];
@@ -1376,6 +1474,8 @@ void SimulationCore::resetInternal() {
 	std::fill(nextGateSummaryWords_.begin(), nextGateSummaryWords_.end(), 0);
 	std::fill(currentGateWords_.begin(), currentGateWords_.end(), 0);
 	std::fill(currentGateSummaryWords_.begin(), currentGateSummaryWords_.end(), 0);
+	std::fill(nextGateStates_.begin(), nextGateStates_.end(), 0);
+	std::fill(currentGateStates_.begin(), currentGateStates_.end(), 0);
 	connectorQueueEvents_.clear();
 	for (int32_t node = 0; node < static_cast<int32_t>(nodeStates_.size()); ++node) {
 		if (nodeStates_[node] != 0) {
@@ -1471,6 +1571,7 @@ bool SimulationCore::toggleLatch(int32_t cellIndex, std::vector<int32_t> &change
 void SimulationCore::advanceState() {
 	currentGateWords_.swap(nextGateWords_);
 	currentGateSummaryWords_.swap(nextGateSummaryWords_);
+	currentGateStates_.swap(nextGateStates_);
 	std::fill(nextGateWords_.begin(), nextGateWords_.end(), 0);
 	std::fill(nextGateSummaryWords_.begin(), nextGateSummaryWords_.end(), 0);
 	connectorQueueEvents_.clear();
@@ -1487,7 +1588,7 @@ void SimulationCore::advanceState() {
 				const size_t componentIndex = gateWordIndex * 64U + static_cast<size_t>(gateOffset);
 				// Type-stable ordering keeps component IDs in the leading contiguous range.
 				const int32_t node = static_cast<int32_t>(componentIndex);
-				const uint8_t nextState = evaluateComponent(node);
+				const uint8_t nextState = currentGateStates_[node];
 				const uint8_t previousState = nodeStates_[node];
 				if (nextState != previousState) {
 					setChangedNodeState(node, nextState);
