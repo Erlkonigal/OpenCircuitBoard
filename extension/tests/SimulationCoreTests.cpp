@@ -48,6 +48,16 @@ void expectState(const SimulationCore &core, const CompileInput &input, int32_t 
 	expect(states[cellIndex(input, x, y)] == expected, message);
 }
 
+int32_t countChangesForCell(const std::vector<int32_t> &changes, int32_t cell) {
+	int32_t count = 0;
+	for (size_t offset = 0; offset + 1U < changes.size(); offset += 2U) {
+		if (changes[offset] == cell) {
+			++count;
+		}
+	}
+	return count;
+}
+
 void testReadWritePipeline() {
 	CompileInput input = makeInput(5, 1);
 	input.kinds = {
@@ -130,6 +140,63 @@ void testSilentAdvanceDrainsOnlyFinalChanges() {
 	expect(clockCore.drainStateChanges().empty(), "silent collection omits a cell that returns to its reported state");
 }
 
+void testDeferredVisibleStateMaterialization() {
+	CompileInput input = makeInput(5, 1);
+	setKind(input, 0, 0, ToolKind::Clock);
+	setKind(input, 1, 0, ToolKind::Read);
+	setKind(input, 2, 0, ToolKind::Trace);
+	setKind(input, 3, 0, ToolKind::Write);
+	setKind(input, 4, 0, ToolKind::Buffer);
+	SimulationCore core;
+	CompileError error;
+	expect(core.compile(input, error), "deferred materialization pipeline compiles");
+	expect(core.advanceTicksSilent(1).empty(), "silent deferred materialization does not return a delta");
+	expect(
+			core.getStates() == std::vector<int32_t>({1, 1, 1, 1, 0}),
+			"getStates materializes the latest node state without advancing simulation");
+	expect(
+			core.drainStateChanges() == std::vector<int32_t>({0, 1, 1, 1, 2, 1, 3, 1}),
+			"getStates does not consume deferred state deltas");
+	expect(core.drainStateChanges().empty(), "a deferred delta is only drained once");
+
+	CompileInput crossInput = makeInput(6, 6);
+	setKind(crossInput, 0, 3, ToolKind::Clock);
+	setKind(crossInput, 1, 3, ToolKind::Read);
+	setKind(crossInput, 2, 3, ToolKind::Trace);
+	setKind(crossInput, 3, 3, ToolKind::Cross);
+	setKind(crossInput, 4, 3, ToolKind::Trace);
+	setKind(crossInput, 3, 0, ToolKind::Clock);
+	setKind(crossInput, 3, 1, ToolKind::Read);
+	setKind(crossInput, 3, 2, ToolKind::Trace);
+	setKind(crossInput, 3, 4, ToolKind::Trace);
+	crossInput.clockHoldTicks[cellIndex(crossInput, 3, 0)] = 2;
+	SimulationCore crossCore;
+	expect(crossCore.compile(crossInput, error), "deferred materialization Cross circuit compiles");
+	const int32_t crossCell = cellIndex(crossInput, 3, 3);
+	const std::vector<int32_t> firstCrossChanges = crossCore.advanceTick();
+	expect(countChangesForCell(firstCrossChanges, crossCell) == 1, "Cross emits one delta when one channel turns on");
+	expectState(crossCore, crossInput, 3, 3, 1, "Cross becomes visible when its horizontal channel turns on");
+	const std::vector<int32_t> secondCrossChanges = crossCore.advanceTick();
+	expect(countChangesForCell(secondCrossChanges, crossCell) == 0, "Cross omits a delta when one channel replaces the other");
+	expectState(crossCore, crossInput, 3, 3, 1, "Cross remains visible when its vertical channel replaces the horizontal channel");
+
+	CompileInput clockInput = makeInput(1, 1);
+	setKind(clockInput, 0, 0, ToolKind::Clock);
+	SimulationCore clockCore;
+	expect(clockCore.compile(clockInput, error), "deferred materialization Clock compiles");
+	clockCore.advanceTicksSilent(1);
+	expect(clockCore.reset().empty(), "reset collapses an unreported silent Clock transition");
+	clockCore.advanceTicksSilent(1);
+	expect(clockCore.drainStateChanges() == std::vector<int32_t>({0, 1}), "drain reports the materialized Clock state");
+	const std::vector<uint8_t> highSnapshot = clockCore.captureState();
+	expect(clockCore.advanceTick() == std::vector<int32_t>({0, 0}), "Clock advances low before snapshot restore");
+	std::string restoreError;
+	expect(clockCore.restoreState(highSnapshot, restoreError), "restores a materialized Clock snapshot");
+	expect(clockCore.getStates() == std::vector<int32_t>({1}), "restore materializes high component state");
+	expect(clockCore.drainStateChanges().empty(), "restore resets deferred delta collection");
+	expect(clockCore.advanceTick() == std::vector<int32_t>({0, 0}), "Clock advances from restored state");
+}
+
 void testGraphOrderingPreservesExternalStatesAndDeltas() {
 	CompileInput input = makeInput(8, 1);
 	setKind(input, 0, 0, ToolKind::Clock);
@@ -141,7 +208,7 @@ void testGraphOrderingPreservesExternalStatesAndDeltas() {
 	setKind(input, 6, 0, ToolKind::Write);
 	setKind(input, 7, 0, ToolKind::Buffer);
 	SimulationCore baselineCore(false);
-	SimulationCore orderedCore;
+	SimulationCore orderedCore(true);
 	CompileError error;
 	expect(baselineCore.compile(input, error), "unreordered reference circuit compiles");
 	expect(orderedCore.compile(input, error), "reordered reference circuit compiles");
@@ -599,6 +666,7 @@ int main() {
 	testReadWritePipeline();
 	testBatchAdvanceMatchesSingleTicks();
 	testSilentAdvanceDrainsOnlyFinalChanges();
+	testDeferredVisibleStateMaterialization();
 	testGraphOrderingPreservesExternalStatesAndDeltas();
 	testReadWriteZeroDelayPeerPorts();
 	testWriteAcceptsReadInput();

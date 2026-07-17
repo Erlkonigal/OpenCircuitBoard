@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
 #include <string>
 #include <vector>
@@ -54,7 +55,7 @@ struct CompileError {
 
 class SimulationCore {
 public:
-	explicit SimulationCore(bool useGraphLocalityOrdering = true);
+	explicit SimulationCore(bool useGraphLocalityOrdering = false);
 
 	bool compile(const CompileInput &input, CompileError &error);
 	std::vector<int32_t> advanceTick();
@@ -109,8 +110,10 @@ private:
 	void drainConnectorQueue();
 	void enqueueGate(int32_t node);
 	void setNodeState(int32_t node, uint8_t state);
-	void updateVisibleCellsForNode(int32_t node);
-	void updateVisibleCell(int32_t cell);
+	void markVisibleNodeDirty(int32_t node);
+	void markAllVisibleNodesDirty();
+	void materializeVisibleStates() const;
+	void updateVisibleCell(int32_t cell) const;
 	void resetChangeCollector();
 	void advanceState();
 	void resetInternal();
@@ -123,7 +126,7 @@ private:
 	uint64_t topologySignature_ = 0;
 	uint64_t tickCount_ = 0;
 	int64_t graphLocalityScore_ = 0;
-	bool useGraphLocalityOrdering_ = true;
+	bool useGraphLocalityOrdering_ = false;
 	std::vector<int32_t> kinds_;
 	std::vector<int32_t> initialStates_;
 	std::vector<int32_t> clockHoldTicks_;
@@ -166,18 +169,23 @@ private:
 	std::vector<uint64_t> currentGateWords_;
 	std::vector<uint64_t> currentGateSummaryWords_;
 	std::vector<int32_t> pendingStateNodes_;
-	std::vector<uint8_t> pendingPreviousStates_;
 	std::vector<uint8_t> pendingNextStates_;
 	std::vector<int32_t> connectorQueueNodes_;
 	std::vector<int8_t> connectorQueueDeltas_;
-	std::vector<std::vector<int32_t>> nodeVisibleCells_;
+	std::vector<size_t> visibleCellOffsets_;
+	std::vector<int32_t> visibleCellIndices_;
 	std::vector<int32_t> cellPrimaryNode_;
 	std::vector<int32_t> cellSecondaryNode_;
-	std::vector<uint8_t> visibleStates_;
+	mutable std::vector<uint32_t> dirtyNodeStamps_;
+	mutable std::vector<int32_t> dirtyNodes_;
+	mutable uint32_t dirtyNodeStamp_ = 1;
+	mutable std::vector<uint32_t> materializedCellStamps_;
+	mutable uint32_t materializedCellStamp_ = 1;
+	mutable std::vector<uint8_t> visibleStates_;
 	std::vector<uint8_t> reportedVisibleStates_;
-	std::vector<uint32_t> changedCellStamps_;
-	std::vector<int32_t> changedCells_;
-	uint32_t changeStamp_ = 1;
+	mutable std::vector<uint32_t> changedCellStamps_;
+	mutable std::vector<int32_t> changedCells_;
+	mutable uint32_t changeStamp_ = 1;
 };
 
 } // namespace ocb

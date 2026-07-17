@@ -5,6 +5,7 @@ projectRoot := $(CURDIR)
 buildRoot := $(projectRoot)/build
 godotCppRoot := $(projectRoot)/thirdparty/godotcpp
 targetPlatform ?= windows
+coreBenchmarkArgs ?=
 targetBuildRoot := $(buildRoot)/$(targetPlatform)
 backendBuildRoot := $(targetBuildRoot)/extension
 
@@ -29,7 +30,7 @@ help:
 	@echo "make backend targetPlatform=<linux|windows>  Build the OcbSimulation GDExtension"
 	@echo "make build targetPlatform=<linux|windows>    Build the frontend target and GDExtension"
 	@echo "make coreTest targetPlatform=<linux|windows> Run native SimulationCore tests"
-	@echo "make coreBenchmark targetPlatform=<linux|windows> Run the Release SimulationCore throughput benchmark"
+	@echo "make coreBenchmark targetPlatform=<linux|windows> Run the 1024x1024 Release SimulationCore throughput benchmark"
 	@echo "make nativeTest targetPlatform=<linux|windows> Run headless GDExtension smoke tests"
 	@echo "make frontendTest targetPlatform=<linux|windows> Run real-renderer frontend tests"
 	@echo "make test targetPlatform=<linux|windows> Run core, native, and frontend tests"
@@ -97,7 +98,7 @@ coreTest: backend
 coreBenchmark: buildType := Release
 coreBenchmark: backend
 	@cmake --build "$(backendBuildRoot)" --target ocbsimulation_core_benchmark
-	@cd "$(backendBuildRoot)" && ./ocbsimulation_core_benchmark$(if $(filter windows,$(targetPlatform)),.exe)
+	@cd "$(backendBuildRoot)" && ./ocbsimulation_core_benchmark$(if $(filter windows,$(targetPlatform)),.exe) $(coreBenchmarkArgs)
 
 nativeTest: backend
 	@"$(godotExecutable)" --headless --path "$(projectRoot)" --script "$(projectRoot)/scripts/tests/NativeSimulationTest.gd"

@@ -365,13 +365,18 @@ void SimulationCore::clear() {
 	currentGateWords_.clear();
 	currentGateSummaryWords_.clear();
 	pendingStateNodes_.clear();
-	pendingPreviousStates_.clear();
 	pendingNextStates_.clear();
 	connectorQueueNodes_.clear();
 	connectorQueueDeltas_.clear();
-	nodeVisibleCells_.clear();
+	visibleCellOffsets_.clear();
+	visibleCellIndices_.clear();
 	cellPrimaryNode_.clear();
 	cellSecondaryNode_.clear();
+	dirtyNodeStamps_.clear();
+	dirtyNodes_.clear();
+	dirtyNodeStamp_ = 1;
+	materializedCellStamps_.clear();
+	materializedCellStamp_ = 1;
 	visibleStates_.clear();
 	reportedVisibleStates_.clear();
 	changedCellStamps_.clear();
@@ -821,6 +826,7 @@ bool SimulationCore::compile(const CompileInput &input, CompileError &error) {
 	buildExecutionGraph();
 	topologySignature_ = makeTopologySignature();
 	resetInternal();
+	materializeVisibleStates();
 	reportedVisibleStates_ = visibleStates_;
 	resetChangeCollector();
 	compiled_ = true;
@@ -1027,8 +1033,6 @@ void SimulationCore::buildExecutionGraph() {
 	currentGateSummaryWords_.assign(gateSummaryWordCount, 0);
 	pendingStateNodes_.clear();
 	pendingStateNodes_.reserve(originalNodeCount);
-	pendingPreviousStates_.clear();
-	pendingPreviousStates_.reserve(originalNodeCount);
 	pendingNextStates_.clear();
 	pendingNextStates_.reserve(originalNodeCount);
 	connectorQueueNodes_.clear();
@@ -1037,9 +1041,9 @@ void SimulationCore::buildExecutionGraph() {
 	connectorQueueDeltas_.reserve(originalNodeCount);
 	nodeStates_.assign(originalNodeCount, 0);
 	clockPhases_.assign(originalNodeCount, 0);
-	nodeVisibleCells_.assign(originalNodeCount, {});
 	cellPrimaryNode_.assign(kinds_.size(), -1);
 	cellSecondaryNode_.assign(kinds_.size(), -1);
+	visibleCellOffsets_.assign(static_cast<size_t>(originalNodeCount) + 1U, 0);
 	for (int32_t cell = 0; cell < static_cast<int32_t>(kinds_.size()); ++cell) {
 		const ToolKind kind = static_cast<ToolKind>(kinds_[cell]);
 		if (isConductor(kind)) {
@@ -1059,12 +1063,33 @@ void SimulationCore::buildExecutionGraph() {
 		const int32_t primary = cellPrimaryNode_[cell];
 		const int32_t secondary = cellSecondaryNode_[cell];
 		if (primary >= 0) {
-			nodeVisibleCells_[primary].push_back(cell);
+			++visibleCellOffsets_[static_cast<size_t>(primary) + 1U];
 		}
 		if (secondary >= 0 && secondary != primary) {
-			nodeVisibleCells_[secondary].push_back(cell);
+			++visibleCellOffsets_[static_cast<size_t>(secondary) + 1U];
 		}
 	}
+	for (size_t node = 1; node < visibleCellOffsets_.size(); ++node) {
+		visibleCellOffsets_[node] += visibleCellOffsets_[node - 1U];
+	}
+	visibleCellIndices_.resize(visibleCellOffsets_.back());
+	std::vector<size_t> nextVisibleCellOffsets = visibleCellOffsets_;
+	for (int32_t cell = 0; cell < static_cast<int32_t>(kinds_.size()); ++cell) {
+		const int32_t primary = cellPrimaryNode_[cell];
+		const int32_t secondary = cellSecondaryNode_[cell];
+		if (primary >= 0) {
+			visibleCellIndices_[nextVisibleCellOffsets[primary]++] = cell;
+		}
+		if (secondary >= 0 && secondary != primary) {
+			visibleCellIndices_[nextVisibleCellOffsets[secondary]++] = cell;
+		}
+	}
+	dirtyNodeStamps_.assign(originalNodeCount, 0);
+	dirtyNodes_.clear();
+	dirtyNodes_.reserve(originalNodeCount);
+	dirtyNodeStamp_ = 1;
+	materializedCellStamps_.assign(kinds_.size(), 0);
+	materializedCellStamp_ = 1;
 	visibleStates_.assign(kinds_.size(), 0);
 	reportedVisibleStates_.assign(kinds_.size(), 0);
 	changedCellStamps_.assign(kinds_.size(), 0);
@@ -1110,7 +1135,7 @@ uint8_t SimulationCore::evaluateComponent(int32_t node) const {
 	}
 }
 
-void SimulationCore::updateVisibleCell(int32_t cell) {
+void SimulationCore::updateVisibleCell(int32_t cell) const {
 	if (cell < 0 || cell >= static_cast<int32_t>(visibleStates_.size())) {
 		return;
 	}
@@ -1128,9 +1153,48 @@ void SimulationCore::updateVisibleCell(int32_t cell) {
 	}
 }
 
-void SimulationCore::updateVisibleCellsForNode(int32_t node) {
-	for (int32_t cell : nodeVisibleCells_[node]) {
-		updateVisibleCell(cell);
+void SimulationCore::markVisibleNodeDirty(int32_t node) {
+	if (node < 0 || static_cast<size_t>(node) + 1U >= visibleCellOffsets_.size() ||
+			visibleCellOffsets_[node] == visibleCellOffsets_[static_cast<size_t>(node) + 1U]) {
+		return;
+	}
+	if (dirtyNodeStamps_[node] == dirtyNodeStamp_) {
+		return;
+	}
+	dirtyNodeStamps_[node] = dirtyNodeStamp_;
+	dirtyNodes_.push_back(node);
+}
+
+void SimulationCore::markAllVisibleNodesDirty() {
+	for (int32_t node = 0; node + 1 < static_cast<int32_t>(visibleCellOffsets_.size()); ++node) {
+		markVisibleNodeDirty(node);
+	}
+}
+
+void SimulationCore::materializeVisibleStates() const {
+	if (dirtyNodes_.empty()) {
+		return;
+	}
+	++materializedCellStamp_;
+	if (materializedCellStamp_ == 0) {
+		std::fill(materializedCellStamps_.begin(), materializedCellStamps_.end(), 0);
+		materializedCellStamp_ = 1;
+	}
+	for (int32_t node : dirtyNodes_) {
+		for (size_t offset = visibleCellOffsets_[node]; offset < visibleCellOffsets_[static_cast<size_t>(node) + 1U]; ++offset) {
+			const int32_t cell = visibleCellIndices_[offset];
+			if (materializedCellStamps_[cell] == materializedCellStamp_) {
+				continue;
+			}
+			materializedCellStamps_[cell] = materializedCellStamp_;
+			updateVisibleCell(cell);
+		}
+	}
+	dirtyNodes_.clear();
+	++dirtyNodeStamp_;
+	if (dirtyNodeStamp_ == 0) {
+		std::fill(dirtyNodeStamps_.begin(), dirtyNodeStamps_.end(), 0);
+		dirtyNodeStamp_ = 1;
 	}
 }
 
@@ -1142,7 +1206,7 @@ void SimulationCore::setNodeState(int32_t node, uint8_t state) {
 	if (nodeIsComponent_[node] != 0) {
 		componentStates_[componentIndexByNode_[node]] = state;
 	}
-	updateVisibleCellsForNode(node);
+	markVisibleNodeDirty(node);
 }
 
 void SimulationCore::enqueueGate(int32_t node) {
@@ -1262,6 +1326,7 @@ std::vector<int32_t> SimulationCore::getStates() const {
 	if (!compiled_) {
 		return {};
 	}
+	materializeVisibleStates();
 	std::vector<int32_t> states(visibleStates_.size(), 0);
 	for (int32_t cell = 0; cell < static_cast<int32_t>(visibleStates_.size()); ++cell) {
 		states[cell] = visibleStates_[cell];
@@ -1279,7 +1344,11 @@ void SimulationCore::resetChangeCollector() {
 }
 
 std::vector<int32_t> SimulationCore::drainStateChanges() {
-	if (!compiled_ || changedCells_.empty()) {
+	if (!compiled_) {
+		return {};
+	}
+	materializeVisibleStates();
+	if (changedCells_.empty()) {
 		return {};
 	}
 	std::sort(changedCells_.begin(), changedCells_.end());
@@ -1326,7 +1395,6 @@ void SimulationCore::advanceState() {
 	std::fill(nextGateWords_.begin(), nextGateWords_.end(), 0);
 	std::fill(nextGateSummaryWords_.begin(), nextGateSummaryWords_.end(), 0);
 	pendingStateNodes_.clear();
-	pendingPreviousStates_.clear();
 	pendingNextStates_.clear();
 	for (size_t summaryWordIndex = 0; summaryWordIndex < currentGateSummaryWords_.size(); ++summaryWordIndex) {
 		uint64_t summary = currentGateSummaryWords_[summaryWordIndex];
@@ -1350,7 +1418,6 @@ void SimulationCore::advanceState() {
 				const uint8_t previousState = componentStates_[component];
 				if (nextState != previousState) {
 					pendingStateNodes_.push_back(node);
-					pendingPreviousStates_.push_back(previousState);
 					pendingNextStates_.push_back(nextState);
 				}
 			}
@@ -1363,7 +1430,6 @@ void SimulationCore::advanceState() {
 			const uint8_t previousState = componentStates_[componentIndexByNode_[node]];
 			const uint8_t nextState = previousState == 0 ? 1 : 0;
 			pendingStateNodes_.push_back(node);
-			pendingPreviousStates_.push_back(previousState);
 			pendingNextStates_.push_back(nextState);
 		}
 		clockPhases_[node] = phase;
@@ -1517,6 +1583,9 @@ bool SimulationCore::restoreState(const std::vector<uint8_t> &snapshot, std::str
 	changedCells_.clear();
 	std::fill(changedCellStamps_.begin(), changedCellStamps_.end(), 0);
 	changeStamp_ = 1;
+	dirtyNodes_.clear();
+	std::fill(dirtyNodeStamps_.begin(), dirtyNodeStamps_.end(), 0);
+	dirtyNodeStamp_ = 1;
 	std::vector<uint8_t> componentStatesInRuntimeOrder(componentNodes_.size(), 0);
 	for (int32_t component = 0; component < static_cast<int32_t>(snapshotComponentNodes_.size()); ++component) {
 		const int32_t node = snapshotComponentNodes_[component];
@@ -1524,11 +1593,8 @@ bool SimulationCore::restoreState(const std::vector<uint8_t> &snapshot, std::str
 		componentStatesInRuntimeOrder[static_cast<size_t>(runtimePosition - componentNodes_.begin())] = componentStates[component];
 	}
 	rebuildDerivedState(componentStatesInRuntimeOrder);
-	for (int32_t node = 0; node < static_cast<int32_t>(nodeStates_.size()); ++node) {
-		if (nodeStates_[node] != 0) {
-			updateVisibleCellsForNode(node);
-		}
-	}
+	markAllVisibleNodesDirty();
+	materializeVisibleStates();
 	clockPhases_ = std::move(clockPhases);
 	tickCount_ = tickCount;
 	reportedVisibleStates_ = visibleStates_;

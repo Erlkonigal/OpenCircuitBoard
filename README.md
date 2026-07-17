@@ -14,6 +14,7 @@ Initialize the third-party submodule, then select the target platform:
 make init
 make frontend targetPlatform=linux
 make backend targetPlatform=linux
+make coreBenchmark targetPlatform=linux
 ```
 
 Run Windows targets from an MSYS2 UCRT64 Bash shell:
@@ -21,6 +22,9 @@ Run Windows targets from an MSYS2 UCRT64 Bash shell:
 ```bash
 make frontend targetPlatform=windows
 make backend targetPlatform=windows
+make coreBenchmark targetPlatform=windows
 ```
 
 `make build targetPlatform=<linux|windows>` runs both shell targets. `make clean` removes generated build output.
+
+`coreBenchmark` defaults to a 1024x1024 board with 512 continuously toggling pipelines and reports median TPS against the 100K target. Use `coreBenchmarkArgs="--quick --compare-ordering"` for the legacy-sized graph-ordering comparison.
