@@ -18,6 +18,8 @@ using ocb::CompileInput;
 using ocb::SimulationCore;
 using ocb::ToolKind;
 
+using PropagationMode = SimulationCore::PropagationMode;
+
 constexpr int32_t StageWidth = 4;
 constexpr int32_t MixedLaneRowStride = 4;
 constexpr int32_t UnaryBufferLaneRowStride = 2;
@@ -47,13 +49,21 @@ struct BenchmarkConfig {
 	int32_t measurementTicks = 1024;
 	int32_t sampleCount = 5;
 	BenchmarkWorkload workload = BenchmarkWorkload::Mixed;
+	PropagationMode propagationMode = PropagationMode::EventDriven;
 	bool compareOrdering = false;
+	bool comparePropagation = false;
 };
 
 struct CoreBenchmarkSample {
 	double advanceSeconds = 0.0;
 	double drainSeconds = 0.0;
 	uint64_t stateChecksum = 0;
+};
+
+struct CoreBenchmarkObservation {
+	CoreBenchmarkSample sample;
+	std::vector<int32_t> stateChanges;
+	std::vector<int32_t> states;
 };
 
 struct CoreBenchmarkResult {
@@ -72,8 +82,9 @@ enum class ParseResult {
 };
 
 void printUsage() {
-	std::cout << "Usage: ocbsimulation_core_benchmark [--quick] [--compare-ordering]"
+	std::cout << "Usage: ocbsimulation_core_benchmark [--quick] [--compare-ordering|--compare-propagation]"
 			  << " [--workload mixed|unary-buffer]"
+			  << " [--propagation event|reference]"
 			  << " [--width value] [--height value] [--pipelines value]"
 			  << " [--warmup value] [--ticks value] [--samples value]\n";
 }
@@ -95,6 +106,28 @@ bool parseWorkload(const std::string &text, BenchmarkWorkload &workload) {
 	}
 	if (text == "unary-buffer") {
 		workload = BenchmarkWorkload::UnaryBuffer;
+		return true;
+	}
+	return false;
+}
+
+const char *propagationModeName(PropagationMode propagationMode) {
+	switch (propagationMode) {
+		case PropagationMode::EventDriven:
+			return "event";
+		case PropagationMode::EventDrivenReference:
+			return "reference";
+	}
+	return "unknown";
+}
+
+bool parsePropagationMode(const std::string &text, PropagationMode &propagationMode) {
+	if (text == "event") {
+		propagationMode = PropagationMode::EventDriven;
+		return true;
+	}
+	if (text == "reference") {
+		propagationMode = PropagationMode::EventDrivenReference;
 		return true;
 	}
 	return false;
@@ -140,9 +173,20 @@ ParseResult parseConfig(int argc, char **argv, BenchmarkConfig &config) {
 			config.compareOrdering = true;
 			continue;
 		}
+		if (argument == "--compare-propagation") {
+			config.comparePropagation = true;
+			continue;
+		}
 		if (argument == "--workload") {
 			if (++index >= argc || !parseWorkload(argv[index], config.workload)) {
 				std::cerr << "Expected mixed or unary-buffer after --workload\n";
+				return ParseResult::Error;
+			}
+			continue;
+		}
+		if (argument == "--propagation") {
+			if (++index >= argc || !parsePropagationMode(argv[index], config.propagationMode)) {
+				std::cerr << "Expected event or reference after --propagation\n";
 				return ParseResult::Error;
 			}
 			continue;
@@ -174,6 +218,14 @@ ParseResult parseConfig(int argc, char **argv, BenchmarkConfig &config) {
 }
 
 bool validateConfig(const BenchmarkConfig &config, std::string &error) {
+	if (config.compareOrdering && config.comparePropagation) {
+		error = "compare-ordering and compare-propagation are mutually exclusive";
+		return false;
+	}
+	if (config.comparePropagation && config.propagationMode != PropagationMode::EventDriven) {
+		error = "compare-propagation always compares reference against event";
+		return false;
+	}
 	if (config.boardWidth < 8 || config.boardHeight <= 0 || config.pipelineCount <= 0 ||
 			config.warmupTicks < 0 || config.measurementTicks <= 0 || config.sampleCount <= 0) {
 		error = "benchmark dimensions and tick counts must be positive";
@@ -303,7 +355,7 @@ bool compileBenchmarkCore(SimulationCore &core, const CompileInput &input, const
 	return false;
 }
 
-CoreBenchmarkSample benchmarkSample(SimulationCore &core, const BenchmarkConfig &config) {
+CoreBenchmarkObservation benchmarkSample(SimulationCore &core, const BenchmarkConfig &config) {
 	static_cast<void>(core.reset());
 	core.advanceTicksSilent(config.warmupTicks);
 	static_cast<void>(core.drainStateChanges());
@@ -311,14 +363,27 @@ CoreBenchmarkSample benchmarkSample(SimulationCore &core, const BenchmarkConfig 
 	const auto advanceStart = std::chrono::steady_clock::now();
 	core.advanceTicksSilent(config.measurementTicks);
 	const auto advanceFinish = std::chrono::steady_clock::now();
-	static_cast<void>(core.drainStateChanges());
+	CoreBenchmarkObservation result;
+	result.stateChanges = core.drainStateChanges();
 	const auto finish = std::chrono::steady_clock::now();
 
-	CoreBenchmarkSample result;
-	result.advanceSeconds = std::chrono::duration<double>(advanceFinish - advanceStart).count();
-	result.drainSeconds = std::chrono::duration<double>(finish - advanceFinish).count();
-	result.stateChecksum = calculateStateChecksum(core.getStates());
+	result.sample.advanceSeconds = std::chrono::duration<double>(advanceFinish - advanceStart).count();
+	result.sample.drainSeconds = std::chrono::duration<double>(finish - advanceFinish).count();
+	result.states = core.getStates();
+	result.sample.stateChecksum = calculateStateChecksum(result.states);
 	return result;
+}
+
+bool observationsMatch(const CoreBenchmarkObservation &baseline, const CoreBenchmarkObservation &candidate, const char *label) {
+	if (baseline.stateChanges != candidate.stateChanges) {
+		std::cerr << "coreBenchmark " << label << " runtime changed the state delta result\n";
+		return false;
+	}
+	if (baseline.states != candidate.states) {
+		std::cerr << "coreBenchmark " << label << " runtime changed the visible state result\n";
+		return false;
+	}
+	return true;
 }
 
 double median(std::vector<double> values) {
@@ -396,31 +461,48 @@ int main(int argc, char **argv) {
 	}
 
 	const CompileInput input = makeBenchmarkInput(config);
-	SimulationCore baselineCore(false);
+	const bool hasComparison = config.compareOrdering || config.comparePropagation;
+	const PropagationMode baselinePropagationMode =
+			config.comparePropagation ? PropagationMode::EventDrivenReference : config.propagationMode;
+	const PropagationMode comparisonPropagationMode =
+			config.comparePropagation ? PropagationMode::EventDriven : config.propagationMode;
+	const char *baselineLabel = config.comparePropagation ? "reference" : "baseline";
+	const char *comparisonLabel = config.comparePropagation ? "event" : "candidate";
+	const char *comparisonName = config.comparePropagation ? "propagation" : "ordering";
+	SimulationCore baselineCore(false, baselinePropagationMode);
 	double baselineCompileSeconds = 0.0;
-	if (!compileBenchmarkCore(baselineCore, input, "baseline", baselineCompileSeconds)) {
+	if (!compileBenchmarkCore(baselineCore, input, baselineLabel, baselineCompileSeconds)) {
 		return 1;
 	}
 
-	SimulationCore reorderedCore(true);
-	double reorderedCompileSeconds = 0.0;
-	if (config.compareOrdering && !compileBenchmarkCore(reorderedCore, input, "reordered", reorderedCompileSeconds)) {
+	SimulationCore comparisonCore(config.compareOrdering, comparisonPropagationMode);
+	double comparisonCompileSeconds = 0.0;
+	if (hasComparison && !compileBenchmarkCore(comparisonCore, input, comparisonLabel, comparisonCompileSeconds)) {
 		return 1;
 	}
 
 	std::vector<CoreBenchmarkSample> baselineSamples(config.sampleCount);
-	std::vector<CoreBenchmarkSample> reorderedSamples;
-	if (config.compareOrdering) {
-		reorderedSamples.resize(config.sampleCount);
+	std::vector<CoreBenchmarkSample> comparisonSamples;
+	if (hasComparison) {
+		comparisonSamples.resize(config.sampleCount);
 	}
 	for (int32_t sample = 0; sample < config.sampleCount; ++sample) {
-		const bool reorderedFirst = config.compareOrdering && (sample % 2 != 0);
-		if (reorderedFirst) {
-			reorderedSamples[sample] = benchmarkSample(reorderedCore, config);
+		CoreBenchmarkObservation baselineObservation;
+		CoreBenchmarkObservation comparisonObservation;
+		const bool comparisonFirst = hasComparison && (sample % 2 != 0);
+		if (comparisonFirst) {
+			comparisonObservation = benchmarkSample(comparisonCore, config);
 		}
-		baselineSamples[sample] = benchmarkSample(baselineCore, config);
-		if (config.compareOrdering && !reorderedFirst) {
-			reorderedSamples[sample] = benchmarkSample(reorderedCore, config);
+		baselineObservation = benchmarkSample(baselineCore, config);
+		if (hasComparison && !comparisonFirst) {
+			comparisonObservation = benchmarkSample(comparisonCore, config);
+		}
+		baselineSamples[sample] = baselineObservation.sample;
+		if (hasComparison) {
+			comparisonSamples[sample] = comparisonObservation.sample;
+			if (!observationsMatch(baselineObservation, comparisonObservation, comparisonName)) {
+				return 1;
+			}
 		}
 	}
 
@@ -429,49 +511,76 @@ int main(int argc, char **argv) {
 		std::cerr << "coreBenchmark baseline produced inconsistent samples\n";
 		return 1;
 	}
-	CoreBenchmarkResult reorderedResult;
-	if (config.compareOrdering && !summarizeSamples(reorderedSamples, config.measurementTicks, reorderedResult)) {
-		std::cerr << "coreBenchmark reordered produced inconsistent samples\n";
+	CoreBenchmarkResult comparisonResult;
+	if (hasComparison && !summarizeSamples(comparisonSamples, config.measurementTicks, comparisonResult)) {
+		std::cerr << "coreBenchmark " << comparisonLabel << " produced inconsistent samples\n";
 		return 1;
 	}
 
 	std::cout << std::fixed << std::setprecision(2);
 	std::cout << "Core benchmark: workload=" << workloadName(config.workload) << ", " << config.boardWidth << 'x' << config.boardHeight
 			  << ", lanes=" << config.pipelineCount << ", activeCells=" << activeCellCount(input)
+			  << ", propagation=" << (config.comparePropagation ? "reference-vs-event" : propagationModeName(config.propagationMode))
 			  << ", warmup=" << config.warmupTicks << ", measured=" << config.measurementTicks
 			  << ", pairedSamples=" << config.sampleCount << "\n";
 	if (config.workload == BenchmarkWorkload::Mixed) {
 		std::cout << "Core benchmark mixed gate cycle: And,Nand,Or,Nor,Xor,Xnor,Not,Buffer\n";
 	}
-	printResult("baseline", baselineResult, baselineCompileSeconds);
+	printResult(baselineLabel, baselineResult, baselineCompileSeconds);
 	std::cout << "SimulationCore execution graph locality (baseline): " << baselineCore.getGraphLocalityScore() << '\n';
+	std::cout << "SimulationCore single-input fast path (" << baselineLabel << "): "
+			  << (baselineCore.isSingleInputComponentFastPathEnabled() ? "enabled" : "disabled") << '\n';
 
-	if (!config.compareOrdering) {
+	if (!hasComparison) {
 		return 0;
 	}
-	if (baselineResult.stateChecksum != reorderedResult.stateChecksum) {
-		std::cerr << "coreBenchmark reordered runtime changed the visible state result\n";
+	if (baselineResult.stateChecksum != comparisonResult.stateChecksum) {
+		std::cerr << "coreBenchmark " << comparisonLabel << " runtime changed the visible state result\n";
 		return 1;
 	}
-	printResult("candidate", reorderedResult, reorderedCompileSeconds);
-	const bool orderingApplied = reorderedCore.isGraphLocalityOrderingApplied();
-	std::cout << "SimulationCore graph locality ordering (candidate): "
-			  << (orderingApplied ? "applied" : "rejected") << '\n';
-	if (!orderingApplied) {
-		std::cout << "SimulationCore paired TPS ordering improvement: not_measured (candidate_rejected)\n";
-		return 0;
+	printResult(comparisonLabel, comparisonResult, comparisonCompileSeconds);
+	std::cout << "SimulationCore single-input fast path (" << comparisonLabel << "): "
+			  << (comparisonCore.isSingleInputComponentFastPathEnabled() ? "enabled" : "disabled") << '\n';
+	if (config.compareOrdering) {
+		const bool orderingApplied = comparisonCore.isGraphLocalityOrderingApplied();
+		std::cout << "SimulationCore graph locality ordering (candidate): "
+				  << (orderingApplied ? "applied" : "rejected") << '\n';
+		if (!orderingApplied) {
+			std::cout << "SimulationCore paired TPS ordering improvement: not_measured (candidate_rejected)\n";
+			return 0;
+		}
 	}
-	std::vector<double> pairedImprovements;
-	pairedImprovements.reserve(config.sampleCount);
+	std::vector<double> pairedTotalSpeedups;
+	std::vector<double> pairedAdvanceSpeedups;
+	std::vector<double> pairedDrainSpeedups;
+	pairedTotalSpeedups.reserve(config.sampleCount);
+	pairedAdvanceSpeedups.reserve(config.sampleCount);
+	pairedDrainSpeedups.reserve(config.sampleCount);
 	for (int32_t sample = 0; sample < config.sampleCount; ++sample) {
 		const double baselineSeconds = baselineSamples[sample].advanceSeconds + baselineSamples[sample].drainSeconds;
-		const double reorderedSeconds = reorderedSamples[sample].advanceSeconds + reorderedSamples[sample].drainSeconds;
-		pairedImprovements.push_back((baselineSeconds / reorderedSeconds - 1.0) * 100.0);
+		const double comparisonSeconds = comparisonSamples[sample].advanceSeconds + comparisonSamples[sample].drainSeconds;
+		pairedTotalSpeedups.push_back((baselineSeconds / comparisonSeconds - 1.0) * 100.0);
+		pairedAdvanceSpeedups.push_back(
+				(baselineSamples[sample].advanceSeconds / comparisonSamples[sample].advanceSeconds - 1.0) * 100.0);
+		if (baselineSamples[sample].drainSeconds > 0.0 && comparisonSamples[sample].drainSeconds > 0.0) {
+			pairedDrainSpeedups.push_back(
+					(baselineSamples[sample].drainSeconds / comparisonSamples[sample].drainSeconds - 1.0) * 100.0);
+		}
 	}
-	std::cout << "SimulationCore paired TPS ordering improvement: median=" << median(pairedImprovements)
+	std::cout << "SimulationCore paired " << comparisonName << " total speedup: median=" << median(pairedTotalSpeedups)
 			  << "%\n";
-	std::cout << "SimulationCore median TPS ordering improvement: "
-			  << percentageImprovement(baselineResult.ticksPerSecond, reorderedResult.ticksPerSecond) << "%\n";
-	std::cout << "SimulationCore execution graph locality (reordered): " << reorderedCore.getGraphLocalityScore() << '\n';
+	std::cout << "SimulationCore paired " << comparisonName << " advance speedup: median=" << median(pairedAdvanceSpeedups)
+			  << "%\n";
+	if (pairedDrainSpeedups.empty()) {
+		std::cout << "SimulationCore paired " << comparisonName << " drain speedup: not_measured\n";
+	} else {
+		std::cout << "SimulationCore paired " << comparisonName << " drain speedup: median=" << median(pairedDrainSpeedups)
+				  << "%\n";
+	}
+	std::cout << "SimulationCore median TPS " << comparisonName << " improvement: "
+			  << percentageImprovement(baselineResult.ticksPerSecond, comparisonResult.ticksPerSecond) << "%\n";
+	if (config.compareOrdering) {
+		std::cout << "SimulationCore execution graph locality (reordered): " << comparisonCore.getGraphLocalityScore() << '\n';
+	}
 	return 0;
 }

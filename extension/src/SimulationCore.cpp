@@ -270,7 +270,8 @@ bool SimulationCore::isKnownKind(int32_t kind) {
 	return kind >= static_cast<int32_t>(ToolKind::Empty) && kind <= static_cast<int32_t>(ToolKind::Led);
 }
 
-SimulationCore::SimulationCore(bool useGraphLocalityOrdering) : useGraphLocalityOrdering_(useGraphLocalityOrdering) {
+SimulationCore::SimulationCore(bool useGraphLocalityOrdering, PropagationMode propagationMode)
+		: useGraphLocalityOrdering_(useGraphLocalityOrdering), propagationMode_(propagationMode) {
 }
 
 bool SimulationCore::isTrace(ToolKind kind) {
@@ -368,6 +369,8 @@ void SimulationCore::clear() {
 	nodeClockHoldTicks_.clear();
 	nodeLatchInitialStates_.clear();
 	nodeEvaluationModes_.clear();
+	singleInputComponentModes_.clear();
+	useSingleInputComponentFastPath_ = false;
 	nodeInputCounts_.clear();
 	nodeInputHighCounts_.clear();
 	outgoingOffsets_.clear();
@@ -393,7 +396,9 @@ void SimulationCore::clear() {
 	pendingComponentInputs_.clear();
 	pendingConnectorDeltas_.clear();
 	connectorDeltaStamps_.clear();
-	connectorWorkHeap_.clear();
+	connectorWorkWords_.clear();
+	connectorWorkWordStamps_.clear();
+	connectorActiveWordHeap_.clear();
 	propagationStamp_ = 1;
 	visibleCellOffsets_.clear();
 	visibleCellIndices_.clear();
@@ -401,6 +406,7 @@ void SimulationCore::clear() {
 	cellSecondaryNode_.clear();
 	nodeHasVisibleCells_.clear();
 	dirtyNodeStamps_.clear();
+	dirtyNodeInitialStates_.clear();
 	dirtyNodes_.clear();
 	dirtyNodeStamp_ = 1;
 	materializedCellStamps_.clear();
@@ -1089,6 +1095,7 @@ void SimulationCore::buildExecutionGraph() {
 		}
 	}
 	assert(connectorTopologicalQueue.size() == connectorNodes_.size());
+	connectorNodes_ = std::move(connectorTopologicalQueue);
 	for (int32_t &component : cellToComponent_) {
 		if (component >= 0) {
 			component = order.oldToNew[component];
@@ -1177,6 +1184,30 @@ void SimulationCore::buildExecutionGraph() {
 				break;
 		}
 	}
+	singleInputComponentModes_.assign(originalNodeCount, SingleInputComponentMode::None);
+	int64_t componentInputEdgeCount = 0;
+	int64_t singleInputComponentEdgeCount = 0;
+	for (int32_t node : componentNodes_) {
+		componentInputEdgeCount += nodeInputCounts_[node];
+		if (nodeInputCounts_[node] != 1 || nodeKinds_[node] == ToolKind::Clock) {
+			continue;
+		}
+		if (nodeKinds_[node] == ToolKind::Latch) {
+			singleInputComponentModes_[node] = SingleInputComponentMode::LatchHigh;
+			++singleInputComponentEdgeCount;
+			continue;
+		}
+		if (nodeEvaluationModes_[node] == EvaluationMode::High) {
+			singleInputComponentModes_[node] = SingleInputComponentMode::High;
+			++singleInputComponentEdgeCount;
+		} else if (nodeEvaluationModes_[node] == EvaluationMode::Low) {
+			singleInputComponentModes_[node] = SingleInputComponentMode::Low;
+			++singleInputComponentEdgeCount;
+		}
+	}
+	// Avoid a per-edge mode lookup when the generic component-input path dominates this graph.
+	useSingleInputComponentFastPath_ = propagationMode_ == PropagationMode::EventDriven &&
+			componentInputEdgeCount > 0 && singleInputComponentEdgeCount * 2 >= componentInputEdgeCount;
 	const size_t gateWordCount = (componentNodes_.size() + 63U) / 64U;
 	const size_t gateSummaryWordCount = (gateWordCount + 63U) / 64U;
 	nextGateWords_.assign(gateWordCount, 0);
@@ -1193,8 +1224,11 @@ void SimulationCore::buildExecutionGraph() {
 	pendingComponentInputs_.reserve(componentNodes_.size());
 	pendingConnectorDeltas_.assign(originalNodeCount, 0);
 	connectorDeltaStamps_.assign(originalNodeCount, 0);
-	connectorWorkHeap_.clear();
-	connectorWorkHeap_.reserve(connectorNodes_.size());
+	const size_t connectorWorkWordCount = (connectorNodes_.size() + 63U) / 64U;
+	connectorWorkWords_.assign(connectorWorkWordCount, 0);
+	connectorWorkWordStamps_.assign(connectorWorkWordCount, 0);
+	connectorActiveWordHeap_.clear();
+	connectorActiveWordHeap_.reserve(connectorWorkWordCount);
 	propagationStamp_ = 1;
 	nodeStates_.assign(originalNodeCount, 0);
 	clockPhases_.assign(originalNodeCount, 0);
@@ -1247,6 +1281,7 @@ void SimulationCore::buildExecutionGraph() {
 				visibleCellOffsets_[node] != visibleCellOffsets_[static_cast<size_t>(node) + 1U] ? 1 : 0;
 	}
 	dirtyNodeStamps_.assign(originalNodeCount, 0);
+	dirtyNodeInitialStates_.assign(originalNodeCount, 0);
 	dirtyNodes_.clear();
 	dirtyNodes_.reserve(originalNodeCount);
 	dirtyNodeStamp_ = 1;
@@ -1307,18 +1342,23 @@ void SimulationCore::updateVisibleCell(int32_t cell) const {
 	}
 }
 
-void SimulationCore::markVisibleNodeDirty(int32_t node) {
-	if (dirtyNodeStamps_[node] == dirtyNodeStamp_) {
+void SimulationCore::markVisibleNodeDirty(int32_t node, uint8_t initialState, bool forceMaterialization) {
+	if (dirtyNodeStamps_[node] != dirtyNodeStamp_) {
+		dirtyNodeStamps_[node] = dirtyNodeStamp_;
+		dirtyNodeInitialStates_[node] = forceMaterialization ? ForcedVisibleNodeInitialState : initialState;
+		dirtyNodes_.push_back(node);
 		return;
 	}
-	dirtyNodeStamps_[node] = dirtyNodeStamp_;
-	dirtyNodes_.push_back(node);
+	if (forceMaterialization) {
+		dirtyNodeInitialStates_[node] = ForcedVisibleNodeInitialState;
+	}
 }
 
 void SimulationCore::markAllVisibleNodesDirty() {
 	for (int32_t node = 0; node < static_cast<int32_t>(nodeHasVisibleCells_.size()); ++node) {
 		if (nodeHasVisibleCells_[node] != 0) {
-			markVisibleNodeDirty(node);
+			// Restore invalidates the visible cache even when this node state did not change.
+			markVisibleNodeDirty(node, nodeStates_[node], true);
 		}
 	}
 }
@@ -1333,6 +1373,9 @@ void SimulationCore::materializeVisibleStates() const {
 		materializedCellStamp_ = 1;
 	}
 	for (int32_t node : dirtyNodes_) {
+		if (dirtyNodeInitialStates_[node] != ForcedVisibleNodeInitialState && dirtyNodeInitialStates_[node] == nodeStates_[node]) {
+			continue;
+		}
 		for (size_t offset = visibleCellOffsets_[node]; offset < visibleCellOffsets_[static_cast<size_t>(node) + 1U]; ++offset) {
 			const int32_t cell = visibleCellIndices_[offset];
 			if (materializedCellStamps_[cell] == materializedCellStamp_) {
@@ -1368,13 +1411,14 @@ void SimulationCore::propagateStateChange(int32_t sourceNode, uint8_t oldState, 
 
 void SimulationCore::beginPropagationBatch() {
 	pendingComponentInputs_.clear();
-	connectorWorkHeap_.clear();
+	connectorActiveWordHeap_.clear();
 	++propagationStamp_;
 	if (propagationStamp_ != 0) {
 		return;
 	}
 	std::fill(componentInputStamps_.begin(), componentInputStamps_.end(), 0);
 	std::fill(connectorDeltaStamps_.begin(), connectorDeltaStamps_.end(), 0);
+	std::fill(connectorWorkWordStamps_.begin(), connectorWorkWordStamps_.end(), 0);
 	propagationStamp_ = 1;
 }
 
@@ -1415,30 +1459,37 @@ void SimulationCore::drainConnectorQueue() {
 	}
 	connectorQueueEvents_.clear();
 
-	const auto laterTopologicalRank = [this](int32_t left, int32_t right) {
-		return connectorTopologicalRanks_[left] > connectorTopologicalRanks_[right];
+	const auto laterWorkWord = [](int32_t left, int32_t right) {
+		return left > right;
 	};
-	while (!connectorWorkHeap_.empty()) {
-		std::pop_heap(connectorWorkHeap_.begin(), connectorWorkHeap_.end(), laterTopologicalRank);
-		const int32_t source = connectorWorkHeap_.back();
-		connectorWorkHeap_.pop_back();
-		const int32_t stateDelta = pendingConnectorDeltas_[source];
-		int32_t &highInputCount = nodeInputHighCounts_[source];
-		const int32_t previousHighInputCount = highInputCount;
-		highInputCount += stateDelta;
-		const uint8_t previousState = previousHighInputCount != 0 ? 1 : 0;
-		const uint8_t nextState = highInputCount != 0 ? 1 : 0;
-		if (previousState == nextState) {
-			continue;
-		}
-		setChangedNodeState(source, nextState);
-		const int32_t outputStateDelta = nextState != 0 ? 1 : -1;
-		const int32_t componentEdgeEnd = outgoingComponentEnds_[source];
-		for (int32_t edge = outgoingOffsets_[source]; edge < componentEdgeEnd; ++edge) {
-			accumulateComponentInputDelta(outgoingTargets_[edge], outputStateDelta);
-		}
-		for (int32_t edge = componentEdgeEnd; edge < outgoingOffsets_[source + 1]; ++edge) {
-			accumulateConnectorDelta(outgoingTargets_[edge], outputStateDelta);
+	while (!connectorActiveWordHeap_.empty()) {
+		std::pop_heap(connectorActiveWordHeap_.begin(), connectorActiveWordHeap_.end(), laterWorkWord);
+		const size_t workWordIndex = static_cast<size_t>(connectorActiveWordHeap_.back());
+		connectorActiveWordHeap_.pop_back();
+		uint64_t &workWord = connectorWorkWords_[workWordIndex];
+		while (workWord != 0) {
+			const int32_t rankOffset = countTrailingZeros(workWord);
+			workWord &= workWord - 1U;
+			const size_t connectorRank = workWordIndex * 64U + static_cast<size_t>(rankOffset);
+			const int32_t source = connectorNodes_[connectorRank];
+			const int32_t stateDelta = pendingConnectorDeltas_[source];
+			int32_t &highInputCount = nodeInputHighCounts_[source];
+			const int32_t previousHighInputCount = highInputCount;
+			highInputCount += stateDelta;
+			const uint8_t previousState = previousHighInputCount != 0 ? 1 : 0;
+			const uint8_t nextState = highInputCount != 0 ? 1 : 0;
+			if (previousState == nextState) {
+				continue;
+			}
+			setChangedNodeState(source, nextState);
+			const int32_t outputStateDelta = nextState != 0 ? 1 : -1;
+			const int32_t componentEdgeEnd = outgoingComponentEnds_[source];
+			for (int32_t edge = outgoingOffsets_[source]; edge < componentEdgeEnd; ++edge) {
+				accumulateComponentInputDelta(outgoingTargets_[edge], outputStateDelta);
+			}
+			for (int32_t edge = componentEdgeEnd; edge < outgoingOffsets_[source + 1]; ++edge) {
+				accumulateConnectorDelta(outgoingTargets_[edge], outputStateDelta);
+			}
 		}
 	}
 	flushComponentInputDeltas();
@@ -1750,6 +1801,7 @@ bool SimulationCore::restoreState(const std::vector<uint8_t> &snapshot, std::str
 	changeStamp_ = 1;
 	dirtyNodes_.clear();
 	std::fill(dirtyNodeStamps_.begin(), dirtyNodeStamps_.end(), 0);
+	std::fill(dirtyNodeInitialStates_.begin(), dirtyNodeInitialStates_.end(), 0);
 	dirtyNodeStamp_ = 1;
 	std::vector<uint8_t> componentStatesInRuntimeOrder(componentNodes_.size(), 0);
 	for (int32_t component = 0; component < static_cast<int32_t>(snapshotComponentNodes_.size()); ++component) {
@@ -1777,6 +1829,10 @@ bool SimulationCore::isGraphLocalityOrderingApplied() const {
 
 int64_t SimulationCore::getGraphLocalityScore() const {
 	return graphLocalityScore_;
+}
+
+bool SimulationCore::isSingleInputComponentFastPathEnabled() const {
+	return useSingleInputComponentFastPath_;
 }
 
 } // namespace ocb

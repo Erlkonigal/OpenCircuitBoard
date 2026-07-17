@@ -56,7 +56,14 @@ struct CompileError {
 
 class SimulationCore {
 public:
-	explicit SimulationCore(bool useGraphLocalityOrdering = false);
+	enum class PropagationMode : uint8_t {
+		EventDriven,
+		EventDrivenReference,
+	};
+
+	explicit SimulationCore(
+			bool useGraphLocalityOrdering = false,
+			PropagationMode propagationMode = PropagationMode::EventDriven);
 
 	bool compile(const CompileInput &input, CompileError &error);
 	std::vector<int32_t> advanceTick();
@@ -71,6 +78,7 @@ public:
 	bool isCompiled() const;
 	bool isGraphLocalityOrderingApplied() const;
 	int64_t getGraphLocalityScore() const;
+	bool isSingleInputComponentFastPathEnabled() const;
 
 private:
 	enum class EvaluationMode : uint8_t {
@@ -81,6 +89,13 @@ private:
 		NotAllHigh,
 		OddParity,
 		EvenParity,
+	};
+
+	enum class SingleInputComponentMode : uint8_t {
+		None,
+		High,
+		Low,
+		LatchHigh,
 	};
 
 	struct Component {
@@ -137,6 +152,8 @@ private:
 		std::vector<int32_t> targetComponents;
 	};
 
+	static constexpr uint8_t ForcedVisibleNodeInitialState = 2;
+
 	static bool isKnownKind(int32_t kind);
 	static bool isTrace(ToolKind kind);
 	static bool isBus(ToolKind kind);
@@ -163,7 +180,28 @@ private:
 		const size_t gateIndex = static_cast<size_t>(componentNode);
 		return (nextGateWords_[gateIndex / 64U] & (uint64_t{1} << (gateIndex % 64U))) != 0;
 	}
+	void applySingleInputComponentDelta(
+			int32_t componentNode,
+			int32_t stateDelta,
+			SingleInputComponentMode singleInputMode) {
+		const int32_t nextHighInputCount = nodeInputHighCounts_[componentNode] + stateDelta;
+		nodeInputHighCounts_[componentNode] = nextHighInputCount;
+		const bool gateAlreadyQueued = isComponentGateQueued(componentNode);
+		const uint8_t nextState =
+				singleInputMode == SingleInputComponentMode::Low ? (nextHighInputCount == 0 ? 1 : 0) :
+						(nextHighInputCount != 0 ? 1 : 0);
+		if (singleInputMode == SingleInputComponentMode::LatchHigh || gateAlreadyQueued || nextState != nodeStates_[componentNode]) {
+			enqueueComponentGate(componentNode, nextState);
+		}
+	}
 	void accumulateComponentInputDelta(int32_t componentNode, int32_t stateDelta) {
+		if (useSingleInputComponentFastPath_) {
+			const SingleInputComponentMode singleInputMode = singleInputComponentModes_[componentNode];
+			if (singleInputMode != SingleInputComponentMode::None) {
+				applySingleInputComponentDelta(componentNode, stateDelta, singleInputMode);
+				return;
+			}
+		}
 		if (componentInputStamps_[componentNode] != propagationStamp_) {
 			componentInputStamps_[componentNode] = propagationStamp_;
 			pendingComponentInputDeltas_[componentNode] = stateDelta;
@@ -179,11 +217,19 @@ private:
 		}
 		connectorDeltaStamps_[connectorNode] = propagationStamp_;
 		pendingConnectorDeltas_[connectorNode] = stateDelta;
-		connectorWorkHeap_.push_back(connectorNode);
-		const auto laterTopologicalRank = [this](int32_t left, int32_t right) {
-			return connectorTopologicalRanks_[left] > connectorTopologicalRanks_[right];
-		};
-		std::push_heap(connectorWorkHeap_.begin(), connectorWorkHeap_.end(), laterTopologicalRank);
+		const int32_t connectorRank = connectorTopologicalRanks_[connectorNode];
+		const size_t workWordIndex = static_cast<size_t>(connectorRank) / 64U;
+		uint64_t &workWord = connectorWorkWords_[workWordIndex];
+		if (connectorWorkWordStamps_[workWordIndex] != propagationStamp_) {
+			connectorWorkWordStamps_[workWordIndex] = propagationStamp_;
+			workWord = 0;
+			connectorActiveWordHeap_.push_back(static_cast<int32_t>(workWordIndex));
+			const auto laterWorkWord = [](int32_t left, int32_t right) {
+				return left > right;
+			};
+			std::push_heap(connectorActiveWordHeap_.begin(), connectorActiveWordHeap_.end(), laterWorkWord);
+		}
+		workWord |= uint64_t{1} << (static_cast<size_t>(connectorRank) % 64U);
 	}
 	void enqueueComponentGate(int32_t componentNode, uint8_t nextState) {
 		nextGateStates_[componentNode] = nextState;
@@ -202,12 +248,13 @@ private:
 		const size_t summaryWordIndex = wordIndex / 64U;
 		nextGateSummaryWords_[summaryWordIndex] |= uint64_t{1} << (wordIndex % 64U);
 	}
-	void markVisibleNodeDirty(int32_t node);
+	void markVisibleNodeDirty(int32_t node, uint8_t initialState, bool forceMaterialization = false);
 	void setChangedNodeState(int32_t node, uint8_t state) {
-		nodeStates_[node] = state;
+		const uint8_t previousState = nodeStates_[node];
 		if (nodeHasVisibleCells_[node] != 0) {
-			markVisibleNodeDirty(node);
+			markVisibleNodeDirty(node, previousState);
 		}
+		nodeStates_[node] = state;
 	}
 	void setNodeState(int32_t node, uint8_t state);
 	void markAllVisibleNodesDirty();
@@ -227,6 +274,8 @@ private:
 	uint64_t tickCount_ = 0;
 	int64_t graphLocalityScore_ = 0;
 	bool useGraphLocalityOrdering_ = false;
+	PropagationMode propagationMode_ = PropagationMode::EventDriven;
+	bool useSingleInputComponentFastPath_ = false;
 	std::vector<int32_t> kinds_;
 	std::vector<int32_t> initialStates_;
 	std::vector<int32_t> clockHoldTicks_;
@@ -251,6 +300,7 @@ private:
 	std::vector<int32_t> nodeClockHoldTicks_;
 	std::vector<uint8_t> nodeLatchInitialStates_;
 	std::vector<EvaluationMode> nodeEvaluationModes_;
+	std::vector<SingleInputComponentMode> singleInputComponentModes_;
 	std::vector<int32_t> nodeInputCounts_;
 	std::vector<int32_t> nodeInputHighCounts_;
 	std::vector<int32_t> outgoingOffsets_;
@@ -276,7 +326,9 @@ private:
 	std::vector<int32_t> pendingComponentInputs_;
 	std::vector<int32_t> pendingConnectorDeltas_;
 	std::vector<uint32_t> connectorDeltaStamps_;
-	std::vector<int32_t> connectorWorkHeap_;
+	std::vector<uint64_t> connectorWorkWords_;
+	std::vector<uint32_t> connectorWorkWordStamps_;
+	std::vector<int32_t> connectorActiveWordHeap_;
 	uint32_t propagationStamp_ = 1;
 	std::vector<size_t> visibleCellOffsets_;
 	std::vector<int32_t> visibleCellIndices_;
@@ -284,6 +336,7 @@ private:
 	std::vector<int32_t> cellSecondaryNode_;
 	std::vector<uint8_t> nodeHasVisibleCells_;
 	mutable std::vector<uint32_t> dirtyNodeStamps_;
+	mutable std::vector<uint8_t> dirtyNodeInitialStates_;
 	mutable std::vector<int32_t> dirtyNodes_;
 	mutable uint32_t dirtyNodeStamp_ = 1;
 	mutable std::vector<uint32_t> materializedCellStamps_;
