@@ -109,7 +109,7 @@ private:
 	void rebuildDerivedState(const std::vector<uint8_t> &componentStates);
 	void propagateStateChange(int32_t sourceNode, uint8_t oldState, uint8_t newState);
 	void drainConnectorQueue();
-	void enqueueGate(int32_t node);
+	void enqueueComponentGate(int32_t componentNode);
 	void setNodeState(int32_t node, uint8_t state);
 	void markVisibleNodeDirty(int32_t node);
 	void markAllVisibleNodesDirty();
@@ -155,11 +155,11 @@ private:
 	std::vector<int32_t> nodeInputCounts_;
 	std::vector<int32_t> nodeInputHighCounts_;
 	std::vector<int32_t> outgoingOffsets_;
+	std::vector<int32_t> outgoingComponentEnds_;
 	std::vector<int32_t> outgoingTargets_;
 	std::vector<int32_t> incomingOffsets_;
 	std::vector<int32_t> incomingSources_;
 	std::vector<int32_t> componentNodes_;
-	std::vector<int32_t> gateIndexByNode_;
 	std::vector<int32_t> connectorNodes_;
 	std::vector<int32_t> snapshotComponentNodes_;
 	std::vector<int32_t> snapshotConnectorNodes_;
@@ -176,6 +176,7 @@ private:
 	std::vector<int32_t> visibleCellIndices_;
 	std::vector<int32_t> cellPrimaryNode_;
 	std::vector<int32_t> cellSecondaryNode_;
+	std::vector<uint8_t> nodeHasVisibleCells_;
 	mutable std::vector<uint32_t> dirtyNodeStamps_;
 	mutable std::vector<int32_t> dirtyNodes_;
 	mutable uint32_t dirtyNodeStamp_ = 1;

@@ -369,11 +369,11 @@ void SimulationCore::clear() {
 	nodeInputCounts_.clear();
 	nodeInputHighCounts_.clear();
 	outgoingOffsets_.clear();
+	outgoingComponentEnds_.clear();
 	outgoingTargets_.clear();
 	incomingOffsets_.clear();
 	incomingSources_.clear();
 	componentNodes_.clear();
-	gateIndexByNode_.clear();
 	connectorNodes_.clear();
 	snapshotComponentNodes_.clear();
 	snapshotConnectorNodes_.clear();
@@ -390,6 +390,7 @@ void SimulationCore::clear() {
 	visibleCellIndices_.clear();
 	cellPrimaryNode_.clear();
 	cellSecondaryNode_.clear();
+	nodeHasVisibleCells_.clear();
 	dirtyNodeStamps_.clear();
 	dirtyNodes_.clear();
 	dirtyNodeStamp_ = 1;
@@ -957,6 +958,16 @@ void SimulationCore::buildExecutionGraph() {
 		targets.erase(std::unique(targets.begin(), targets.end()), targets.end());
 	}
 	flattenCsr(reorderedOutgoing, outgoingOffsets_, outgoingTargets_);
+	// Type-stable ordering places component nodes before connector nodes.
+	outgoingComponentEnds_.resize(originalNodeCount);
+	for (int32_t node = 0; node < originalNodeCount; ++node) {
+		int32_t edge = outgoingOffsets_[node];
+		const int32_t edgeEnd = outgoingOffsets_[node + 1];
+		while (edge < edgeEnd && outgoingTargets_[edge] < originalComponentCount) {
+			++edge;
+		}
+		outgoingComponentEnds_[node] = edge;
+	}
 	std::vector<std::vector<int32_t>> reorderedIncoming(originalNodeCount);
 	for (int32_t source = 0; source < originalNodeCount; ++source) {
 		for (int32_t target : reorderedOutgoing[source]) {
@@ -1043,11 +1054,9 @@ void SimulationCore::buildExecutionGraph() {
 
 	nodeInputCounts_.assign(originalNodeCount, 0);
 	nodeInputHighCounts_.assign(originalNodeCount, 0);
-	gateIndexByNode_.assign(originalNodeCount, -1);
 	for (int32_t componentIndex = 0; componentIndex < static_cast<int32_t>(componentNodes_.size()); ++componentIndex) {
 		const int32_t node = componentNodes_[componentIndex];
 		nodeInputCounts_[node] = incomingOffsets_[node + 1] - incomingOffsets_[node];
-		gateIndexByNode_[node] = componentIndex;
 	}
 	const size_t gateWordCount = (componentNodes_.size() + 63U) / 64U;
 	const size_t gateSummaryWordCount = (gateWordCount + 63U) / 64U;
@@ -1107,6 +1116,11 @@ void SimulationCore::buildExecutionGraph() {
 		if (secondary >= 0 && secondary != primary) {
 			visibleCellIndices_[nextVisibleCellOffsets[secondary]++] = cell;
 		}
+	}
+	nodeHasVisibleCells_.assign(originalNodeCount, 0);
+	for (int32_t node = 0; node < originalNodeCount; ++node) {
+		nodeHasVisibleCells_[node] =
+				visibleCellOffsets_[node] != visibleCellOffsets_[static_cast<size_t>(node) + 1U] ? 1 : 0;
 	}
 	dirtyNodeStamps_.assign(originalNodeCount, 0);
 	dirtyNodes_.clear();
@@ -1177,10 +1191,6 @@ void SimulationCore::updateVisibleCell(int32_t cell) const {
 }
 
 void SimulationCore::markVisibleNodeDirty(int32_t node) {
-	if (node < 0 || static_cast<size_t>(node) + 1U >= visibleCellOffsets_.size() ||
-			visibleCellOffsets_[node] == visibleCellOffsets_[static_cast<size_t>(node) + 1U]) {
-		return;
-	}
 	if (dirtyNodeStamps_[node] == dirtyNodeStamp_) {
 		return;
 	}
@@ -1189,8 +1199,10 @@ void SimulationCore::markVisibleNodeDirty(int32_t node) {
 }
 
 void SimulationCore::markAllVisibleNodesDirty() {
-	for (int32_t node = 0; node + 1 < static_cast<int32_t>(visibleCellOffsets_.size()); ++node) {
-		markVisibleNodeDirty(node);
+	for (int32_t node = 0; node < static_cast<int32_t>(nodeHasVisibleCells_.size()); ++node) {
+		if (nodeHasVisibleCells_[node] != 0) {
+			markVisibleNodeDirty(node);
+		}
 	}
 }
 
@@ -1226,20 +1238,15 @@ void SimulationCore::setNodeState(int32_t node, uint8_t state) {
 		return;
 	}
 	nodeStates_[node] = state;
-	markVisibleNodeDirty(node);
+	if (nodeHasVisibleCells_[node] != 0) {
+		markVisibleNodeDirty(node);
+	}
 }
 
-void SimulationCore::enqueueGate(int32_t node) {
-	if (node < 0 || node >= static_cast<int32_t>(nodeIsComponent_.size()) || nodeIsComponent_[node] == 0 ||
-			nodeKinds_[node] == ToolKind::Clock) {
-		return;
-	}
-	const int32_t gateIndex = gateIndexByNode_[node];
-	if (gateIndex < 0) {
-		return;
-	}
-	const size_t wordIndex = static_cast<size_t>(gateIndex) / 64U;
-	const uint64_t gateMask = uint64_t{1} << (static_cast<size_t>(gateIndex) % 64U);
+void SimulationCore::enqueueComponentGate(int32_t componentNode) {
+	const size_t gateIndex = static_cast<size_t>(componentNode);
+	const size_t wordIndex = gateIndex / 64U;
+	const uint64_t gateMask = uint64_t{1} << (gateIndex % 64U);
 	if ((nextGateWords_[wordIndex] & gateMask) != 0) {
 		return;
 	}
@@ -1260,26 +1267,33 @@ void SimulationCore::propagateStateChange(int32_t sourceNode, uint8_t oldState, 
 }
 
 void SimulationCore::drainConnectorQueue() {
-	for (size_t cursor = 0; cursor < connectorQueueNodes_.size(); ++cursor) {
+	size_t queueSize = connectorQueueNodes_.size();
+	for (size_t cursor = 0; cursor < queueSize; ++cursor) {
 		const int32_t source = connectorQueueNodes_[cursor];
 		const int32_t stateDelta = connectorQueueDeltas_[cursor];
-		for (int32_t edge = outgoingOffsets_[source]; edge < outgoingOffsets_[source + 1]; ++edge) {
+		const int32_t componentEdgeEnd = outgoingComponentEnds_[source];
+		for (int32_t edge = outgoingOffsets_[source]; edge < componentEdgeEnd; ++edge) {
 			const int32_t target = outgoingTargets_[edge];
-			if (nodeIsComponent_[target] != 0) {
-				nodeInputHighCounts_[target] += stateDelta;
-				enqueueGate(target);
-				continue;
-			}
-			const int32_t previousHighInputCount = nodeInputHighCounts_[target];
 			nodeInputHighCounts_[target] += stateDelta;
+			enqueueComponentGate(target);
+		}
+		for (int32_t edge = componentEdgeEnd; edge < outgoingOffsets_[source + 1]; ++edge) {
+			const int32_t target = outgoingTargets_[edge];
+			int32_t &highInputCount = nodeInputHighCounts_[target];
+			const int32_t previousHighInputCount = highInputCount;
+			highInputCount += stateDelta;
 			const uint8_t previousState = previousHighInputCount != 0 ? 1 : 0;
-			const uint8_t nextState = nodeInputHighCounts_[target] != 0 ? 1 : 0;
+			const uint8_t nextState = highInputCount != 0 ? 1 : 0;
 			if (previousState == nextState) {
 				continue;
 			}
 			setNodeState(target, nextState);
+			if (outgoingOffsets_[target] == outgoingOffsets_[target + 1]) {
+				continue;
+			}
 			connectorQueueNodes_.push_back(target);
 			connectorQueueDeltas_.push_back(nextState != 0 ? 1 : -1);
+			++queueSize;
 		}
 	}
 }

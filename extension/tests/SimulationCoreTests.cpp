@@ -557,6 +557,40 @@ void testWriteMultiplicity() {
 	expect(error.errorReason == "multiple_write_inputs", "single-write target returns its diagnostic");
 }
 
+void testMultiWriteGatePropagatesAllInputs() {
+	CompileInput input = makeInput(5, 3);
+	setKind(input, 0, 2, ToolKind::Latch);
+	setKind(input, 1, 2, ToolKind::Read);
+	setKind(input, 2, 2, ToolKind::Trace);
+	setKind(input, 3, 2, ToolKind::Write);
+	setKind(input, 4, 2, ToolKind::And);
+	setKind(input, 1, 1, ToolKind::Trace);
+	setKind(input, 1, 0, ToolKind::Trace);
+	setKind(input, 2, 0, ToolKind::Trace);
+	setKind(input, 3, 0, ToolKind::Trace);
+	setKind(input, 4, 0, ToolKind::Trace);
+	setKind(input, 4, 1, ToolKind::Write);
+
+	SimulationCore core;
+	CompileError error;
+	std::vector<int32_t> changes;
+	std::string toggleError;
+	expect(core.compile(input, error), "dual-Write AND circuit compiles");
+	expect(core.toggleLatch(cellIndex(input, 0, 2), changes, toggleError), "Latch enables both AND inputs");
+	expect(
+			core.getStates() == std::vector<int32_t>({0, 1, 1, 1, 1, 0, 1, 0, 0, 1, 1, 1, 1, 1, 0}),
+			"dual Read outputs settle before the AND tick");
+	core.advanceTick();
+	expectState(core, input, 4, 2, 1, "AND receives both settled Write inputs on the next tick");
+
+	expect(core.toggleLatch(cellIndex(input, 0, 2), changes, toggleError), "Latch disables both AND inputs");
+	expect(
+			core.getStates() == std::vector<int32_t>({0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1}),
+			"AND keeps its prior value until the scheduled low-input tick");
+	core.advanceTick();
+	expectState(core, input, 4, 2, 0, "AND clears after both input decrements are applied");
+}
+
 void testLatchInitialStateVariantsRemainSeparate() {
 	CompileInput input = makeInput(2, 1);
 	setKind(input, 0, 0, ToolKind::Latch);
@@ -685,6 +719,7 @@ int main() {
 	testReadWriteIgnoreUnrelatedNeighbors();
 	testReadWriteRequireValidPorts();
 	testWriteMultiplicity();
+	testMultiWriteGatePropagatesAllInputs();
 	testLatchInitialStateVariantsRemainSeparate();
 	testLatchToggle();
 	testZeroWriteGateIdentities();
