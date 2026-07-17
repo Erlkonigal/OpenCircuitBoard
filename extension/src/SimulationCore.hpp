@@ -79,6 +79,38 @@ private:
 		uint8_t latchInitialState = 0;
 	};
 
+	struct ConnectorEventQueue {
+		void clear() {
+			size_ = 0;
+		}
+
+		void reserve(size_t capacity) {
+			storage_.reserve(capacity);
+		}
+
+		size_t size() const {
+			return size_;
+		}
+
+		int32_t operator[](size_t index) const {
+			return storage_[index];
+		}
+
+		void push_back(int32_t event) {
+			if (size_ < storage_.size()) {
+				storage_[size_] = event;
+			} else {
+				storage_.push_back(event);
+			}
+			++size_;
+		}
+
+	private:
+		// Retain constructed slots so repeated ticks overwrite the high-water range.
+		std::vector<int32_t> storage_;
+		size_t size_ = 0;
+	};
+
 	struct ReadBinding {
 		int32_t sourceComponent = -1;
 		int32_t sourceWriteCell = -1;
@@ -178,7 +210,7 @@ private:
 	std::vector<uint64_t> nextGateSummaryWords_;
 	std::vector<uint64_t> currentGateWords_;
 	std::vector<uint64_t> currentGateSummaryWords_;
-	std::vector<int32_t> connectorQueueEvents_;
+	ConnectorEventQueue connectorQueueEvents_;
 	std::vector<size_t> visibleCellOffsets_;
 	std::vector<int32_t> visibleCellIndices_;
 	std::vector<int32_t> cellPrimaryNode_;
