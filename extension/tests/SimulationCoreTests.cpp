@@ -136,6 +136,91 @@ void testConnectorQueueEventEncoding() {
 	expect(core.advanceTick() == std::vector<int32_t>({4, 0}), "drained low event is not replayed");
 }
 
+void testGateAndClockCommitBeforeDrain() {
+	CompileInput input = makeInput(5, 1);
+	setKind(input, 0, 0, ToolKind::Clock);
+	setKind(input, 1, 0, ToolKind::Read);
+	setKind(input, 2, 0, ToolKind::Trace);
+	setKind(input, 3, 0, ToolKind::Write);
+	setKind(input, 4, 0, ToolKind::Buffer);
+	SimulationCore core;
+	CompileError error;
+	expect(core.compile(input, error), "Clock and Buffer pipeline compiles for staged commit");
+	expect(
+			core.advanceTick() == std::vector<int32_t>({0, 1, 1, 1, 2, 1, 3, 1}),
+			"Clock propagates before its scheduled Buffer update");
+	expect(
+			core.advanceTick() == std::vector<int32_t>({0, 0, 1, 0, 2, 0, 3, 0, 4, 1}),
+			"scheduled Buffer and Clock transitions commit before connector propagation");
+	expect(
+			core.advanceTick() == std::vector<int32_t>({0, 1, 1, 1, 2, 1, 3, 1, 4, 0}),
+			"subsequent simultaneous transitions preserve the tick barrier");
+}
+
+void testDirectComponentTargetsPreserveTickBarrier() {
+	CompileInput input = makeInput(9, 1);
+	setKind(input, 0, 0, ToolKind::Clock);
+	setKind(input, 1, 0, ToolKind::Read);
+	setKind(input, 2, 0, ToolKind::Trace);
+	setKind(input, 3, 0, ToolKind::Write);
+	setKind(input, 4, 0, ToolKind::Buffer);
+	setKind(input, 5, 0, ToolKind::Read);
+	setKind(input, 6, 0, ToolKind::Trace);
+	setKind(input, 7, 0, ToolKind::Write);
+	setKind(input, 8, 0, ToolKind::Buffer);
+	SimulationCore core;
+	CompileError error;
+	expect(core.compile(input, error), "two-stage Buffer pipeline compiles for direct target scheduling");
+	core.advanceTick();
+	expectState(core, input, 4, 0, 0, "first Buffer remains delayed after the Clock transition");
+	core.advanceTick();
+	expectState(core, input, 4, 0, 1, "first Buffer receives the prior Clock state");
+	expectState(core, input, 8, 0, 0, "second Buffer remains delayed behind the first Buffer");
+	core.advanceTick();
+	expectState(core, input, 4, 0, 0, "first Buffer sees the next Clock state");
+	expectState(core, input, 8, 0, 1, "second Buffer evaluates the first Buffer's prior state");
+}
+
+void testTerminalConnectorAliases() {
+	CompileInput pipelineInput = makeInput(6, 1);
+	setKind(pipelineInput, 0, 0, ToolKind::Clock);
+	setKind(pipelineInput, 1, 0, ToolKind::Read);
+	setKind(pipelineInput, 2, 0, ToolKind::Trace);
+	setKind(pipelineInput, 3, 0, ToolKind::Write);
+	setKind(pipelineInput, 4, 0, ToolKind::Read);
+	setKind(pipelineInput, 5, 0, ToolKind::Trace);
+	SimulationCore pipelineCore;
+	CompileError error;
+	expect(pipelineCore.compile(pipelineInput, error), "terminal connector pipeline compiles");
+	pipelineCore.advanceTick();
+	expect(pipelineCore.getStates() == std::vector<int32_t>({1, 1, 1, 1, 1, 1}), "terminal aliases follow their component and connector sources");
+	const std::vector<uint8_t> highSnapshot = pipelineCore.captureState();
+	pipelineCore.advanceTick();
+	expect(pipelineCore.getStates() == std::vector<int32_t>({0, 0, 0, 0, 0, 0}), "terminal aliases clear with their sources");
+	std::string restoreError;
+	expect(pipelineCore.restoreState(highSnapshot, restoreError), "terminal connector snapshot restores");
+	expect(pipelineCore.getStates() == std::vector<int32_t>({1, 1, 1, 1, 1, 1}), "terminal alias snapshot keeps every visible state");
+
+	CompileInput sharedInput = makeInput(3, 3);
+	setKind(sharedInput, 0, 0, ToolKind::Latch);
+	setKind(sharedInput, 1, 0, ToolKind::Read);
+	setKind(sharedInput, 2, 0, ToolKind::Trace);
+	setKind(sharedInput, 2, 1, ToolKind::Trace);
+	setKind(sharedInput, 0, 2, ToolKind::Latch);
+	setKind(sharedInput, 1, 2, ToolKind::Read);
+	setKind(sharedInput, 2, 2, ToolKind::Trace);
+	setInitialState(sharedInput, 0, 0, 1);
+	setInitialState(sharedInput, 0, 2, 1);
+	SimulationCore sharedCore;
+	std::vector<int32_t> changes;
+	std::string toggleError;
+	expect(sharedCore.compile(sharedInput, error), "multi-input terminal Trace compiles");
+	expect(sharedCore.toggleLatch(cellIndex(sharedInput, 0, 0), changes, toggleError), "first shared source toggles low");
+	expectState(sharedCore, sharedInput, 2, 1, 1, "multi-input terminal Trace stays high with one remaining source");
+	expect(sharedCore.toggleLatch(cellIndex(sharedInput, 0, 2), changes, toggleError), "second shared source toggles low");
+	expectState(sharedCore, sharedInput, 2, 1, 0, "multi-input terminal Trace clears after every source is low");
+}
+
 void testSilentAdvanceDrainsOnlyFinalChanges() {
 	CompileInput input = makeInput(5, 1);
 	setKind(input, 0, 0, ToolKind::Clock);
@@ -220,24 +305,39 @@ void testDeferredVisibleStateMaterialization() {
 }
 
 void testGraphOrderingPreservesExternalStatesAndDeltas() {
-	CompileInput input = makeInput(8, 1);
+	CompileInput input = makeInput(4, 11);
 	setKind(input, 0, 0, ToolKind::Clock);
 	setKind(input, 1, 0, ToolKind::Read);
 	setKind(input, 2, 0, ToolKind::Trace);
-	setKind(input, 3, 0, ToolKind::Write);
-	setKind(input, 4, 0, ToolKind::Read);
-	setKind(input, 5, 0, ToolKind::Trace);
-	setKind(input, 6, 0, ToolKind::Write);
-	setKind(input, 7, 0, ToolKind::Buffer);
+	setKind(input, 3, 0, ToolKind::Mesh);
+	input.meshIds[cellIndex(input, 3, 0)] = 1;
+	setKind(input, 0, 2, ToolKind::Clock);
+	setKind(input, 1, 2, ToolKind::Read);
+	setKind(input, 2, 2, ToolKind::Trace);
+	setKind(input, 3, 2, ToolKind::Mesh);
+	input.meshIds[cellIndex(input, 3, 2)] = 2;
+
+	setKind(input, 0, 5, ToolKind::Mesh);
+	input.meshIds[cellIndex(input, 0, 5)] = 1;
+	setKind(input, 1, 5, ToolKind::Trace);
+	setKind(input, 2, 5, ToolKind::Write);
+	setKind(input, 3, 5, ToolKind::Buffer);
+	for (int32_t y : {7, 9}) {
+		setKind(input, 0, y, ToolKind::Mesh);
+		input.meshIds[cellIndex(input, 0, y)] = 2;
+		setKind(input, 1, y, ToolKind::Trace);
+		setKind(input, 2, y, ToolKind::Write);
+		setKind(input, 3, y, ToolKind::Buffer);
+	}
 	SimulationCore baselineCore(false);
 	SimulationCore orderedCore(true);
 	CompileError error;
 	expect(baselineCore.compile(input, error), "unreordered reference circuit compiles");
 	expect(orderedCore.compile(input, error), "reordered reference circuit compiles");
+	const int64_t baselineScore = baselineCore.getGraphLocalityScore();
+	const int64_t orderedScore = orderedCore.getGraphLocalityScore();
 	expect(orderedCore.isGraphLocalityOrderingApplied(), "ordering applies when it improves the compact typed layout locality score");
-	expect(
-			orderedCore.getGraphLocalityScore() > baselineCore.getGraphLocalityScore(),
-			"accepted ordering improves the execution graph locality score");
+	expect(orderedScore > baselineScore, "accepted ordering improves the execution graph locality score");
 	expect(orderedCore.getStates() == baselineCore.getStates(), "reordered compile preserves initial visible states");
 	for (int32_t tick = 0; tick < 12; ++tick) {
 		const std::vector<int32_t> baselineChanges = baselineCore.advanceTick();
@@ -613,6 +713,49 @@ void testMultiWriteGatePropagatesAllInputs() {
 	expectState(core, input, 4, 2, 0, "AND clears after both input decrements are applied");
 }
 
+void testRelayBypassPreservesInputMultiplicity() {
+	CompileInput input = makeInput(5, 3);
+	setKind(input, 0, 2, ToolKind::Latch);
+	setKind(input, 1, 2, ToolKind::Read);
+	setKind(input, 2, 2, ToolKind::Trace);
+	setKind(input, 3, 2, ToolKind::Write);
+	setKind(input, 4, 2, ToolKind::Xor);
+	setKind(input, 1, 1, ToolKind::Trace);
+	setKind(input, 1, 0, ToolKind::Trace);
+	setKind(input, 2, 0, ToolKind::Trace);
+	setKind(input, 3, 0, ToolKind::Trace);
+	setKind(input, 4, 0, ToolKind::Trace);
+	setKind(input, 4, 1, ToolKind::Write);
+
+	SimulationCore core;
+	CompileError error;
+	std::vector<int32_t> changes;
+	std::string toggleError;
+	expect(core.compile(input, error), "dual-Write XOR circuit compiles");
+	expect(core.toggleLatch(cellIndex(input, 0, 2), changes, toggleError), "Latch enables both XOR inputs");
+	core.advanceTick();
+	expectState(core, input, 4, 2, 0, "XOR keeps even parity for two related high inputs");
+	expect(core.toggleLatch(cellIndex(input, 0, 2), changes, toggleError), "Latch disables both XOR inputs");
+	core.advanceTick();
+	expectState(core, input, 4, 2, 0, "XOR keeps even parity after two related low inputs");
+}
+
+void testRelayBypassPreservesFeedbackDelay() {
+	CompileInput input = makeInput(2, 2);
+	setKind(input, 0, 0, ToolKind::Not);
+	setKind(input, 1, 0, ToolKind::Read);
+	setKind(input, 0, 1, ToolKind::Write);
+	setKind(input, 1, 1, ToolKind::Trace);
+	SimulationCore core;
+	CompileError error;
+	expect(core.compile(input, error), "NOT feedback circuit compiles");
+	expect(core.getStates() == std::vector<int32_t>({1, 1, 1, 1}), "NOT feedback initializes high through its connector");
+	core.advanceTick();
+	expect(core.getStates() == std::vector<int32_t>({0, 0, 0, 0}), "NOT feedback falls on the next tick");
+	core.advanceTick();
+	expect(core.getStates() == std::vector<int32_t>({1, 1, 1, 1}), "NOT feedback rises again after its preserved delay");
+}
+
 void testLatchInitialStateVariantsRemainSeparate() {
 	CompileInput input = makeInput(2, 1);
 	setKind(input, 0, 0, ToolKind::Latch);
@@ -726,6 +869,9 @@ int main() {
 	testReadWritePipeline();
 	testBatchAdvanceMatchesSingleTicks();
 	testConnectorQueueEventEncoding();
+	testGateAndClockCommitBeforeDrain();
+	testDirectComponentTargetsPreserveTickBarrier();
+	testTerminalConnectorAliases();
 	testSilentAdvanceDrainsOnlyFinalChanges();
 	testDeferredVisibleStateMaterialization();
 	testGraphOrderingPreservesExternalStatesAndDeltas();
@@ -743,6 +889,8 @@ int main() {
 	testReadWriteRequireValidPorts();
 	testWriteMultiplicity();
 	testMultiWriteGatePropagatesAllInputs();
+	testRelayBypassPreservesInputMultiplicity();
+	testRelayBypassPreservesFeedbackDelay();
 	testLatchInitialStateVariantsRemainSeparate();
 	testLatchToggle();
 	testZeroWriteGateIdentities();

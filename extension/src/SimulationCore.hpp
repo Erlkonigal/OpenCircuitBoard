@@ -145,7 +145,22 @@ private:
 	void rebuildDerivedState(const std::vector<uint8_t> &componentStates);
 	void propagateStateChange(int32_t sourceNode, uint8_t oldState, uint8_t newState);
 	void drainConnectorQueue();
-	void enqueueComponentGate(int32_t componentNode);
+	void enqueueComponentGate(int32_t componentNode) {
+		const size_t gateIndex = static_cast<size_t>(componentNode);
+		const size_t wordIndex = gateIndex / 64U;
+		const uint64_t gateMask = uint64_t{1} << (gateIndex % 64U);
+		uint64_t &gateWord = nextGateWords_[wordIndex];
+		if ((gateWord & gateMask) != 0) {
+			return;
+		}
+		const bool firstGateInWord = gateWord == 0;
+		gateWord |= gateMask;
+		if (!firstGateInWord) {
+			return;
+		}
+		const size_t summaryWordIndex = wordIndex / 64U;
+		nextGateSummaryWords_[summaryWordIndex] |= uint64_t{1} << (wordIndex % 64U);
+	}
 	void markVisibleNodeDirty(int32_t node);
 	void setChangedNodeState(int32_t node, uint8_t state) {
 		nodeStates_[node] = state;

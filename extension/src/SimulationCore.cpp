@@ -900,18 +900,64 @@ void SimulationCore::buildExecutionGraph() {
 		std::sort(targets.begin(), targets.end());
 		targets.erase(std::unique(targets.begin(), targets.end()), targets.end());
 	}
+	std::vector<std::vector<int32_t>> originalIncoming(originalNodeCount);
+	const auto rebuildOriginalIncoming = [&]() {
+		for (std::vector<int32_t> &sources : originalIncoming) {
+			sources.clear();
+		}
+		for (int32_t source = 0; source < originalNodeCount; ++source) {
+			for (int32_t target : originalOutgoing[source]) {
+				originalIncoming[target].push_back(source);
+			}
+		}
+	};
+	rebuildOriginalIncoming();
+	std::vector<int32_t> originalNodeAliases(originalNodeCount);
+	std::iota(originalNodeAliases.begin(), originalNodeAliases.end(), 0);
+	for (int32_t node = originalComponentCount; node < originalNodeCount; ++node) {
+		if (!originalOutgoing[node].empty() || originalIncoming[node].size() != 1U) {
+			continue;
+		}
+		const int32_t source = originalIncoming[node].front();
+		originalNodeAliases[node] = source;
+		std::vector<int32_t> &sourceTargets = originalOutgoing[source];
+		sourceTargets.erase(std::remove(sourceTargets.begin(), sourceTargets.end(), node), sourceTargets.end());
+	}
+	rebuildOriginalIncoming();
+	for (int32_t node = originalComponentCount; node < originalNodeCount; ++node) {
+		const std::vector<int32_t> &targets = originalOutgoing[node];
+		if (targets.empty() || originalIncoming[node].size() != 1U) {
+			continue;
+		}
+		const int32_t source = originalIncoming[node].front();
+		if (source >= originalComponentCount) {
+			continue;
+		}
+		const std::vector<int32_t> &sourceTargets = originalOutgoing[source];
+		bool canBypass = true;
+		for (int32_t target : targets) {
+			if (target >= originalComponentCount || target == source ||
+					std::binary_search(sourceTargets.begin(), sourceTargets.end(), target)) {
+				canBypass = false;
+				break;
+			}
+		}
+		if (!canBypass) {
+			continue;
+		}
+
+		// A one-input connector driven by a component is always equal to that component.
+		originalNodeAliases[node] = source;
+		std::vector<int32_t> &mutableSourceTargets = originalOutgoing[source];
+		mutableSourceTargets.erase(std::remove(mutableSourceTargets.begin(), mutableSourceTargets.end(), node), mutableSourceTargets.end());
+		mutableSourceTargets.insert(mutableSourceTargets.end(), targets.begin(), targets.end());
+		std::sort(mutableSourceTargets.begin(), mutableSourceTargets.end());
+		originalOutgoing[node].clear();
+	}
+	rebuildOriginalIncoming();
 	std::vector<int32_t> originalOutgoingOffsets;
 	std::vector<int32_t> originalOutgoingTargets;
 	flattenCsr(originalOutgoing, originalOutgoingOffsets, originalOutgoingTargets);
-	std::vector<std::vector<int32_t>> originalIncoming(originalNodeCount);
-	for (int32_t source = 0; source < originalNodeCount; ++source) {
-		for (int32_t target : originalOutgoing[source]) {
-			originalIncoming[target].push_back(source);
-		}
-	}
-	for (std::vector<int32_t> &sources : originalIncoming) {
-		std::sort(sources.begin(), sources.end());
-	}
 	std::vector<int32_t> originalIncomingOffsets;
 	std::vector<int32_t> originalIncomingSources;
 	flattenCsr(originalIncoming, originalIncomingOffsets, originalIncomingSources);
@@ -1010,12 +1056,18 @@ void SimulationCore::buildExecutionGraph() {
 			component = order.oldToNew[component];
 		}
 	}
+	const auto remapOriginalNode = [&](int32_t originalNode) {
+		while (originalNodeAliases[originalNode] != originalNode) {
+			originalNode = originalNodeAliases[originalNode];
+		}
+		return order.oldToNew[originalNode];
+	};
 	const auto remapConnector = [&](int32_t rawConnector) {
 		if (rawConnector < 0) {
 			return -1;
 		}
 		const int32_t originalNode = originalComponentCount + condensation.rawToComponent[rawConnector];
-		return order.oldToNew[originalNode];
+		return remapOriginalNode(originalNode);
 	};
 	snapshotConnectorNodes_.resize(rawConnectorCount);
 	for (int32_t rawConnector = 0; rawConnector < rawConnectorCount; ++rawConnector) {
@@ -1231,18 +1283,6 @@ void SimulationCore::setNodeState(int32_t node, uint8_t state) {
 	setChangedNodeState(node, state);
 }
 
-void SimulationCore::enqueueComponentGate(int32_t componentNode) {
-	const size_t gateIndex = static_cast<size_t>(componentNode);
-	const size_t wordIndex = gateIndex / 64U;
-	const uint64_t gateMask = uint64_t{1} << (gateIndex % 64U);
-	if ((nextGateWords_[wordIndex] & gateMask) != 0) {
-		return;
-	}
-	nextGateWords_[wordIndex] |= gateMask;
-	const size_t summaryWordIndex = wordIndex / 64U;
-	nextGateSummaryWords_[summaryWordIndex] |= uint64_t{1} << (wordIndex % 64U);
-}
-
 void SimulationCore::propagateStateChange(int32_t sourceNode, uint8_t oldState, uint8_t newState) {
 	if (oldState == newState) {
 		return;
@@ -1417,21 +1457,17 @@ void SimulationCore::advanceState() {
 			const int32_t wordOffset = countTrailingZeros(summary);
 			summary &= summary - 1U;
 			const size_t gateWordIndex = summaryWordIndex * 64U + static_cast<size_t>(wordOffset);
-			if (gateWordIndex >= currentGateWords_.size()) {
-				continue;
-			}
 			uint64_t gates = currentGateWords_[gateWordIndex];
 			while (gates != 0) {
 				const int32_t gateOffset = countTrailingZeros(gates);
 				gates &= gates - 1U;
 				const size_t componentIndex = gateWordIndex * 64U + static_cast<size_t>(gateOffset);
-				if (componentIndex >= componentNodes_.size()) {
-					continue;
-				}
-				const int32_t node = componentNodes_[componentIndex];
+				// Type-stable ordering keeps component IDs in the leading contiguous range.
+				const int32_t node = static_cast<int32_t>(componentIndex);
 				const uint8_t nextState = evaluateComponent(node);
 				const uint8_t previousState = nodeStates_[node];
 				if (nextState != previousState) {
+					setChangedNodeState(node, nextState);
 					connectorQueueEvents_.push_back(encodeConnectorEvent(node, nextState));
 				}
 			}
@@ -1443,15 +1479,10 @@ void SimulationCore::advanceState() {
 			phase = 0;
 			const uint8_t previousState = nodeStates_[node];
 			const uint8_t nextState = previousState == 0 ? 1 : 0;
+			setChangedNodeState(node, nextState);
 			connectorQueueEvents_.push_back(encodeConnectorEvent(node, nextState));
 		}
 		clockPhases_[node] = phase;
-	}
-	const size_t pendingStateCount = connectorQueueEvents_.size();
-	for (size_t index = 0; index < pendingStateCount; ++index) {
-		const int32_t event = connectorQueueEvents_[index];
-		const bool highState = event >= 0;
-		setChangedNodeState(highState ? event : ~event, highState ? 1 : 0);
 	}
 	drainConnectorQueue();
 	++tickCount_;
