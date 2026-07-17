@@ -835,6 +835,93 @@ void testZeroWriteGateIdentities() {
 	expect(core.getStates() == expected, "zero-write gates use their Boolean identities");
 }
 
+void expectUnaryGateEvaluation(ToolKind gateKind, int32_t highInputState, int32_t lowInputState, const std::string &name) {
+	CompileInput input = makeInput(5, 1);
+	setKind(input, 0, 0, ToolKind::Latch);
+	setInitialState(input, 0, 0, 1);
+	setKind(input, 1, 0, ToolKind::Read);
+	setKind(input, 2, 0, ToolKind::Trace);
+	setKind(input, 3, 0, ToolKind::Write);
+	setKind(input, 4, 0, gateKind);
+	SimulationCore core;
+	CompileError error;
+	std::vector<int32_t> changes;
+	std::string toggleError;
+	expect(core.compile(input, error), name + " unary pipeline compiles");
+	expectState(core, input, 4, 0, lowInputState, name + " starts from its zero-input state");
+	core.advanceTick();
+	expectState(core, input, 4, 0, highInputState, name + " evaluates one high input");
+	expect(core.toggleLatch(cellIndex(input, 0, 0), changes, toggleError), name + " source toggles low");
+	core.advanceTick();
+	expectState(core, input, 4, 0, lowInputState, name + " evaluates one low input");
+	core.reset();
+	expectState(core, input, 4, 0, lowInputState, name + " reset restores its zero-input state");
+}
+
+void testUnaryGateEvaluationModes() {
+	expectUnaryGateEvaluation(ToolKind::Buffer, 1, 0, "Buffer");
+	expectUnaryGateEvaluation(ToolKind::And, 1, 0, "AND");
+	expectUnaryGateEvaluation(ToolKind::Or, 1, 0, "OR");
+	expectUnaryGateEvaluation(ToolKind::Xor, 1, 0, "XOR");
+	expectUnaryGateEvaluation(ToolKind::Not, 0, 1, "NOT");
+	expectUnaryGateEvaluation(ToolKind::Nand, 0, 1, "NAND");
+	expectUnaryGateEvaluation(ToolKind::Nor, 0, 1, "NOR");
+	expectUnaryGateEvaluation(ToolKind::Xnor, 0, 1, "XNOR");
+	expectUnaryGateEvaluation(ToolKind::Latch, 1, 0, "Latch");
+	expectUnaryGateEvaluation(ToolKind::Led, 1, 0, "LED");
+}
+
+void expectBinaryGateEvaluation(ToolKind gateKind, const std::vector<int32_t> &expectedStates, const std::string &name) {
+	CompileInput input = makeInput(6, 6);
+	setKind(input, 0, 1, ToolKind::Latch);
+	setKind(input, 1, 1, ToolKind::Read);
+	setKind(input, 2, 1, ToolKind::Trace);
+	setKind(input, 3, 1, ToolKind::Trace);
+	setKind(input, 3, 2, ToolKind::Trace);
+	setKind(input, 4, 2, ToolKind::Write);
+	setKind(input, 5, 2, gateKind);
+	setKind(input, 0, 5, ToolKind::Latch);
+	setKind(input, 1, 5, ToolKind::Read);
+	setKind(input, 2, 5, ToolKind::Trace);
+	setKind(input, 3, 5, ToolKind::Trace);
+	setKind(input, 4, 5, ToolKind::Trace);
+	setKind(input, 5, 5, ToolKind::Trace);
+	setKind(input, 5, 4, ToolKind::Trace);
+	setKind(input, 5, 3, ToolKind::Write);
+	SimulationCore core;
+	CompileError error;
+	std::vector<int32_t> changes;
+	std::string toggleError;
+	expect(expectedStates.size() == 4U, name + " has a complete truth table");
+	const bool compiled = core.compile(input, error);
+	expect(
+			compiled,
+			name + " dual-input circuit compiles: " + error.errorReason + " at (" + std::to_string(error.errorX) + ", " +
+					std::to_string(error.errorY) + ")");
+	expectState(core, input, 5, 2, expectedStates[0], name + " evaluates 00");
+	expect(core.toggleLatch(cellIndex(input, 0, 1), changes, toggleError), name + " first input toggles high");
+	core.advanceTick();
+	expectState(core, input, 5, 2, expectedStates[1], name + " evaluates 10");
+	expect(core.toggleLatch(cellIndex(input, 0, 5), changes, toggleError), name + " second input toggles high");
+	core.advanceTick();
+	expectState(core, input, 5, 2, expectedStates[3], name + " evaluates 11");
+	expect(core.toggleLatch(cellIndex(input, 0, 1), changes, toggleError), name + " first input toggles low");
+	core.advanceTick();
+	expectState(core, input, 5, 2, expectedStates[2], name + " evaluates 01");
+	expect(core.toggleLatch(cellIndex(input, 0, 5), changes, toggleError), name + " second input toggles low");
+	core.advanceTick();
+	expectState(core, input, 5, 2, expectedStates[0], name + " returns to 00");
+}
+
+void testBinaryGateEvaluationModes() {
+	expectBinaryGateEvaluation(ToolKind::And, {0, 0, 0, 1}, "AND");
+	expectBinaryGateEvaluation(ToolKind::Nand, {1, 1, 1, 0}, "NAND");
+	expectBinaryGateEvaluation(ToolKind::Or, {0, 1, 1, 1}, "OR");
+	expectBinaryGateEvaluation(ToolKind::Nor, {1, 0, 0, 0}, "NOR");
+	expectBinaryGateEvaluation(ToolKind::Xor, {0, 1, 1, 0}, "XOR");
+	expectBinaryGateEvaluation(ToolKind::Xnor, {1, 0, 0, 1}, "XNOR");
+}
+
 void testSnapshotRestore() {
 	CompileInput input = makeInput(4, 2);
 	setKind(input, 0, 1, ToolKind::Clock);
@@ -857,6 +944,8 @@ void testSnapshotRestore() {
 	std::string restoreError;
 	expect(core.restoreState(snapshot, restoreError), "snapshot restores onto the same topology");
 	expect(core.getStates() == expectedStates, "snapshot restores every visible state");
+	core.advanceTick();
+	expectState(core, input, 3, 1, 1, "snapshot restores the pending unary Buffer transition");
 	core.reset();
 	expectState(core, input, 1, 0, 0, "reset clears the Read output Trace");
 	expectState(core, input, 2, 1, 0, "reset clears the direct Read-to-Write signal");
@@ -894,6 +983,8 @@ int main() {
 	testLatchInitialStateVariantsRemainSeparate();
 	testLatchToggle();
 	testZeroWriteGateIdentities();
+	testUnaryGateEvaluationModes();
+	testBinaryGateEvaluationModes();
 	testSnapshotRestore();
 	return 0;
 }

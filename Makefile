@@ -30,7 +30,7 @@ help:
 	@echo "make backend targetPlatform=<linux|windows>  Build the OcbSimulation GDExtension"
 	@echo "make build targetPlatform=<linux|windows>    Build the frontend target and GDExtension"
 	@echo "make coreTest targetPlatform=<linux|windows> Run native SimulationCore tests"
-	@echo "make coreBenchmark targetPlatform=<linux|windows> Run the 1024x1024 Release SimulationCore throughput benchmark"
+	@echo "make coreBenchmark targetPlatform=<linux|windows> Run the 1024x1024 Release mixed-gate SimulationCore throughput benchmark"
 	@echo "make nativeTest targetPlatform=<linux|windows> Run headless GDExtension smoke tests"
 	@echo "make frontendTest targetPlatform=<linux|windows> Run real-renderer frontend tests"
 	@echo "make test targetPlatform=<linux|windows> Run core, native, and frontend tests"

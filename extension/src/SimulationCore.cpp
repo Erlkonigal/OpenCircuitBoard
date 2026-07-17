@@ -366,6 +366,7 @@ void SimulationCore::clear() {
 	nodeKinds_.clear();
 	nodeClockHoldTicks_.clear();
 	nodeLatchInitialStates_.clear();
+	nodeEvaluationModes_.clear();
 	nodeInputCounts_.clear();
 	nodeInputHighCounts_.clear();
 	outgoingOffsets_.clear();
@@ -1107,6 +1108,38 @@ void SimulationCore::buildExecutionGraph() {
 		const int32_t node = componentNodes_[componentIndex];
 		nodeInputCounts_[node] = incomingOffsets_[node + 1] - incomingOffsets_[node];
 	}
+	nodeEvaluationModes_.assign(originalComponentCount, EvaluationMode::State);
+	for (int32_t node : componentNodes_) {
+		const int32_t inputCount = nodeInputCounts_[node];
+		switch (nodeKinds_[node]) {
+			case ToolKind::Buffer:
+			case ToolKind::Or:
+			case ToolKind::Led:
+				nodeEvaluationModes_[node] = EvaluationMode::High;
+				break;
+			case ToolKind::Not:
+			case ToolKind::Nor:
+				nodeEvaluationModes_[node] = EvaluationMode::Low;
+				break;
+			case ToolKind::And:
+				nodeEvaluationModes_[node] = inputCount == 1 ? EvaluationMode::High : EvaluationMode::AllHigh;
+				break;
+			case ToolKind::Nand:
+				nodeEvaluationModes_[node] = inputCount == 1 ? EvaluationMode::Low : EvaluationMode::NotAllHigh;
+				break;
+			case ToolKind::Xor:
+				nodeEvaluationModes_[node] = inputCount == 1 ? EvaluationMode::High : EvaluationMode::OddParity;
+				break;
+			case ToolKind::Xnor:
+				nodeEvaluationModes_[node] = inputCount == 1 ? EvaluationMode::Low : EvaluationMode::EvenParity;
+				break;
+			case ToolKind::Latch:
+				nodeEvaluationModes_[node] = inputCount == 0 ? EvaluationMode::State : EvaluationMode::High;
+				break;
+			default:
+				break;
+		}
+	}
 	const size_t gateWordCount = (componentNodes_.size() + 63U) / 64U;
 	const size_t gateSummaryWordCount = (gateWordCount + 63U) / 64U;
 	nextGateWords_.assign(gateWordCount, 0);
@@ -1183,33 +1216,23 @@ void SimulationCore::buildExecutionGraph() {
 }
 
 uint8_t SimulationCore::evaluateComponent(int32_t node) const {
-	const int32_t inputCount = nodeInputCounts_[node];
 	const int32_t highInputCount = nodeInputHighCounts_[node];
-	const uint8_t firstInput = highInputCount != 0 ? 1 : 0;
-	const bool allHigh = highInputCount == inputCount;
-	const bool anyHigh = highInputCount != 0;
-	const bool parity = (highInputCount & 1) != 0;
-	switch (nodeKinds_[node]) {
-		case ToolKind::Buffer:
-			return firstInput;
-		case ToolKind::And:
-			return allHigh ? 1 : 0;
-		case ToolKind::Or:
-			return anyHigh ? 1 : 0;
-		case ToolKind::Xor:
-			return parity ? 1 : 0;
-		case ToolKind::Not:
-			return firstInput == 0 ? 1 : 0;
-		case ToolKind::Nand:
-			return allHigh ? 0 : 1;
-		case ToolKind::Nor:
-			return anyHigh ? 0 : 1;
-		case ToolKind::Xnor:
-			return parity ? 0 : 1;
-		case ToolKind::Latch:
-			return inputCount == 0 ? nodeStates_[node] : firstInput;
-		case ToolKind::Led:
-			return firstInput;
+	const EvaluationMode mode = nodeEvaluationModes_[node];
+	if (mode == EvaluationMode::High) {
+		return highInputCount != 0 ? 1 : 0;
+	}
+	if (mode == EvaluationMode::Low) {
+		return highInputCount == 0 ? 1 : 0;
+	}
+	switch (mode) {
+		case EvaluationMode::AllHigh:
+			return highInputCount == nodeInputCounts_[node] ? 1 : 0;
+		case EvaluationMode::NotAllHigh:
+			return highInputCount != nodeInputCounts_[node] ? 1 : 0;
+		case EvaluationMode::OddParity:
+			return (highInputCount & 1) != 0 ? 1 : 0;
+		case EvaluationMode::EvenParity:
+			return (highInputCount & 1) == 0 ? 1 : 0;
 		default:
 			return nodeStates_[node];
 	}

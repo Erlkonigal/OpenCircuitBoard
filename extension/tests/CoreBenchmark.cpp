@@ -18,17 +18,35 @@ using ocb::CompileInput;
 using ocb::SimulationCore;
 using ocb::ToolKind;
 
-constexpr int32_t PipelineRowStride = 2;
-constexpr int32_t CellsPerPipelineStage = 4;
+constexpr int32_t StageWidth = 4;
+constexpr int32_t MixedLaneRowStride = 4;
+constexpr int32_t UnaryBufferLaneRowStride = 2;
 constexpr int32_t TargetTicksPerSecond = 100000;
+
+enum class BenchmarkWorkload {
+	Mixed,
+	UnaryBuffer,
+};
+
+constexpr ToolKind MixedGateKinds[] = {
+		ToolKind::And,
+		ToolKind::Nand,
+		ToolKind::Or,
+		ToolKind::Nor,
+		ToolKind::Xor,
+		ToolKind::Xnor,
+		ToolKind::Not,
+		ToolKind::Buffer,
+};
 
 struct BenchmarkConfig {
 	int32_t boardWidth = 1024;
 	int32_t boardHeight = 1024;
-	int32_t pipelineCount = 512;
-	int32_t warmupTicks = 128;
+	int32_t pipelineCount = 256;
+	int32_t warmupTicks = 512;
 	int32_t measurementTicks = 1024;
 	int32_t sampleCount = 5;
+	BenchmarkWorkload workload = BenchmarkWorkload::Mixed;
 	bool compareOrdering = false;
 };
 
@@ -55,9 +73,42 @@ enum class ParseResult {
 
 void printUsage() {
 	std::cout << "Usage: ocbsimulation_core_benchmark [--quick] [--compare-ordering]"
+			  << " [--workload mixed|unary-buffer]"
 			  << " [--width value] [--height value] [--pipelines value]"
 			  << " [--warmup value] [--ticks value] [--samples value]\n";
 }
+
+const char *workloadName(BenchmarkWorkload workload) {
+	switch (workload) {
+		case BenchmarkWorkload::Mixed:
+			return "mixed";
+		case BenchmarkWorkload::UnaryBuffer:
+			return "unary-buffer";
+	}
+	return "unknown";
+}
+
+bool parseWorkload(const std::string &text, BenchmarkWorkload &workload) {
+	if (text == "mixed") {
+		workload = BenchmarkWorkload::Mixed;
+		return true;
+	}
+	if (text == "unary-buffer") {
+		workload = BenchmarkWorkload::UnaryBuffer;
+		return true;
+	}
+	return false;
+}
+
+int32_t laneRowStride(BenchmarkWorkload workload) {
+	return workload == BenchmarkWorkload::Mixed ? MixedLaneRowStride : UnaryBufferLaneRowStride;
+}
+
+int32_t lastActiveRowOffset(BenchmarkWorkload workload) {
+	return workload == BenchmarkWorkload::Mixed ? 2 : 0;
+}
+
+int32_t pipelineStageCount(const BenchmarkConfig &config);
 
 bool parseInt32(const char *text, int32_t &value) {
 	char *end = nullptr;
@@ -80,13 +131,20 @@ ParseResult parseConfig(int argc, char **argv, BenchmarkConfig &config) {
 		if (argument == "--quick") {
 			config.boardWidth = 256;
 			config.boardHeight = 256;
-			config.pipelineCount = 128;
+			config.pipelineCount = 64;
 			config.warmupTicks = 256;
 			config.measurementTicks = 4096;
 			continue;
 		}
 		if (argument == "--compare-ordering") {
 			config.compareOrdering = true;
+			continue;
+		}
+		if (argument == "--workload") {
+			if (++index >= argc || !parseWorkload(argv[index], config.workload)) {
+				std::cerr << "Expected mixed or unary-buffer after --workload\n";
+				return ParseResult::Error;
+			}
 			continue;
 		}
 
@@ -116,7 +174,7 @@ ParseResult parseConfig(int argc, char **argv, BenchmarkConfig &config) {
 }
 
 bool validateConfig(const BenchmarkConfig &config, std::string &error) {
-	if (config.boardWidth <= CellsPerPipelineStage || config.boardHeight <= 0 || config.pipelineCount <= 0 ||
+	if (config.boardWidth < 8 || config.boardHeight <= 0 || config.pipelineCount <= 0 ||
 			config.warmupTicks < 0 || config.measurementTicks <= 0 || config.sampleCount <= 0) {
 		error = "benchmark dimensions and tick counts must be positive";
 		return false;
@@ -125,11 +183,12 @@ bool validateConfig(const BenchmarkConfig &config, std::string &error) {
 		error = "benchmark board is too large";
 		return false;
 	}
-	if ((config.boardWidth - 1) / CellsPerPipelineStage <= 0) {
+	if (pipelineStageCount(config) <= 0) {
 		error = "benchmark board has no complete pipeline stage";
 		return false;
 	}
-	const int64_t lastPipelineRow = static_cast<int64_t>(config.pipelineCount - 1) * PipelineRowStride;
+	const int64_t lastPipelineRow = static_cast<int64_t>(config.pipelineCount - 1) * laneRowStride(config.workload) +
+			lastActiveRowOffset(config.workload);
 	if (lastPipelineRow >= config.boardHeight) {
 		error = "benchmark pipelines do not fit in the board height";
 		return false;
@@ -138,16 +197,26 @@ bool validateConfig(const BenchmarkConfig &config, std::string &error) {
 }
 
 int32_t pipelineStageCount(const BenchmarkConfig &config) {
-	return (config.boardWidth - 1) / CellsPerPipelineStage;
+	return config.workload == BenchmarkWorkload::Mixed ? (config.boardWidth - StageWidth) / StageWidth :
+			(config.boardWidth - 1) / StageWidth;
 }
 
-int64_t activeCellCount(const BenchmarkConfig &config) {
-	return static_cast<int64_t>(config.pipelineCount) *
-			(1 + static_cast<int64_t>(pipelineStageCount(config)) * CellsPerPipelineStage);
+int64_t activeCellCount(const CompileInput &input) {
+	return std::count_if(input.kinds.begin(), input.kinds.end(), [](int32_t kind) {
+		return static_cast<ToolKind>(kind) != ToolKind::Empty;
+	});
 }
 
 void setKind(CompileInput &input, int32_t x, int32_t y, ToolKind kind) {
 	input.kinds[y * input.width + x] = static_cast<int32_t>(kind);
+}
+
+void setClockHoldTicks(CompileInput &input, int32_t x, int32_t y, int32_t holdTicks) {
+	input.clockHoldTicks[y * input.width + x] = holdTicks;
+}
+
+bool isMultiInputMixedGate(ToolKind kind) {
+	return kind != ToolKind::Not && kind != ToolKind::Buffer;
 }
 
 CompileInput makeBenchmarkInput(const BenchmarkConfig &config) {
@@ -161,15 +230,52 @@ CompileInput makeBenchmarkInput(const BenchmarkConfig &config) {
 	input.meshIds.assign(cellCount, 0);
 
 	const int32_t stageCount = pipelineStageCount(config);
+	if (config.workload == BenchmarkWorkload::UnaryBuffer) {
+		for (int32_t pipeline = 0; pipeline < config.pipelineCount; ++pipeline) {
+			const int32_t y = pipeline * UnaryBufferLaneRowStride;
+			setKind(input, 0, y, ToolKind::Clock);
+			for (int32_t stage = 0; stage < stageCount; ++stage) {
+				const int32_t x = 1 + stage * StageWidth;
+				setKind(input, x, y, ToolKind::Read);
+				setKind(input, x + 1, y, ToolKind::Trace);
+				setKind(input, x + 2, y, ToolKind::Write);
+				setKind(input, x + 3, y, ToolKind::Buffer);
+			}
+		}
+		return input;
+	}
+
 	for (int32_t pipeline = 0; pipeline < config.pipelineCount; ++pipeline) {
-		const int32_t y = pipeline * PipelineRowStride;
+		const int32_t y = pipeline * MixedLaneRowStride;
+		const int32_t bottomY = y + 2;
 		setKind(input, 0, y, ToolKind::Clock);
+		setClockHoldTicks(input, 0, y, 2 + pipeline % 3);
+		setKind(input, 1, y, ToolKind::Read);
+		for (int32_t x = 2; x <= config.boardWidth - 3; ++x) {
+			setKind(input, x, y, ToolKind::Trace);
+		}
+		setKind(input, config.boardWidth - 2, y, ToolKind::Read);
+		setKind(input, config.boardWidth - 1, y, ToolKind::Clock);
+		setClockHoldTicks(input, config.boardWidth - 1, y, 3 + (pipeline / 3) % 4);
+
+		setKind(input, 0, bottomY, ToolKind::Clock);
+		setClockHoldTicks(input, 0, bottomY, 1 + pipeline % 2);
 		for (int32_t stage = 0; stage < stageCount; ++stage) {
-			const int32_t x = 1 + stage * CellsPerPipelineStage;
-			setKind(input, x, y, ToolKind::Read);
-			setKind(input, x + 1, y, ToolKind::Trace);
-			setKind(input, x + 2, y, ToolKind::Write);
-			setKind(input, x + 3, y, ToolKind::Buffer);
+			const int32_t gateX = StageWidth + stage * StageWidth;
+			const ToolKind gateKind = MixedGateKinds[stage % (sizeof(MixedGateKinds) / sizeof(MixedGateKinds[0]))];
+			if (stage == 0) {
+				setKind(input, 1, bottomY, ToolKind::Read);
+				setKind(input, 2, bottomY, ToolKind::Trace);
+				setKind(input, 3, bottomY, ToolKind::Write);
+			} else {
+				setKind(input, gateX - 3, bottomY, ToolKind::Read);
+				setKind(input, gateX - 2, bottomY, ToolKind::Trace);
+				setKind(input, gateX - 1, bottomY, ToolKind::Write);
+			}
+			setKind(input, gateX, bottomY, gateKind);
+			if (isMultiInputMixedGate(gateKind)) {
+				setKind(input, gateX, y + 1, ToolKind::Write);
+			}
 		}
 	}
 
@@ -292,7 +398,7 @@ int main(int argc, char **argv) {
 	const CompileInput input = makeBenchmarkInput(config);
 	SimulationCore baselineCore(false);
 	double baselineCompileSeconds = 0.0;
-	if (!compileBenchmarkCore(baselineCore, input, "identity", baselineCompileSeconds)) {
+	if (!compileBenchmarkCore(baselineCore, input, "baseline", baselineCompileSeconds)) {
 		return 1;
 	}
 
@@ -320,7 +426,7 @@ int main(int argc, char **argv) {
 
 	CoreBenchmarkResult baselineResult;
 	if (!summarizeSamples(baselineSamples, config.measurementTicks, baselineResult)) {
-		std::cerr << "coreBenchmark identity produced inconsistent samples\n";
+		std::cerr << "coreBenchmark baseline produced inconsistent samples\n";
 		return 1;
 	}
 	CoreBenchmarkResult reorderedResult;
@@ -330,12 +436,15 @@ int main(int argc, char **argv) {
 	}
 
 	std::cout << std::fixed << std::setprecision(2);
-	std::cout << "Core benchmark: " << config.boardWidth << 'x' << config.boardHeight << ", " << config.pipelineCount
-			  << " continuously toggling pipelines, activeCells=" << activeCellCount(config)
+	std::cout << "Core benchmark: workload=" << workloadName(config.workload) << ", " << config.boardWidth << 'x' << config.boardHeight
+			  << ", lanes=" << config.pipelineCount << ", activeCells=" << activeCellCount(input)
 			  << ", warmup=" << config.warmupTicks << ", measured=" << config.measurementTicks
 			  << ", pairedSamples=" << config.sampleCount << "\n";
-	printResult("identity", baselineResult, baselineCompileSeconds);
-	std::cout << "SimulationCore execution graph locality (identity): " << baselineCore.getGraphLocalityScore() << '\n';
+	if (config.workload == BenchmarkWorkload::Mixed) {
+		std::cout << "Core benchmark mixed gate cycle: And,Nand,Or,Nor,Xor,Xnor,Not,Buffer\n";
+	}
+	printResult("baseline", baselineResult, baselineCompileSeconds);
+	std::cout << "SimulationCore execution graph locality (baseline): " << baselineCore.getGraphLocalityScore() << '\n';
 
 	if (!config.compareOrdering) {
 		return 0;

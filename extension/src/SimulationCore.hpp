@@ -72,6 +72,16 @@ public:
 	int64_t getGraphLocalityScore() const;
 
 private:
+	enum class EvaluationMode : uint8_t {
+		State,
+		High,
+		Low,
+		AllHigh,
+		NotAllHigh,
+		OddParity,
+		EvenParity,
+	};
+
 	struct Component {
 		ToolKind kind = ToolKind::Empty;
 		std::vector<int32_t> cells;
@@ -209,6 +219,7 @@ private:
 	std::vector<ToolKind> nodeKinds_;
 	std::vector<int32_t> nodeClockHoldTicks_;
 	std::vector<uint8_t> nodeLatchInitialStates_;
+	std::vector<EvaluationMode> nodeEvaluationModes_;
 	std::vector<int32_t> nodeInputCounts_;
 	std::vector<int32_t> nodeInputHighCounts_;
 	std::vector<int32_t> outgoingOffsets_;
