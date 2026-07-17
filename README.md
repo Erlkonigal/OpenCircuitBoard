@@ -27,4 +27,4 @@ make coreBenchmark targetPlatform=windows
 
 `make build targetPlatform=<linux|windows>` runs both shell targets. `make clean` removes generated build output.
 
-`coreBenchmark` defaults to a 1024x1024 board with 256 continuously toggling pipelines and reports median TPS against the 100K target. Use `coreBenchmarkArgs="--quick --compare-ordering"` for the legacy-sized graph-ordering comparison, or `coreBenchmarkArgs="--quick --compare-propagation"` to pair the reference and optimized propagation paths.
+`coreBenchmark` defaults to a 1024x1024 board with 256 continuously toggling pipelines and reports median TPS against the 100K target. Use `coreBenchmarkArgs="--quick --compare-ordering"` for the legacy-sized graph-ordering comparison.

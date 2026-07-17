@@ -12,8 +12,6 @@ using ocb::CompileInput;
 using ocb::SimulationCore;
 using ocb::ToolKind;
 
-using PropagationMode = SimulationCore::PropagationMode;
-
 void expect(bool condition, const std::string &message) {
 	if (!condition) {
 		std::cerr << "FAILED: " << message << '\n';
@@ -58,217 +56,6 @@ int32_t countChangesForCell(const std::vector<int32_t> &changes, int32_t cell) {
 		}
 	}
 	return count;
-}
-
-struct PropagationPair {
-	explicit PropagationPair(bool useGraphLocalityOrdering)
-			: reference(useGraphLocalityOrdering, PropagationMode::EventDrivenReference),
-			  optimized(useGraphLocalityOrdering, PropagationMode::EventDriven) {
-	}
-
-	SimulationCore reference;
-	SimulationCore optimized;
-};
-
-void expectPropagationPairStates(PropagationPair &pair, const std::string &message) {
-	expect(pair.reference.getStates() == pair.optimized.getStates(), message);
-}
-
-void compilePropagationPair(PropagationPair &pair, const CompileInput &input, const std::string &message) {
-	CompileError referenceError;
-	CompileError optimizedError;
-	const bool referenceCompiled = pair.reference.compile(input, referenceError);
-	const bool optimizedCompiled = pair.optimized.compile(input, optimizedError);
-	expect(referenceCompiled == optimizedCompiled, message + " compiles consistently");
-	expect(referenceError.errorReason == optimizedError.errorReason, message + " reports the same compile error");
-	expect(referenceCompiled, message + " compiles: " + referenceError.errorReason);
-	expectPropagationPairStates(pair, message + " starts with equivalent states");
-}
-
-void advancePropagationPair(PropagationPair &pair, const std::string &message) {
-	const std::vector<int32_t> referenceChanges = pair.reference.advanceTick();
-	const std::vector<int32_t> optimizedChanges = pair.optimized.advanceTick();
-	expect(referenceChanges == optimizedChanges, message + " returns the same tick delta");
-	expectPropagationPairStates(pair, message + " reaches the same tick state");
-}
-
-void togglePropagationPair(PropagationPair &pair, int32_t cell, const std::string &message) {
-	std::vector<int32_t> referenceChanges;
-	std::vector<int32_t> optimizedChanges;
-	std::string referenceError;
-	std::string optimizedError;
-	const bool referenceToggled = pair.reference.toggleLatch(cell, referenceChanges, referenceError);
-	const bool optimizedToggled = pair.optimized.toggleLatch(cell, optimizedChanges, optimizedError);
-	expect(referenceToggled == optimizedToggled, message + " has the same toggle result");
-	expect(referenceError == optimizedError, message + " has the same toggle error");
-	expect(referenceChanges == optimizedChanges, message + " returns the same toggle delta");
-	expect(referenceToggled, message + " toggles");
-	expectPropagationPairStates(pair, message + " keeps equivalent states after toggle");
-}
-
-CompileInput makeFanoutPropagationInput() {
-	constexpr int32_t fanoutCount = 4;
-	constexpr int32_t width = fanoutCount * 2 + 3;
-	CompileInput input = makeInput(width, 3);
-	setKind(input, 0, 0, ToolKind::Clock);
-	setKind(input, 1, 0, ToolKind::Read);
-	for (int32_t x = 2; x <= fanoutCount * 2; ++x) {
-		setKind(input, x, 0, ToolKind::Trace);
-	}
-	setKind(input, width - 2, 0, ToolKind::Read);
-	setKind(input, width - 1, 0, ToolKind::Clock);
-	input.clockHoldTicks[cellIndex(input, width - 1, 0)] = 2;
-	for (int32_t branch = 0; branch < fanoutCount; ++branch) {
-		const int32_t x = 2 + branch * 2;
-		setKind(input, x, 1, ToolKind::Write);
-		setKind(input, x, 2, ToolKind::Buffer);
-	}
-	return input;
-}
-
-CompileInput makeDirectPropagationInput() {
-	CompileInput input = makeInput(9, 1);
-	setKind(input, 0, 0, ToolKind::Clock);
-	setKind(input, 1, 0, ToolKind::Read);
-	setKind(input, 2, 0, ToolKind::Trace);
-	setKind(input, 3, 0, ToolKind::Write);
-	setKind(input, 4, 0, ToolKind::Buffer);
-	setKind(input, 5, 0, ToolKind::Read);
-	setKind(input, 6, 0, ToolKind::Trace);
-	setKind(input, 7, 0, ToolKind::Write);
-	setKind(input, 8, 0, ToolKind::Buffer);
-	return input;
-}
-
-CompileInput makeUnaryPropagationInput(ToolKind gateKind) {
-	CompileInput input = makeInput(5, 1);
-	setKind(input, 0, 0, ToolKind::Clock);
-	setKind(input, 1, 0, ToolKind::Read);
-	setKind(input, 2, 0, ToolKind::Trace);
-	setKind(input, 3, 0, ToolKind::Write);
-	setKind(input, 4, 0, gateKind);
-	return input;
-}
-
-void comparePropagationFixture(
-		const CompileInput &input,
-		bool useGraphLocalityOrdering,
-		int32_t tickCount,
-		const std::string &message,
-		bool expectSingleInputFastPath = true) {
-	PropagationPair pair(useGraphLocalityOrdering);
-	compilePropagationPair(pair, input, message);
-	expect(!pair.reference.isSingleInputComponentFastPathEnabled(), message + " keeps the reference path generic");
-	expect(
-			pair.optimized.isSingleInputComponentFastPathEnabled() == expectSingleInputFastPath,
-			message + " configures the expected single-input fast path");
-	for (int32_t tick = 0; tick < tickCount; ++tick) {
-		advancePropagationPair(pair, message + " tick " + std::to_string(tick));
-	}
-	const std::vector<uint8_t> referenceSnapshot = pair.reference.captureState();
-	const std::vector<uint8_t> optimizedSnapshot = pair.optimized.captureState();
-	expect(referenceSnapshot == optimizedSnapshot, message + " captures identical snapshots");
-	advancePropagationPair(pair, message + " before restore");
-	std::string referenceRestoreError;
-	std::string optimizedRestoreError;
-	const bool referenceRestored = pair.reference.restoreState(referenceSnapshot, referenceRestoreError);
-	const bool optimizedRestored = pair.optimized.restoreState(optimizedSnapshot, optimizedRestoreError);
-	expect(
-			referenceRestored == optimizedRestored,
-			message + " restores consistently");
-	expect(referenceRestoreError == optimizedRestoreError, message + " reports the same restore error");
-	expect(referenceRestored, message + " restores: " + referenceRestoreError);
-	expectPropagationPairStates(pair, message + " restores equivalent states");
-	advancePropagationPair(pair, message + " after restore");
-	const int32_t silentTicks = 5;
-	pair.reference.advanceTicksSilent(silentTicks);
-	pair.optimized.advanceTicksSilent(silentTicks);
-	expectPropagationPairStates(pair, message + " keeps equivalent silent states");
-	expect(
-			pair.reference.drainStateChanges() == pair.optimized.drainStateChanges(),
-			message + " drains the same silent delta");
-	expect(pair.reference.reset() == pair.optimized.reset(), message + " resets with the same delta");
-	expectPropagationPairStates(pair, message + " resets to equivalent states");
-}
-
-void testSingleInputFastPathMatchesReference() {
-	const std::vector<ToolKind> unaryGateKinds = {
-			ToolKind::Buffer,
-			ToolKind::And,
-			ToolKind::Nand,
-			ToolKind::Or,
-			ToolKind::Nor,
-			ToolKind::Xor,
-			ToolKind::Xnor,
-			ToolKind::Not,
-			ToolKind::Led,
-	};
-	for (int32_t ordering = 0; ordering < 2; ++ordering) {
-		const bool useGraphLocalityOrdering = ordering != 0;
-		const std::string orderingName = useGraphLocalityOrdering ? " reordered" : " identity";
-		comparePropagationFixture(
-				makeFanoutPropagationInput(),
-				useGraphLocalityOrdering,
-				12,
-				"single-input fanout" + orderingName);
-		comparePropagationFixture(
-				makeDirectPropagationInput(),
-				useGraphLocalityOrdering,
-				12,
-				"single-input direct chain" + orderingName);
-		for (ToolKind gateKind : unaryGateKinds) {
-			comparePropagationFixture(
-					makeUnaryPropagationInput(gateKind),
-					useGraphLocalityOrdering,
-					12,
-					"single-input unary gate " + std::to_string(static_cast<int32_t>(gateKind)) + orderingName);
-		}
-
-		CompileInput latchInput = makeInput(5, 1);
-		setKind(latchInput, 0, 0, ToolKind::Latch);
-		setInitialState(latchInput, 0, 0, 1);
-		setKind(latchInput, 1, 0, ToolKind::Read);
-		setKind(latchInput, 2, 0, ToolKind::Trace);
-		setKind(latchInput, 3, 0, ToolKind::Write);
-		setKind(latchInput, 4, 0, ToolKind::Latch);
-		setInitialState(latchInput, 4, 0, 1);
-		PropagationPair latchPair(useGraphLocalityOrdering);
-		compilePropagationPair(latchPair, latchInput, "single-input driven Latch" + orderingName);
-		expect(!latchPair.reference.isSingleInputComponentFastPathEnabled(), "single-input driven Latch reference stays generic" + orderingName);
-		expect(latchPair.optimized.isSingleInputComponentFastPathEnabled(), "single-input driven Latch enables fast path" + orderingName);
-		togglePropagationPair(latchPair, 0, "single-input source Latch queues low" + orderingName);
-		togglePropagationPair(latchPair, 0, "single-input source Latch overwrites pending state" + orderingName);
-		advancePropagationPair(latchPair, "single-input source Latch commits overwritten state" + orderingName);
-		expect(
-				latchPair.reference.getStates()[4] == 1,
-				"single-input driven Latch keeps its overwritten pending state" + orderingName);
-		togglePropagationPair(latchPair, 0, "single-input source Latch queues low again" + orderingName);
-		advancePropagationPair(latchPair, "single-input source Latch settles low" + orderingName);
-		togglePropagationPair(latchPair, 4, "single-input driven Latch" + orderingName);
-		advancePropagationPair(latchPair, "single-input driven Latch retains manual state" + orderingName);
-		expect(
-				latchPair.reference.getStates()[4] == 1,
-				"single-input driven Latch remains high without an input transition" + orderingName);
-	}
-
-	CompileInput multiInput = makeInput(5, 3);
-	setKind(multiInput, 0, 2, ToolKind::Latch);
-	setKind(multiInput, 1, 2, ToolKind::Read);
-	setKind(multiInput, 2, 2, ToolKind::Trace);
-	setKind(multiInput, 3, 2, ToolKind::Write);
-	setKind(multiInput, 4, 2, ToolKind::And);
-	setKind(multiInput, 1, 1, ToolKind::Trace);
-	setKind(multiInput, 1, 0, ToolKind::Trace);
-	setKind(multiInput, 2, 0, ToolKind::Trace);
-	setKind(multiInput, 3, 0, ToolKind::Trace);
-	setKind(multiInput, 4, 0, ToolKind::Trace);
-	setKind(multiInput, 4, 1, ToolKind::Write);
-	PropagationPair multiInputPair(false);
-	compilePropagationPair(multiInputPair, multiInput, "multi-input threshold fixture");
-	expect(!multiInputPair.reference.isSingleInputComponentFastPathEnabled(), "multi-input threshold reference stays generic");
-	expect(!multiInputPair.optimized.isSingleInputComponentFastPathEnabled(), "multi-input threshold disables fast path");
-	togglePropagationPair(multiInputPair, cellIndex(multiInput, 0, 2), "multi-input threshold fixture toggle");
-	advancePropagationPair(multiInputPair, "multi-input threshold fixture settles");
 }
 
 void testReadWritePipeline() {
@@ -731,18 +518,11 @@ void testGraphOrderingPreservesExternalStatesAndDeltas() {
 	expect(orderedCore.isGraphLocalityOrderingApplied(), "ordering applies when it improves the compact typed layout locality score");
 	expect(orderedScore > baselineScore, "accepted ordering improves the execution graph locality score");
 	expect(orderedCore.getStates() == baselineCore.getStates(), "reordered compile preserves initial visible states");
-	PropagationPair propagationPair(true);
-	compilePropagationPair(propagationPair, input, "reordered single-input propagation fixture");
-	expect(propagationPair.reference.isGraphLocalityOrderingApplied(), "reference fixture applies graph ordering");
-	expect(propagationPair.optimized.isGraphLocalityOrderingApplied(), "optimized fixture applies graph ordering");
-	expect(!propagationPair.reference.isSingleInputComponentFastPathEnabled(), "reordered reference stays generic");
-	expect(propagationPair.optimized.isSingleInputComponentFastPathEnabled(), "reordered fixture enables the single-input fast path");
 	for (int32_t tick = 0; tick < 12; ++tick) {
 		const std::vector<int32_t> baselineChanges = baselineCore.advanceTick();
 		const std::vector<int32_t> orderedChanges = orderedCore.advanceTick();
 		expect(orderedChanges == baselineChanges, "reordered execution preserves sorted external delta order");
 		expect(orderedCore.getStates() == baselineCore.getStates(), "reordered execution preserves each tick's visible state");
-		advancePropagationPair(propagationPair, "reordered single-input propagation tick " + std::to_string(tick));
 	}
 }
 
@@ -1354,7 +1134,6 @@ void testSnapshotRestore() {
 } // namespace
 
 int main() {
-	testSingleInputFastPathMatchesReference();
 	testReadWritePipeline();
 	testBatchAdvanceMatchesSingleTicks();
 	testConnectorQueueEventEncoding();

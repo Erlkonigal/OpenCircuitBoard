@@ -270,8 +270,7 @@ bool SimulationCore::isKnownKind(int32_t kind) {
 	return kind >= static_cast<int32_t>(ToolKind::Empty) && kind <= static_cast<int32_t>(ToolKind::Led);
 }
 
-SimulationCore::SimulationCore(bool useGraphLocalityOrdering, PropagationMode propagationMode)
-		: useGraphLocalityOrdering_(useGraphLocalityOrdering), propagationMode_(propagationMode) {
+SimulationCore::SimulationCore(bool useGraphLocalityOrdering) : useGraphLocalityOrdering_(useGraphLocalityOrdering) {
 }
 
 bool SimulationCore::isTrace(ToolKind kind) {
@@ -369,8 +368,6 @@ void SimulationCore::clear() {
 	nodeClockHoldTicks_.clear();
 	nodeLatchInitialStates_.clear();
 	nodeEvaluationModes_.clear();
-	singleInputComponentModes_.clear();
-	useSingleInputComponentFastPath_ = false;
 	nodeInputCounts_.clear();
 	nodeInputHighCounts_.clear();
 	outgoingOffsets_.clear();
@@ -1184,30 +1181,6 @@ void SimulationCore::buildExecutionGraph() {
 				break;
 		}
 	}
-	singleInputComponentModes_.assign(originalNodeCount, SingleInputComponentMode::None);
-	int64_t componentInputEdgeCount = 0;
-	int64_t singleInputComponentEdgeCount = 0;
-	for (int32_t node : componentNodes_) {
-		componentInputEdgeCount += nodeInputCounts_[node];
-		if (nodeInputCounts_[node] != 1 || nodeKinds_[node] == ToolKind::Clock) {
-			continue;
-		}
-		if (nodeKinds_[node] == ToolKind::Latch) {
-			singleInputComponentModes_[node] = SingleInputComponentMode::LatchHigh;
-			++singleInputComponentEdgeCount;
-			continue;
-		}
-		if (nodeEvaluationModes_[node] == EvaluationMode::High) {
-			singleInputComponentModes_[node] = SingleInputComponentMode::High;
-			++singleInputComponentEdgeCount;
-		} else if (nodeEvaluationModes_[node] == EvaluationMode::Low) {
-			singleInputComponentModes_[node] = SingleInputComponentMode::Low;
-			++singleInputComponentEdgeCount;
-		}
-	}
-	// Avoid a per-edge mode lookup when the generic component-input path dominates this graph.
-	useSingleInputComponentFastPath_ = propagationMode_ == PropagationMode::EventDriven &&
-			componentInputEdgeCount > 0 && singleInputComponentEdgeCount * 2 >= componentInputEdgeCount;
 	const size_t gateWordCount = (componentNodes_.size() + 63U) / 64U;
 	const size_t gateSummaryWordCount = (gateWordCount + 63U) / 64U;
 	nextGateWords_.assign(gateWordCount, 0);
@@ -1829,10 +1802,6 @@ bool SimulationCore::isGraphLocalityOrderingApplied() const {
 
 int64_t SimulationCore::getGraphLocalityScore() const {
 	return graphLocalityScore_;
-}
-
-bool SimulationCore::isSingleInputComponentFastPathEnabled() const {
-	return useSingleInputComponentFastPath_;
 }
 
 } // namespace ocb

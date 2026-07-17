@@ -56,14 +56,7 @@ struct CompileError {
 
 class SimulationCore {
 public:
-	enum class PropagationMode : uint8_t {
-		EventDriven,
-		EventDrivenReference,
-	};
-
-	explicit SimulationCore(
-			bool useGraphLocalityOrdering = false,
-			PropagationMode propagationMode = PropagationMode::EventDriven);
+	explicit SimulationCore(bool useGraphLocalityOrdering = false);
 
 	bool compile(const CompileInput &input, CompileError &error);
 	std::vector<int32_t> advanceTick();
@@ -78,7 +71,6 @@ public:
 	bool isCompiled() const;
 	bool isGraphLocalityOrderingApplied() const;
 	int64_t getGraphLocalityScore() const;
-	bool isSingleInputComponentFastPathEnabled() const;
 
 private:
 	enum class EvaluationMode : uint8_t {
@@ -89,13 +81,6 @@ private:
 		NotAllHigh,
 		OddParity,
 		EvenParity,
-	};
-
-	enum class SingleInputComponentMode : uint8_t {
-		None,
-		High,
-		Low,
-		LatchHigh,
 	};
 
 	struct Component {
@@ -180,28 +165,7 @@ private:
 		const size_t gateIndex = static_cast<size_t>(componentNode);
 		return (nextGateWords_[gateIndex / 64U] & (uint64_t{1} << (gateIndex % 64U))) != 0;
 	}
-	void applySingleInputComponentDelta(
-			int32_t componentNode,
-			int32_t stateDelta,
-			SingleInputComponentMode singleInputMode) {
-		const int32_t nextHighInputCount = nodeInputHighCounts_[componentNode] + stateDelta;
-		nodeInputHighCounts_[componentNode] = nextHighInputCount;
-		const bool gateAlreadyQueued = isComponentGateQueued(componentNode);
-		const uint8_t nextState =
-				singleInputMode == SingleInputComponentMode::Low ? (nextHighInputCount == 0 ? 1 : 0) :
-						(nextHighInputCount != 0 ? 1 : 0);
-		if (singleInputMode == SingleInputComponentMode::LatchHigh || gateAlreadyQueued || nextState != nodeStates_[componentNode]) {
-			enqueueComponentGate(componentNode, nextState);
-		}
-	}
 	void accumulateComponentInputDelta(int32_t componentNode, int32_t stateDelta) {
-		if (useSingleInputComponentFastPath_) {
-			const SingleInputComponentMode singleInputMode = singleInputComponentModes_[componentNode];
-			if (singleInputMode != SingleInputComponentMode::None) {
-				applySingleInputComponentDelta(componentNode, stateDelta, singleInputMode);
-				return;
-			}
-		}
 		if (componentInputStamps_[componentNode] != propagationStamp_) {
 			componentInputStamps_[componentNode] = propagationStamp_;
 			pendingComponentInputDeltas_[componentNode] = stateDelta;
@@ -274,8 +238,6 @@ private:
 	uint64_t tickCount_ = 0;
 	int64_t graphLocalityScore_ = 0;
 	bool useGraphLocalityOrdering_ = false;
-	PropagationMode propagationMode_ = PropagationMode::EventDriven;
-	bool useSingleInputComponentFastPath_ = false;
 	std::vector<int32_t> kinds_;
 	std::vector<int32_t> initialStates_;
 	std::vector<int32_t> clockHoldTicks_;
@@ -300,7 +262,6 @@ private:
 	std::vector<int32_t> nodeClockHoldTicks_;
 	std::vector<uint8_t> nodeLatchInitialStates_;
 	std::vector<EvaluationMode> nodeEvaluationModes_;
-	std::vector<SingleInputComponentMode> singleInputComponentModes_;
 	std::vector<int32_t> nodeInputCounts_;
 	std::vector<int32_t> nodeInputHighCounts_;
 	std::vector<int32_t> outgoingOffsets_;
