@@ -323,7 +323,7 @@ void testUnequalDepthConnectorDiamondConverges() {
 }
 
 void testConnectorQueueSpansTopologicalRankWords() {
-	constexpr int32_t ConnectorStageCount = 160;
+	constexpr int32_t ConnectorStageCount = 4161;
 	CompileInput input = makeInput(ConnectorStageCount * 3 + 5, 1);
 	setKind(input, 0, 0, ToolKind::Clock);
 	for (int32_t stage = 0; stage < ConnectorStageCount; ++stage) {
@@ -346,6 +346,57 @@ void testConnectorQueueSpansTopologicalRankWords() {
 	core.advanceTick();
 	expectState(core, input, finalReadX + 1, 0, 0, "long connector chain propagates a falling edge across rank words");
 	expectState(core, input, finalReadX + 3, 0, 1, "long connector chain commits the delayed LED state on the next tick");
+	core.advanceTick();
+	expectState(core, input, finalReadX + 1, 0, 1, "long connector chain reactivates the hierarchy after a full drain");
+	expectState(core, input, finalReadX + 3, 0, 0, "long connector chain preserves the LED barrier after reactivation");
+}
+
+void testLargeComponentFrontierPropagatesAcrossLanes() {
+	constexpr int32_t LaneCount = 4097;
+	CompileInput input = makeInput(5, LaneCount * 2);
+	for (int32_t lane = 0; lane < LaneCount; ++lane) {
+		const int32_t y = lane * 2;
+		setKind(input, 0, y, ToolKind::Clock);
+		setKind(input, 1, y, ToolKind::Read);
+		setKind(input, 2, y, ToolKind::Trace);
+		setKind(input, 3, y, ToolKind::Write);
+		setKind(input, 4, y, ToolKind::Buffer);
+	}
+	SimulationCore core;
+	CompileError error;
+	expect(core.compile(input, error), "large component frontier compiles");
+	core.advanceTicksSilent(2);
+	const std::vector<int32_t> highStates = core.getStates();
+	for (int32_t lane : {0, LaneCount / 2, LaneCount - 1}) {
+		expect(
+				highStates[cellIndex(input, 4, lane * 2)] == 1,
+				"large component frontier commits selected Buffer states on the next tick");
+	}
+	core.advanceTicksSilent(1);
+	const std::vector<int32_t> lowStates = core.getStates();
+	for (int32_t lane : {0, LaneCount / 2, LaneCount - 1}) {
+		expect(
+				lowStates[cellIndex(input, 4, lane * 2)] == 0,
+				"large component frontier clears selected Buffer states on the following tick");
+	}
+}
+
+void testQueuedComponentGateTracksLaterDelta() {
+	CompileInput input = makeInput(5, 1);
+	setKind(input, 0, 0, ToolKind::Latch);
+	setKind(input, 1, 0, ToolKind::Read);
+	setKind(input, 2, 0, ToolKind::Trace);
+	setKind(input, 3, 0, ToolKind::Write);
+	setKind(input, 4, 0, ToolKind::Buffer);
+	SimulationCore core;
+	CompileError error;
+	std::vector<int32_t> changes;
+	std::string toggleError;
+	expect(core.compile(input, error), "queued component override fixture compiles");
+	expect(core.toggleLatch(0, changes, toggleError), "first Latch toggle queues Buffer high");
+	expect(core.toggleLatch(0, changes, toggleError), "second Latch toggle overwrites queued Buffer state");
+	core.advanceTick();
+	expectState(core, input, 4, 0, 0, "later component delta preserves the pending gate's final low state");
 }
 
 void testTerminalConnectorAliases() {
@@ -1143,6 +1194,8 @@ int main() {
 	testOppositeClockFanoutPreservesResolvedConnector();
 	testUnequalDepthConnectorDiamondConverges();
 	testConnectorQueueSpansTopologicalRankWords();
+	testLargeComponentFrontierPropagatesAcrossLanes();
+	testQueuedComponentGateTracksLaterDelta();
 	testTerminalConnectorAliases();
 	testSilentAdvanceDrainsOnlyFinalChanges();
 	testDeferredVisibleStateMaterialization();

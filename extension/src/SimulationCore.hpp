@@ -1,10 +1,15 @@
 #pragma once
 
 #include <algorithm>
+#include <cassert>
 #include <cstddef>
 #include <cstdint>
 #include <string>
 #include <vector>
+
+#if defined(_MSC_VER)
+#include <intrin.h>
+#endif
 
 namespace ocb {
 
@@ -152,6 +157,15 @@ private:
 	static int32_t encodeConnectorEvent(int32_t node, uint8_t state) {
 		return state != 0 ? node : ~node;
 	}
+	static int32_t countTrailingZeros(uint64_t value) {
+#if defined(_MSC_VER)
+		unsigned long index = 0;
+		_BitScanForward64(&index, value);
+		return static_cast<int32_t>(index);
+#else
+		return static_cast<int32_t>(__builtin_ctzll(value));
+#endif
+	}
 
 	uint8_t evaluateComponent(int32_t node) const;
 	uint8_t evaluateComponent(int32_t node, int32_t highInputCount) const;
@@ -160,7 +174,56 @@ private:
 	void propagateStateChange(int32_t sourceNode, uint8_t oldState, uint8_t newState);
 	void drainConnectorQueue();
 	void beginPropagationBatch();
+	void finishPropagationBatch(bool hasPrequeuedGates);
 	void flushComponentInputDeltas();
+	void flushComponentInputDeltasWithoutPrequeuedGates();
+	void initializeConnectorWorkWordHierarchy(size_t workWordCount);
+	bool hasActiveConnectorWorkWords() const {
+		return !connectorActiveWordLevelOffsets_.empty() &&
+				connectorActiveWordHierarchy_[connectorActiveWordLevelOffsets_.back()] != 0;
+	}
+	void activateConnectorWorkWord(size_t workWordIndex) {
+		size_t index = workWordIndex;
+		for (size_t level = 0; level < connectorActiveWordLevelOffsets_.size(); ++level) {
+			const size_t wordIndex = index / 64U;
+			const uint64_t mask = uint64_t{1} << (index % 64U);
+			uint64_t &word = connectorActiveWordHierarchy_[connectorActiveWordLevelOffsets_[level] + wordIndex];
+			if ((word & mask) != 0) {
+				return;
+			}
+			const bool wasEmpty = word == 0;
+			word |= mask;
+			if (!wasEmpty) {
+				return;
+			}
+			index = wordIndex;
+		}
+	}
+	void deactivateConnectorWorkWord(size_t workWordIndex) {
+		size_t index = workWordIndex;
+		for (size_t level = 0; level < connectorActiveWordLevelOffsets_.size(); ++level) {
+			const size_t wordIndex = index / 64U;
+			const uint64_t mask = uint64_t{1} << (index % 64U);
+			uint64_t &word = connectorActiveWordHierarchy_[connectorActiveWordLevelOffsets_[level] + wordIndex];
+			assert((word & mask) != 0);
+			word &= ~mask;
+			if (word != 0 || level + 1U == connectorActiveWordLevelOffsets_.size()) {
+				return;
+			}
+			index = wordIndex;
+		}
+	}
+	size_t firstActiveConnectorWorkWord() const {
+		assert(hasActiveConnectorWorkWords());
+		size_t wordIndex = 0;
+		for (size_t level = connectorActiveWordLevelOffsets_.size(); level > 0; --level) {
+			const uint64_t word = connectorActiveWordHierarchy_[connectorActiveWordLevelOffsets_[level - 1U] + wordIndex];
+			assert(word != 0);
+			wordIndex = wordIndex * 64U + static_cast<size_t>(countTrailingZeros(word));
+		}
+		assert(wordIndex < connectorWorkWords_.size());
+		return wordIndex;
+	}
 	bool isComponentGateQueued(int32_t componentNode) const {
 		const size_t gateIndex = static_cast<size_t>(componentNode);
 		return (nextGateWords_[gateIndex / 64U] & (uint64_t{1} << (gateIndex % 64U))) != 0;
@@ -187,13 +250,21 @@ private:
 		if (connectorWorkWordStamps_[workWordIndex] != propagationStamp_) {
 			connectorWorkWordStamps_[workWordIndex] = propagationStamp_;
 			workWord = 0;
-			connectorActiveWordHeap_.push_back(static_cast<int32_t>(workWordIndex));
-			const auto laterWorkWord = [](int32_t left, int32_t right) {
-				return left > right;
-			};
-			std::push_heap(connectorActiveWordHeap_.begin(), connectorActiveWordHeap_.end(), laterWorkWord);
 		}
+		const bool workWordWasEmpty = workWord == 0;
 		workWord |= uint64_t{1} << (static_cast<size_t>(connectorRank) % 64U);
+		if (workWordWasEmpty) {
+			activateConnectorWorkWord(workWordIndex);
+		}
+	}
+	inline void seedSourceDelta(int32_t sourceNode, int32_t stateDelta) {
+		const int32_t componentEdgeEnd = outgoingComponentEnds_[sourceNode];
+		for (int32_t edge = outgoingOffsets_[sourceNode]; edge < componentEdgeEnd; ++edge) {
+			accumulateComponentInputDelta(outgoingTargets_[edge], stateDelta);
+		}
+		for (int32_t edge = componentEdgeEnd; edge < outgoingOffsets_[sourceNode + 1]; ++edge) {
+			accumulateConnectorDelta(outgoingTargets_[edge], stateDelta);
+		}
 	}
 	void enqueueComponentGate(int32_t componentNode, uint8_t nextState) {
 		nextGateStates_[componentNode] = nextState;
@@ -289,7 +360,8 @@ private:
 	std::vector<uint32_t> connectorDeltaStamps_;
 	std::vector<uint64_t> connectorWorkWords_;
 	std::vector<uint32_t> connectorWorkWordStamps_;
-	std::vector<int32_t> connectorActiveWordHeap_;
+	std::vector<uint64_t> connectorActiveWordHierarchy_;
+	std::vector<size_t> connectorActiveWordLevelOffsets_;
 	uint32_t propagationStamp_ = 1;
 	std::vector<size_t> visibleCellOffsets_;
 	std::vector<int32_t> visibleCellIndices_;

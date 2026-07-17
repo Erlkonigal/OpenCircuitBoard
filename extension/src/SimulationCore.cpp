@@ -9,10 +9,6 @@
 #include <numeric>
 #include <unordered_map>
 
-#if defined(_MSC_VER)
-#include <intrin.h>
-#endif
-
 namespace ocb {
 namespace {
 
@@ -138,16 +134,6 @@ void hashInt(uint64_t &hash, int32_t value) {
 		hash ^= (unsignedValue >> shift) & 0xffU;
 		hash *= FnvPrime;
 	}
-}
-
-int32_t countTrailingZeros(uint64_t value) {
-#if defined(_MSC_VER)
-	unsigned long index = 0;
-	_BitScanForward64(&index, value);
-	return static_cast<int32_t>(index);
-#else
-	return static_cast<int32_t>(__builtin_ctzll(value));
-#endif
 }
 
 struct ConnectorCondensation {
@@ -395,7 +381,8 @@ void SimulationCore::clear() {
 	connectorDeltaStamps_.clear();
 	connectorWorkWords_.clear();
 	connectorWorkWordStamps_.clear();
-	connectorActiveWordHeap_.clear();
+	connectorActiveWordHierarchy_.clear();
+	connectorActiveWordLevelOffsets_.clear();
 	propagationStamp_ = 1;
 	visibleCellOffsets_.clear();
 	visibleCellIndices_.clear();
@@ -1093,6 +1080,14 @@ void SimulationCore::buildExecutionGraph() {
 	}
 	assert(connectorTopologicalQueue.size() == connectorNodes_.size());
 	connectorNodes_ = std::move(connectorTopologicalQueue);
+#ifndef NDEBUG
+	for (int32_t source : connectorNodes_) {
+		for (int32_t edge = outgoingComponentEnds_[source]; edge < outgoingOffsets_[source + 1]; ++edge) {
+			const int32_t target = outgoingTargets_[edge];
+			assert(connectorTopologicalRanks_[source] < connectorTopologicalRanks_[target]);
+		}
+	}
+#endif
 	for (int32_t &component : cellToComponent_) {
 		if (component >= 0) {
 			component = order.oldToNew[component];
@@ -1200,8 +1195,7 @@ void SimulationCore::buildExecutionGraph() {
 	const size_t connectorWorkWordCount = (connectorNodes_.size() + 63U) / 64U;
 	connectorWorkWords_.assign(connectorWorkWordCount, 0);
 	connectorWorkWordStamps_.assign(connectorWorkWordCount, 0);
-	connectorActiveWordHeap_.clear();
-	connectorActiveWordHeap_.reserve(connectorWorkWordCount);
+	initializeConnectorWorkWordHierarchy(connectorWorkWordCount);
 	propagationStamp_ = 1;
 	nodeStates_.assign(originalNodeCount, 0);
 	clockPhases_.assign(originalNodeCount, 0);
@@ -1269,6 +1263,21 @@ void SimulationCore::buildExecutionGraph() {
 	networkStates_.clear();
 	components_.clear();
 	components_.shrink_to_fit();
+}
+
+void SimulationCore::initializeConnectorWorkWordHierarchy(size_t workWordCount) {
+	connectorActiveWordHierarchy_.clear();
+	connectorActiveWordLevelOffsets_.clear();
+	while (workWordCount != 0) {
+		connectorActiveWordLevelOffsets_.push_back(connectorActiveWordHierarchy_.size());
+		const size_t levelWordCount = (workWordCount + 63U) / 64U;
+		connectorActiveWordHierarchy_.insert(
+				connectorActiveWordHierarchy_.end(), levelWordCount, uint64_t{0});
+		if (levelWordCount == 1U) {
+			break;
+		}
+		workWordCount = levelWordCount;
+	}
 }
 
 uint8_t SimulationCore::evaluateComponent(int32_t node) const {
@@ -1384,7 +1393,7 @@ void SimulationCore::propagateStateChange(int32_t sourceNode, uint8_t oldState, 
 
 void SimulationCore::beginPropagationBatch() {
 	pendingComponentInputs_.clear();
-	connectorActiveWordHeap_.clear();
+	assert(!hasActiveConnectorWorkWords());
 	++propagationStamp_;
 	if (propagationStamp_ != 0) {
 		return;
@@ -1413,39 +1422,36 @@ void SimulationCore::flushComponentInputDeltas() {
 	}
 }
 
-void SimulationCore::drainConnectorQueue() {
-	beginPropagationBatch();
-	// Seed every component transition before committing connectors, so converging paths share one final delta.
-	const size_t initialQueueSize = connectorQueueEvents_.size();
-	for (size_t cursor = 0; cursor < initialQueueSize; ++cursor) {
-		const int32_t event = connectorQueueEvents_[cursor];
-		const bool highState = event >= 0;
-		const int32_t source = highState ? event : ~event;
-		const int32_t stateDelta = highState ? 1 : -1;
-		const int32_t componentEdgeEnd = outgoingComponentEnds_[source];
-		for (int32_t edge = outgoingOffsets_[source]; edge < componentEdgeEnd; ++edge) {
-			accumulateComponentInputDelta(outgoingTargets_[edge], stateDelta);
+void SimulationCore::flushComponentInputDeltasWithoutPrequeuedGates() {
+	for (int32_t node : pendingComponentInputs_) {
+		const int32_t inputDelta = pendingComponentInputDeltas_[node];
+		if (inputDelta == 0 && nodeKinds_[node] != ToolKind::Latch && nodeEvaluationModes_[node] != EvaluationMode::State) {
+			continue;
 		}
-		for (int32_t edge = componentEdgeEnd; edge < outgoingOffsets_[source + 1]; ++edge) {
-			accumulateConnectorDelta(outgoingTargets_[edge], stateDelta);
+		const int32_t nextHighInputCount = nodeInputHighCounts_[node] + inputDelta;
+		nodeInputHighCounts_[node] = nextHighInputCount;
+		const uint8_t nextState = evaluateComponent(node, nextHighInputCount);
+		if (nodeKinds_[node] == ToolKind::Latch || nodeEvaluationModes_[node] == EvaluationMode::State ||
+				nextState != nodeStates_[node]) {
+			enqueueComponentGate(node, nextState);
 		}
 	}
-	connectorQueueEvents_.clear();
+}
 
-	const auto laterWorkWord = [](int32_t left, int32_t right) {
-		return left > right;
-	};
-	while (!connectorActiveWordHeap_.empty()) {
-		std::pop_heap(connectorActiveWordHeap_.begin(), connectorActiveWordHeap_.end(), laterWorkWord);
-		const size_t workWordIndex = static_cast<size_t>(connectorActiveWordHeap_.back());
-		connectorActiveWordHeap_.pop_back();
+void SimulationCore::finishPropagationBatch(bool hasPrequeuedGates) {
+	while (hasActiveConnectorWorkWords()) {
+		const size_t workWordIndex = firstActiveConnectorWorkWord();
 		uint64_t &workWord = connectorWorkWords_[workWordIndex];
+		assert(workWord != 0);
 		while (workWord != 0) {
 			const int32_t rankOffset = countTrailingZeros(workWord);
 			workWord &= workWord - 1U;
 			const size_t connectorRank = workWordIndex * 64U + static_cast<size_t>(rankOffset);
 			const int32_t source = connectorNodes_[connectorRank];
 			const int32_t stateDelta = pendingConnectorDeltas_[source];
+			if (stateDelta == 0) {
+				continue;
+			}
 			int32_t &highInputCount = nodeInputHighCounts_[source];
 			const int32_t previousHighInputCount = highInputCount;
 			highInputCount += stateDelta;
@@ -1456,16 +1462,29 @@ void SimulationCore::drainConnectorQueue() {
 			}
 			setChangedNodeState(source, nextState);
 			const int32_t outputStateDelta = nextState != 0 ? 1 : -1;
-			const int32_t componentEdgeEnd = outgoingComponentEnds_[source];
-			for (int32_t edge = outgoingOffsets_[source]; edge < componentEdgeEnd; ++edge) {
-				accumulateComponentInputDelta(outgoingTargets_[edge], outputStateDelta);
-			}
-			for (int32_t edge = componentEdgeEnd; edge < outgoingOffsets_[source + 1]; ++edge) {
-				accumulateConnectorDelta(outgoingTargets_[edge], outputStateDelta);
-			}
+			seedSourceDelta(source, outputStateDelta);
 		}
+		deactivateConnectorWorkWord(workWordIndex);
 	}
-	flushComponentInputDeltas();
+	if (hasPrequeuedGates) {
+		flushComponentInputDeltas();
+		return;
+	}
+	flushComponentInputDeltasWithoutPrequeuedGates();
+}
+
+void SimulationCore::drainConnectorQueue() {
+	beginPropagationBatch();
+	// Seed every component transition before committing connectors, so converging paths share one final delta.
+	const size_t initialQueueSize = connectorQueueEvents_.size();
+	for (size_t cursor = 0; cursor < initialQueueSize; ++cursor) {
+		const int32_t event = connectorQueueEvents_[cursor];
+		const bool highState = event >= 0;
+		const int32_t source = highState ? event : ~event;
+		seedSourceDelta(source, highState ? 1 : -1);
+	}
+	connectorQueueEvents_.clear();
+	finishPropagationBatch(true);
 }
 
 void SimulationCore::rebuildDerivedState(const std::vector<uint8_t> &componentStates) {
@@ -1599,6 +1618,7 @@ void SimulationCore::advanceState() {
 	std::fill(nextGateWords_.begin(), nextGateWords_.end(), 0);
 	std::fill(nextGateSummaryWords_.begin(), nextGateSummaryWords_.end(), 0);
 	connectorQueueEvents_.clear();
+	beginPropagationBatch();
 	for (size_t summaryWordIndex = 0; summaryWordIndex < currentGateSummaryWords_.size(); ++summaryWordIndex) {
 		uint64_t summary = currentGateSummaryWords_[summaryWordIndex];
 		while (summary != 0) {
@@ -1616,7 +1636,7 @@ void SimulationCore::advanceState() {
 				const uint8_t previousState = nodeStates_[node];
 				if (nextState != previousState) {
 					setChangedNodeState(node, nextState);
-					connectorQueueEvents_.push_back(encodeConnectorEvent(node, nextState));
+					seedSourceDelta(node, nextState != 0 ? 1 : -1);
 				}
 			}
 		}
@@ -1628,11 +1648,12 @@ void SimulationCore::advanceState() {
 			const uint8_t previousState = nodeStates_[node];
 			const uint8_t nextState = previousState == 0 ? 1 : 0;
 			setChangedNodeState(node, nextState);
-			connectorQueueEvents_.push_back(encodeConnectorEvent(node, nextState));
+			seedSourceDelta(node, nextState != 0 ? 1 : -1);
 		}
 		clockPhases_[node] = phase;
 	}
-	drainConnectorQueue();
+	// This tick begins with an empty next-gate frontier, and only the final flush can populate it.
+	finishPropagationBatch(false);
 	++tickCount_;
 }
 
