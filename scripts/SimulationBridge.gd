@@ -163,6 +163,29 @@ func advanceTicks(tickCount: int) -> Dictionary:
 		"updates": makeDeltaUpdates(changesVariant as PackedInt32Array),
 	}
 
+func advanceTicksSilent(tickCount: int) -> Dictionary:
+	if not hasNativeSimulation():
+		return makeFailure(-1, -1, "BackendUnavailable")
+	if tickCount <= 0:
+		return {"ok": true}
+	var changesVariant: Variant = NativeSimulation.call("advanceTicksSilent", tickCount)
+	if not (changesVariant is PackedInt32Array):
+		return makeFailure(-1, -1, "OcbSimulationSilentBatchAdvanceResultInvalid")
+	if not (changesVariant as PackedInt32Array).is_empty():
+		return makeFailure(-1, -1, "OcbSimulationSilentBatchAdvanceReturnedChanges")
+	return {"ok": true}
+
+func drainStateChanges() -> Dictionary:
+	if not hasNativeSimulation():
+		return makeFailure(-1, -1, "BackendUnavailable")
+	var changesVariant: Variant = NativeSimulation.call("drainStateChanges")
+	if not (changesVariant is PackedInt32Array):
+		return makeFailure(-1, -1, "OcbSimulationDrainChangesResultInvalid")
+	return {
+		"ok": true,
+		"updates": makeDeltaUpdates(changesVariant as PackedInt32Array),
+	}
+
 func reset() -> Dictionary:
 	if not hasNativeSimulation():
 		return makeFailure(-1, -1, "BackendUnavailable")

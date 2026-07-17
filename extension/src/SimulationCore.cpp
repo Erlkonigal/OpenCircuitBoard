@@ -1,9 +1,16 @@
 #include "SimulationCore.hpp"
 
+#include "GraphLocalityOrderer.hpp"
+
 #include <algorithm>
 #include <array>
 #include <limits>
+#include <numeric>
 #include <unordered_map>
+
+#if defined(_MSC_VER)
+#include <intrin.h>
+#endif
 
 namespace ocb {
 namespace {
@@ -113,10 +120,137 @@ void hashInt(uint64_t &hash, int32_t value) {
 	}
 }
 
+int32_t countTrailingZeros(uint64_t value) {
+#if defined(_MSC_VER)
+	unsigned long index = 0;
+	_BitScanForward64(&index, value);
+	return static_cast<int32_t>(index);
+#else
+	return static_cast<int32_t>(__builtin_ctzll(value));
+#endif
+}
+
+struct ConnectorCondensation {
+	std::vector<int32_t> rawToComponent;
+	int32_t componentCount = 0;
+};
+
+ConnectorCondensation condenseConnectorGraph(int32_t connectorCount, const std::vector<std::pair<int32_t, int32_t>> &edges) {
+	ConnectorCondensation result;
+	result.rawToComponent.assign(connectorCount, -1);
+	if (connectorCount == 0) {
+		return result;
+	}
+
+	std::vector<std::vector<int32_t>> outgoing(connectorCount);
+	std::vector<std::vector<int32_t>> incoming(connectorCount);
+	for (const std::pair<int32_t, int32_t> &edge : edges) {
+		if (edge.first < 0 || edge.second < 0 || edge.first >= connectorCount || edge.second >= connectorCount) {
+			continue;
+		}
+		outgoing[edge.first].push_back(edge.second);
+		incoming[edge.second].push_back(edge.first);
+	}
+	for (int32_t node = 0; node < connectorCount; ++node) {
+		std::sort(outgoing[node].begin(), outgoing[node].end());
+		outgoing[node].erase(std::unique(outgoing[node].begin(), outgoing[node].end()), outgoing[node].end());
+		std::sort(incoming[node].begin(), incoming[node].end());
+		incoming[node].erase(std::unique(incoming[node].begin(), incoming[node].end()), incoming[node].end());
+	}
+
+	std::vector<uint8_t> visited(connectorCount, 0);
+	std::vector<int32_t> finishOrder;
+	finishOrder.reserve(connectorCount);
+	for (int32_t start = 0; start < connectorCount; ++start) {
+		if (visited[start] != 0) {
+			continue;
+		}
+		std::vector<std::pair<int32_t, int32_t>> stack;
+		stack.emplace_back(start, 0);
+		visited[start] = 1;
+		while (!stack.empty()) {
+			int32_t &nextEdge = stack.back().second;
+			const int32_t node = stack.back().first;
+			if (nextEdge < static_cast<int32_t>(outgoing[node].size())) {
+				const int32_t target = outgoing[node][nextEdge++];
+				if (visited[target] == 0) {
+					visited[target] = 1;
+					stack.emplace_back(target, 0);
+				}
+				continue;
+			}
+			finishOrder.push_back(node);
+			stack.pop_back();
+		}
+	}
+
+	std::vector<int32_t> componentMinimum;
+	for (auto iterator = finishOrder.rbegin(); iterator != finishOrder.rend(); ++iterator) {
+		const int32_t start = *iterator;
+		if (result.rawToComponent[start] >= 0) {
+			continue;
+		}
+		const int32_t component = result.componentCount++;
+		int32_t minimumNode = start;
+		std::vector<int32_t> stack = {start};
+		result.rawToComponent[start] = component;
+		while (!stack.empty()) {
+			const int32_t node = stack.back();
+			stack.pop_back();
+			minimumNode = std::min(minimumNode, node);
+			for (int32_t source : incoming[node]) {
+				if (result.rawToComponent[source] >= 0) {
+					continue;
+				}
+				result.rawToComponent[source] = component;
+				stack.push_back(source);
+			}
+		}
+		componentMinimum.push_back(minimumNode);
+	}
+
+	std::vector<int32_t> orderedComponents(result.componentCount);
+	std::iota(orderedComponents.begin(), orderedComponents.end(), 0);
+	std::sort(orderedComponents.begin(), orderedComponents.end(), [&](int32_t left, int32_t right) {
+		return componentMinimum[left] < componentMinimum[right];
+	});
+	std::vector<int32_t> remap(result.componentCount, -1);
+	for (int32_t component = 0; component < result.componentCount; ++component) {
+		remap[orderedComponents[component]] = component;
+	}
+	for (int32_t &component : result.rawToComponent) {
+		component = remap[component];
+	}
+	return result;
+}
+
+void appendCsrEdge(std::vector<std::vector<int32_t>> &outgoing, int32_t source, int32_t target) {
+	if (source < 0 || target < 0 || source >= static_cast<int32_t>(outgoing.size()) || target >= static_cast<int32_t>(outgoing.size()) || source == target) {
+		return;
+	}
+	outgoing[source].push_back(target);
+}
+
+void flattenCsr(
+		const std::vector<std::vector<int32_t>> &adjacency,
+		std::vector<int32_t> &offsets,
+		std::vector<int32_t> &targets) {
+	offsets.assign(adjacency.size() + 1U, 0);
+	targets.clear();
+	for (int32_t node = 0; node < static_cast<int32_t>(adjacency.size()); ++node) {
+		offsets[node] = static_cast<int32_t>(targets.size());
+		targets.insert(targets.end(), adjacency[node].begin(), adjacency[node].end());
+	}
+	offsets[adjacency.size()] = static_cast<int32_t>(targets.size());
+}
+
 } // namespace
 
 bool SimulationCore::isKnownKind(int32_t kind) {
 	return kind >= static_cast<int32_t>(ToolKind::Empty) && kind <= static_cast<int32_t>(ToolKind::Led);
+}
+
+SimulationCore::SimulationCore(bool useGraphLocalityOrdering) : useGraphLocalityOrdering_(useGraphLocalityOrdering) {
 }
 
 bool SimulationCore::isTrace(ToolKind kind) {
@@ -188,6 +322,7 @@ void SimulationCore::clear() {
 	compiled_ = false;
 	topologySignature_ = 0;
 	tickCount_ = 0;
+	graphLocalityScore_ = 0;
 	kinds_.clear();
 	initialStates_.clear();
 	clockHoldTicks_.clear();
@@ -203,12 +338,45 @@ void SimulationCore::clear() {
 	crossVerticalNetworkByCell_.clear();
 	readBindingByCell_.clear();
 	writeNetworkByCell_.clear();
-	componentStates_.clear();
+	readVisibleNodeByCell_.clear();
+	nodeStates_.clear();
 	networkStates_.clear();
 	clockPhases_.clear();
-	nextComponentStates_.clear();
-	nextNetworkStates_.clear();
-	nextClockPhases_.clear();
+	nodeIsComponent_.clear();
+	nodeKinds_.clear();
+	nodeClockHoldTicks_.clear();
+	nodeLatchInitialStates_.clear();
+	componentIndexByNode_.clear();
+	componentStates_.clear();
+	componentInputCounts_.clear();
+	componentInputHighCounts_.clear();
+	nodeInputHighCounts_.clear();
+	outgoingOffsets_.clear();
+	outgoingTargets_.clear();
+	incomingOffsets_.clear();
+	incomingSources_.clear();
+	componentNodes_.clear();
+	connectorNodes_.clear();
+	snapshotComponentNodes_.clear();
+	snapshotConnectorNodes_.clear();
+	clockNodes_.clear();
+	nextGateWords_.clear();
+	nextGateSummaryWords_.clear();
+	currentGateWords_.clear();
+	currentGateSummaryWords_.clear();
+	pendingStateNodes_.clear();
+	pendingPreviousStates_.clear();
+	pendingNextStates_.clear();
+	connectorQueueNodes_.clear();
+	connectorQueueDeltas_.clear();
+	nodeVisibleCells_.clear();
+	cellPrimaryNode_.clear();
+	cellSecondaryNode_.clear();
+	visibleStates_.clear();
+	reportedVisibleStates_.clear();
+	changedCellStamps_.clear();
+	changedCells_.clear();
+	changeStamp_ = 1;
 }
 
 bool SimulationCore::compile(const CompileInput &input, CompileError &error) {
@@ -650,33 +818,275 @@ bool SimulationCore::compile(const CompileInput &input, CompileError &error) {
 		}
 	}
 
-	componentStates_.assign(components_.size(), 0);
-	clockPhases_.assign(components_.size(), 0);
+	buildExecutionGraph();
 	topologySignature_ = makeTopologySignature();
 	resetInternal();
+	reportedVisibleStates_ = visibleStates_;
+	resetChangeCollector();
 	compiled_ = true;
 	return true;
 }
 
-uint8_t SimulationCore::evaluateComponent(int32_t componentId, const std::vector<uint8_t> &networkStates, uint8_t currentState) const {
-	const Component &component = components_[componentId];
-	const std::vector<int32_t> &inputs = componentInputNetworks_[componentId];
-	const auto firstInput = [&]() {
-		return inputs.empty() ? static_cast<uint8_t>(0) : networkStates[inputs.front()];
+void SimulationCore::buildExecutionGraph() {
+	const int32_t originalComponentCount = static_cast<int32_t>(components_.size());
+	const int32_t rawConnectorCount = static_cast<int32_t>(networkStates_.size());
+	std::vector<std::pair<int32_t, int32_t>> rawEdges;
+	const auto addRawEdge = [&](int32_t source, int32_t target) {
+		if (source >= 0 && target >= 0) {
+			rawEdges.emplace_back(source, target);
+		}
 	};
-	bool allHigh = true;
-	bool anyHigh = false;
-	bool parity = false;
-	for (int32_t network : inputs) {
-		const bool value = networkStates[network] != 0;
-		allHigh = allHigh && value;
-		anyHigh = anyHigh || value;
-		parity = parity != value;
+	for (const ReadBinding &binding : readBindings_) {
+		std::vector<int32_t> targets = binding.outputNetworks;
+		targets.push_back(binding.signalNetwork);
+		for (int32_t target : targets) {
+			if (binding.sourceComponent >= 0) {
+				addRawEdge(binding.sourceComponent, originalComponentCount + target);
+			} else if (binding.sourceNetwork >= 0) {
+				addRawEdge(originalComponentCount + binding.sourceNetwork, originalComponentCount + target);
+			}
+		}
+	}
+	for (const WriteBinding &binding : writeBindings_) {
+		for (int32_t target : binding.targetComponents) {
+			addRawEdge(originalComponentCount + binding.inputNetwork, target);
+		}
+	}
+	std::sort(rawEdges.begin(), rawEdges.end());
+	rawEdges.erase(std::unique(rawEdges.begin(), rawEdges.end()), rawEdges.end());
+
+	std::vector<std::pair<int32_t, int32_t>> connectorEdges;
+	for (const std::pair<int32_t, int32_t> &edge : rawEdges) {
+		if (edge.first >= originalComponentCount && edge.second >= originalComponentCount) {
+			connectorEdges.emplace_back(edge.first - originalComponentCount, edge.second - originalComponentCount);
+		}
+	}
+	const ConnectorCondensation condensation = condenseConnectorGraph(rawConnectorCount, connectorEdges);
+	const int32_t originalNodeCount = originalComponentCount + condensation.componentCount;
+	std::vector<std::vector<int32_t>> originalOutgoing(originalNodeCount);
+	const auto mapRawNode = [&](int32_t rawNode) {
+		if (rawNode < originalComponentCount) {
+			return rawNode;
+		}
+		const int32_t rawConnector = rawNode - originalComponentCount;
+		return originalComponentCount + condensation.rawToComponent[rawConnector];
+	};
+	for (const std::pair<int32_t, int32_t> &edge : rawEdges) {
+		appendCsrEdge(originalOutgoing, mapRawNode(edge.first), mapRawNode(edge.second));
+	}
+	for (std::vector<int32_t> &targets : originalOutgoing) {
+		std::sort(targets.begin(), targets.end());
+		targets.erase(std::unique(targets.begin(), targets.end()), targets.end());
+	}
+	std::vector<int32_t> originalOutgoingOffsets;
+	std::vector<int32_t> originalOutgoingTargets;
+	flattenCsr(originalOutgoing, originalOutgoingOffsets, originalOutgoingTargets);
+	std::vector<std::vector<int32_t>> originalIncoming(originalNodeCount);
+	for (int32_t source = 0; source < originalNodeCount; ++source) {
+		for (int32_t target : originalOutgoing[source]) {
+			originalIncoming[target].push_back(source);
+		}
+	}
+	for (std::vector<int32_t> &sources : originalIncoming) {
+		std::sort(sources.begin(), sources.end());
+	}
+	std::vector<int32_t> originalIncomingOffsets;
+	std::vector<int32_t> originalIncomingSources;
+	flattenCsr(originalIncoming, originalIncomingOffsets, originalIncomingSources);
+	GraphLocalityOrder order;
+	if (useGraphLocalityOrdering_) {
+		order = GraphLocalityOrderer::order(
+				originalNodeCount,
+				originalOutgoingOffsets,
+				originalOutgoingTargets,
+				originalIncomingOffsets,
+				originalIncomingSources);
+	} else {
+		order.newToOld.resize(originalNodeCount);
+		order.oldToNew.resize(originalNodeCount);
+		std::iota(order.newToOld.begin(), order.newToOld.end(), 0);
+		std::iota(order.oldToNew.begin(), order.oldToNew.end(), 0);
+	}
+	graphLocalityScore_ = GraphLocalityOrderer::calculateLocalityScore(
+			originalNodeCount,
+			originalOutgoingOffsets,
+			originalOutgoingTargets,
+			order.oldToNew);
+
+	std::vector<std::vector<int32_t>> reorderedOutgoing(originalNodeCount);
+	for (int32_t source = 0; source < originalNodeCount; ++source) {
+		const int32_t reorderedSource = order.oldToNew[source];
+		for (int32_t target : originalOutgoing[source]) {
+			reorderedOutgoing[reorderedSource].push_back(order.oldToNew[target]);
+		}
+	}
+	for (std::vector<int32_t> &targets : reorderedOutgoing) {
+		std::sort(targets.begin(), targets.end());
+		targets.erase(std::unique(targets.begin(), targets.end()), targets.end());
+	}
+	flattenCsr(reorderedOutgoing, outgoingOffsets_, outgoingTargets_);
+	std::vector<std::vector<int32_t>> reorderedIncoming(originalNodeCount);
+	for (int32_t source = 0; source < originalNodeCount; ++source) {
+		for (int32_t target : reorderedOutgoing[source]) {
+			reorderedIncoming[target].push_back(source);
+		}
+	}
+	for (std::vector<int32_t> &sources : reorderedIncoming) {
+		std::sort(sources.begin(), sources.end());
+	}
+	flattenCsr(reorderedIncoming, incomingOffsets_, incomingSources_);
+
+	std::vector<Component> originalComponents = std::move(components_);
+	components_.assign(originalNodeCount, Component());
+	nodeIsComponent_.assign(originalNodeCount, 0);
+	nodeKinds_.assign(originalNodeCount, ToolKind::Empty);
+	nodeClockHoldTicks_.assign(originalNodeCount, 0);
+	nodeLatchInitialStates_.assign(originalNodeCount, 0);
+	componentNodes_.clear();
+	connectorNodes_.clear();
+	clockNodes_.clear();
+	snapshotComponentNodes_.resize(originalComponentCount);
+	for (int32_t originalComponent = 0; originalComponent < originalComponentCount; ++originalComponent) {
+		const int32_t node = order.oldToNew[originalComponent];
+		components_[node] = std::move(originalComponents[originalComponent]);
+		nodeIsComponent_[node] = 1;
+		nodeKinds_[node] = components_[node].kind;
+		nodeClockHoldTicks_[node] = components_[node].clockHoldTicks;
+		nodeLatchInitialStates_[node] = components_[node].latchInitialState;
+		snapshotComponentNodes_[originalComponent] = node;
+	}
+	for (int32_t node = 0; node < originalNodeCount; ++node) {
+		if (nodeIsComponent_[node] == 0) {
+			connectorNodes_.push_back(node);
+			continue;
+		}
+		componentNodes_.push_back(node);
+		if (nodeKinds_[node] == ToolKind::Clock) {
+			clockNodes_.push_back(node);
+		}
+	}
+	for (int32_t &component : cellToComponent_) {
+		if (component >= 0) {
+			component = order.oldToNew[component];
+		}
+	}
+	const auto remapConnector = [&](int32_t rawConnector) {
+		if (rawConnector < 0) {
+			return -1;
+		}
+		const int32_t originalNode = originalComponentCount + condensation.rawToComponent[rawConnector];
+		return order.oldToNew[originalNode];
+	};
+	snapshotConnectorNodes_.resize(rawConnectorCount);
+	for (int32_t rawConnector = 0; rawConnector < rawConnectorCount; ++rawConnector) {
+		snapshotConnectorNodes_[rawConnector] = remapConnector(rawConnector);
+	}
+	for (int32_t &network : cellNetwork_) {
+		network = remapConnector(network);
+	}
+	for (int32_t &network : meshNetworkByCell_) {
+		network = remapConnector(network);
+	}
+	for (int32_t &network : crossHorizontalNetworkByCell_) {
+		network = remapConnector(network);
+	}
+	for (int32_t &network : crossVerticalNetworkByCell_) {
+		network = remapConnector(network);
+	}
+	for (int32_t &network : writeNetworkByCell_) {
+		network = remapConnector(network);
+	}
+	readVisibleNodeByCell_.assign(kinds_.size(), -1);
+	for (int32_t cell = 0; cell < static_cast<int32_t>(kinds_.size()); ++cell) {
+		if (static_cast<ToolKind>(kinds_[cell]) != ToolKind::Read) {
+			continue;
+		}
+		const ReadBinding &binding = readBindings_[readBindingByCell_[cell]];
+		if (binding.sourceComponent >= 0) {
+			readVisibleNodeByCell_[cell] = order.oldToNew[binding.sourceComponent];
+		} else {
+			readVisibleNodeByCell_[cell] = remapConnector(binding.sourceNetwork);
+		}
 	}
 
-	switch (component.kind) {
+	componentIndexByNode_.assign(originalNodeCount, -1);
+	componentStates_.assign(componentNodes_.size(), 0);
+	componentInputCounts_.assign(componentNodes_.size(), 0);
+	componentInputHighCounts_.assign(componentNodes_.size(), 0);
+	nodeInputHighCounts_.assign(originalNodeCount, 0);
+	for (int32_t component = 0; component < static_cast<int32_t>(componentNodes_.size()); ++component) {
+		const int32_t node = componentNodes_[component];
+		componentIndexByNode_[node] = component;
+		componentInputCounts_[component] = incomingOffsets_[node + 1] - incomingOffsets_[node];
+	}
+	const size_t gateWordCount = (componentNodes_.size() + 63U) / 64U;
+	const size_t gateSummaryWordCount = (gateWordCount + 63U) / 64U;
+	nextGateWords_.assign(gateWordCount, 0);
+	nextGateSummaryWords_.assign(gateSummaryWordCount, 0);
+	currentGateWords_.assign(gateWordCount, 0);
+	currentGateSummaryWords_.assign(gateSummaryWordCount, 0);
+	pendingStateNodes_.clear();
+	pendingStateNodes_.reserve(originalNodeCount);
+	pendingPreviousStates_.clear();
+	pendingPreviousStates_.reserve(originalNodeCount);
+	pendingNextStates_.clear();
+	pendingNextStates_.reserve(originalNodeCount);
+	connectorQueueNodes_.clear();
+	connectorQueueNodes_.reserve(originalNodeCount);
+	connectorQueueDeltas_.clear();
+	connectorQueueDeltas_.reserve(originalNodeCount);
+	nodeStates_.assign(originalNodeCount, 0);
+	clockPhases_.assign(originalNodeCount, 0);
+	nodeVisibleCells_.assign(originalNodeCount, {});
+	cellPrimaryNode_.assign(kinds_.size(), -1);
+	cellSecondaryNode_.assign(kinds_.size(), -1);
+	for (int32_t cell = 0; cell < static_cast<int32_t>(kinds_.size()); ++cell) {
+		const ToolKind kind = static_cast<ToolKind>(kinds_[cell]);
+		if (isConductor(kind)) {
+			cellPrimaryNode_[cell] = cellNetwork_[cell];
+		} else if (kind == ToolKind::Mesh) {
+			cellPrimaryNode_[cell] = meshNetworkByCell_[cell];
+		} else if (kind == ToolKind::Cross) {
+			cellPrimaryNode_[cell] = crossHorizontalNetworkByCell_[cell];
+			cellSecondaryNode_[cell] = crossVerticalNetworkByCell_[cell];
+		} else if (kind == ToolKind::Read) {
+			cellPrimaryNode_[cell] = readVisibleNodeByCell_[cell];
+		} else if (kind == ToolKind::Write) {
+			cellPrimaryNode_[cell] = writeNetworkByCell_[cell];
+		} else if (isDevice(kind)) {
+			cellPrimaryNode_[cell] = cellToComponent_[cell];
+		}
+		const int32_t primary = cellPrimaryNode_[cell];
+		const int32_t secondary = cellSecondaryNode_[cell];
+		if (primary >= 0) {
+			nodeVisibleCells_[primary].push_back(cell);
+		}
+		if (secondary >= 0 && secondary != primary) {
+			nodeVisibleCells_[secondary].push_back(cell);
+		}
+	}
+	visibleStates_.assign(kinds_.size(), 0);
+	reportedVisibleStates_.assign(kinds_.size(), 0);
+	changedCellStamps_.assign(kinds_.size(), 0);
+	changedCells_.clear();
+	changeStamp_ = 1;
+	componentInputNetworks_.clear();
+	networkStates_.clear();
+	components_.clear();
+	components_.shrink_to_fit();
+}
+
+uint8_t SimulationCore::evaluateComponent(int32_t node) const {
+	const int32_t component = componentIndexByNode_[node];
+	const int32_t inputCount = componentInputCounts_[component];
+	const int32_t highInputCount = componentInputHighCounts_[component];
+	const uint8_t firstInput = highInputCount != 0 ? 1 : 0;
+	const bool allHigh = highInputCount == inputCount;
+	const bool anyHigh = highInputCount != 0;
+	const bool parity = (highInputCount & 1) != 0;
+	switch (nodeKinds_[node]) {
 		case ToolKind::Buffer:
-			return firstInput();
+			return firstInput;
 		case ToolKind::And:
 			return allHigh ? 1 : 0;
 		case ToolKind::Or:
@@ -684,7 +1094,7 @@ uint8_t SimulationCore::evaluateComponent(int32_t componentId, const std::vector
 		case ToolKind::Xor:
 			return parity ? 1 : 0;
 		case ToolKind::Not:
-			return firstInput() == 0 ? 1 : 0;
+			return firstInput == 0 ? 1 : 0;
 		case ToolKind::Nand:
 			return allHigh ? 0 : 1;
 		case ToolKind::Nor:
@@ -692,106 +1102,198 @@ uint8_t SimulationCore::evaluateComponent(int32_t componentId, const std::vector
 		case ToolKind::Xnor:
 			return parity ? 0 : 1;
 		case ToolKind::Latch:
-			return inputs.empty() ? currentState : firstInput();
+			return inputCount == 0 ? componentStates_[component] : firstInput;
 		case ToolKind::Led:
-			return firstInput();
+			return firstInput;
 		default:
-			return currentState;
+			return nodeStates_[node];
 	}
 }
 
-void SimulationCore::resolveConnectorNetworks(const std::vector<uint8_t> &componentStates, std::vector<uint8_t> &networkStates) const {
-	networkStates.assign(networkStates_.size(), 0);
-	for (int32_t pass = 0; pass <= static_cast<int32_t>(readBindings_.size()); ++pass) {
-		bool changed = false;
-		for (const ReadBinding &binding : readBindings_) {
-			uint8_t sourceState = 0;
-			if (binding.sourceComponent >= 0) {
-				sourceState = componentStates[binding.sourceComponent];
-			} else if (binding.sourceNetwork >= 0) {
-				sourceState = networkStates[binding.sourceNetwork];
-			}
-			if (sourceState == 0) {
+void SimulationCore::updateVisibleCell(int32_t cell) {
+	if (cell < 0 || cell >= static_cast<int32_t>(visibleStates_.size())) {
+		return;
+	}
+	const int32_t primary = cellPrimaryNode_[cell];
+	const int32_t secondary = cellSecondaryNode_[cell];
+	const uint8_t state =
+			(primary >= 0 && nodeStates_[primary] != 0) || (secondary >= 0 && nodeStates_[secondary] != 0) ? 1 : 0;
+	if (visibleStates_[cell] == state) {
+		return;
+	}
+	visibleStates_[cell] = state;
+	if (changedCellStamps_[cell] != changeStamp_) {
+		changedCellStamps_[cell] = changeStamp_;
+		changedCells_.push_back(cell);
+	}
+}
+
+void SimulationCore::updateVisibleCellsForNode(int32_t node) {
+	for (int32_t cell : nodeVisibleCells_[node]) {
+		updateVisibleCell(cell);
+	}
+}
+
+void SimulationCore::setNodeState(int32_t node, uint8_t state) {
+	if (nodeStates_[node] == state) {
+		return;
+	}
+	nodeStates_[node] = state;
+	if (nodeIsComponent_[node] != 0) {
+		componentStates_[componentIndexByNode_[node]] = state;
+	}
+	updateVisibleCellsForNode(node);
+}
+
+void SimulationCore::enqueueGate(int32_t node) {
+	if (node < 0 || node >= static_cast<int32_t>(nodeIsComponent_.size()) || nodeIsComponent_[node] == 0 ||
+			nodeKinds_[node] == ToolKind::Clock) {
+		return;
+	}
+	const int32_t component = componentIndexByNode_[node];
+	const size_t wordIndex = static_cast<size_t>(component) / 64U;
+	const uint64_t gateMask = uint64_t{1} << (static_cast<size_t>(component) % 64U);
+	if ((nextGateWords_[wordIndex] & gateMask) != 0) {
+		return;
+	}
+	nextGateWords_[wordIndex] |= gateMask;
+	const size_t summaryWordIndex = wordIndex / 64U;
+	nextGateSummaryWords_[summaryWordIndex] |= uint64_t{1} << (wordIndex % 64U);
+}
+
+void SimulationCore::propagateStateChange(int32_t sourceNode, uint8_t oldState, uint8_t newState) {
+	if (oldState == newState) {
+		return;
+	}
+	connectorQueueNodes_.clear();
+	connectorQueueDeltas_.clear();
+	connectorQueueNodes_.push_back(sourceNode);
+	connectorQueueDeltas_.push_back(newState != 0 ? 1 : -1);
+	drainConnectorQueue();
+}
+
+void SimulationCore::drainConnectorQueue() {
+	for (size_t cursor = 0; cursor < connectorQueueNodes_.size(); ++cursor) {
+		const int32_t source = connectorQueueNodes_[cursor];
+		const int32_t stateDelta = connectorQueueDeltas_[cursor];
+		for (int32_t edge = outgoingOffsets_[source]; edge < outgoingOffsets_[source + 1]; ++edge) {
+			const int32_t target = outgoingTargets_[edge];
+			if (nodeIsComponent_[target] != 0) {
+				componentInputHighCounts_[componentIndexByNode_[target]] += stateDelta;
+				enqueueGate(target);
 				continue;
 			}
-			for (int32_t network : binding.outputNetworks) {
-				if (networkStates[network] == 0) {
-					networkStates[network] = 1;
-					changed = true;
-				}
+			const int32_t previousHighInputCount = nodeInputHighCounts_[target];
+			nodeInputHighCounts_[target] += stateDelta;
+			const uint8_t previousState = previousHighInputCount != 0 ? 1 : 0;
+			const uint8_t nextState = nodeInputHighCounts_[target] != 0 ? 1 : 0;
+			if (previousState == nextState) {
+				continue;
 			}
-			if (networkStates[binding.signalNetwork] == 0) {
-				networkStates[binding.signalNetwork] = 1;
-				changed = true;
-			}
-		}
-		if (!changed) {
-			return;
+			setNodeState(target, nextState);
+			connectorQueueNodes_.push_back(target);
+			connectorQueueDeltas_.push_back(nextState != 0 ? 1 : -1);
 		}
 	}
+}
+
+void SimulationCore::rebuildDerivedState(const std::vector<uint8_t> &componentStates) {
+	nodeStates_.assign(nodeStates_.size(), 0);
+	nodeInputHighCounts_.assign(nodeInputHighCounts_.size(), 0);
+	componentStates_.assign(componentStates_.size(), 0);
+	componentInputHighCounts_.assign(componentInputHighCounts_.size(), 0);
+	std::fill(nextGateWords_.begin(), nextGateWords_.end(), 0);
+	std::fill(nextGateSummaryWords_.begin(), nextGateSummaryWords_.end(), 0);
+	std::fill(currentGateWords_.begin(), currentGateWords_.end(), 0);
+	std::fill(currentGateSummaryWords_.begin(), currentGateSummaryWords_.end(), 0);
+	connectorQueueNodes_.clear();
+	connectorQueueDeltas_.clear();
+	for (int32_t index = 0; index < static_cast<int32_t>(componentNodes_.size()); ++index) {
+		const int32_t node = componentNodes_[index];
+		nodeStates_[node] = componentStates[index];
+		componentStates_[index] = componentStates[index];
+	}
+	for (int32_t node : componentNodes_) {
+		if (nodeStates_[node] != 0) {
+			connectorQueueNodes_.push_back(node);
+			connectorQueueDeltas_.push_back(1);
+		}
+	}
+	drainConnectorQueue();
 }
 
 void SimulationCore::resetInternal() {
 	tickCount_ = 0;
-	std::fill(networkStates_.begin(), networkStates_.end(), 0);
 	std::fill(clockPhases_.begin(), clockPhases_.end(), 0);
-	for (int32_t component = 0; component < static_cast<int32_t>(components_.size()); ++component) {
-		const Component &definition = components_[component];
-		if (definition.kind == ToolKind::Latch) {
-			componentStates_[component] = definition.latchInitialState;
-		} else if (definition.kind == ToolKind::Clock) {
-			componentStates_[component] = 0;
-		} else {
-			componentStates_[component] = evaluateComponent(component, networkStates_, 0);
+	std::fill(nodeInputHighCounts_.begin(), nodeInputHighCounts_.end(), 0);
+	std::fill(componentInputHighCounts_.begin(), componentInputHighCounts_.end(), 0);
+	std::fill(nextGateWords_.begin(), nextGateWords_.end(), 0);
+	std::fill(nextGateSummaryWords_.begin(), nextGateSummaryWords_.end(), 0);
+	std::fill(currentGateWords_.begin(), currentGateWords_.end(), 0);
+	std::fill(currentGateSummaryWords_.begin(), currentGateSummaryWords_.end(), 0);
+	connectorQueueNodes_.clear();
+	connectorQueueDeltas_.clear();
+	for (int32_t node = 0; node < static_cast<int32_t>(nodeStates_.size()); ++node) {
+		if (nodeStates_[node] != 0) {
+			setNodeState(node, 0);
 		}
 	}
-	resolveConnectorNetworks(componentStates_, networkStates_);
+	for (int32_t node : componentNodes_) {
+		uint8_t state = 0;
+		if (nodeKinds_[node] == ToolKind::Latch) {
+			state = nodeLatchInitialStates_[node];
+		} else if (nodeKinds_[node] != ToolKind::Clock) {
+			state = evaluateComponent(node);
+		}
+		if (state != 0) {
+			setNodeState(node, state);
+		}
+	}
+	for (int32_t node : componentNodes_) {
+		if (nodeStates_[node] != 0) {
+			connectorQueueNodes_.push_back(node);
+			connectorQueueDeltas_.push_back(1);
+		}
+	}
+	drainConnectorQueue();
 }
 
 std::vector<int32_t> SimulationCore::getStates() const {
 	if (!compiled_) {
 		return {};
 	}
-	std::vector<int32_t> states(kinds_.size(), 0);
-	for (int32_t cell = 0; cell < static_cast<int32_t>(kinds_.size()); ++cell) {
-		const ToolKind kind = static_cast<ToolKind>(kinds_[cell]);
-		if (isConductor(kind)) {
-			states[cell] = cellNetwork_[cell] >= 0 ? networkStates_[cellNetwork_[cell]] : 0;
-		} else if (kind == ToolKind::Mesh) {
-			states[cell] = meshNetworkByCell_[cell] >= 0 ? networkStates_[meshNetworkByCell_[cell]] : 0;
-		} else if (kind == ToolKind::Cross) {
-			const bool horizontal = crossHorizontalNetworkByCell_[cell] >= 0 && networkStates_[crossHorizontalNetworkByCell_[cell]] != 0;
-			const bool vertical = crossVerticalNetworkByCell_[cell] >= 0 && networkStates_[crossVerticalNetworkByCell_[cell]] != 0;
-			states[cell] = horizontal || vertical ? 1 : 0;
-		} else if (kind == ToolKind::Read) {
-			const int32_t bindingId = readBindingByCell_[cell];
-			if (bindingId >= 0) {
-				const ReadBinding &binding = readBindings_[bindingId];
-				if (binding.sourceComponent >= 0) {
-					states[cell] = componentStates_[binding.sourceComponent];
-				} else if (binding.sourceNetwork >= 0) {
-					states[cell] = networkStates_[binding.sourceNetwork];
-				}
-			}
-		} else if (kind == ToolKind::Write) {
-			states[cell] = writeNetworkByCell_[cell] >= 0 ? networkStates_[writeNetworkByCell_[cell]] : 0;
-		} else if (isDevice(kind)) {
-			states[cell] = cellToComponent_[cell] >= 0 ? componentStates_[cellToComponent_[cell]] : 0;
-		}
+	std::vector<int32_t> states(visibleStates_.size(), 0);
+	for (int32_t cell = 0; cell < static_cast<int32_t>(visibleStates_.size()); ++cell) {
+		states[cell] = visibleStates_[cell];
 	}
 	return states;
 }
 
-std::vector<int32_t> SimulationCore::makeStateDeltas(const std::vector<int32_t> &previousStates) const {
-	const std::vector<int32_t> currentStates = getStates();
-	std::vector<int32_t> deltas;
-	for (int32_t cell = 0; cell < static_cast<int32_t>(currentStates.size()); ++cell) {
-		if (cell >= static_cast<int32_t>(previousStates.size()) || previousStates[cell] != currentStates[cell]) {
-			deltas.push_back(cell);
-			deltas.push_back(currentStates[cell]);
-		}
+void SimulationCore::resetChangeCollector() {
+	changedCells_.clear();
+	++changeStamp_;
+	if (changeStamp_ == 0) {
+		std::fill(changedCellStamps_.begin(), changedCellStamps_.end(), 0);
+		changeStamp_ = 1;
 	}
-	return deltas;
+}
+
+std::vector<int32_t> SimulationCore::drainStateChanges() {
+	if (!compiled_ || changedCells_.empty()) {
+		return {};
+	}
+	std::sort(changedCells_.begin(), changedCells_.end());
+	std::vector<int32_t> changes;
+	changes.reserve(changedCells_.size() * 2U);
+	for (int32_t cell : changedCells_) {
+		if (visibleStates_[cell] != reportedVisibleStates_[cell]) {
+			changes.push_back(cell);
+			changes.push_back(visibleStates_[cell]);
+		}
+		reportedVisibleStates_[cell] = visibleStates_[cell];
+	}
+	resetChangeCollector();
+	return changes;
 }
 
 bool SimulationCore::toggleLatch(int32_t cellIndex, std::vector<int32_t> &changes, std::string &errorReason) {
@@ -805,41 +1307,77 @@ bool SimulationCore::toggleLatch(int32_t cellIndex, std::vector<int32_t> &change
 		errorReason = "cell_out_of_bounds";
 		return false;
 	}
-	const int32_t componentId = cellToComponent_[cellIndex];
-	if (componentId < 0 || components_[componentId].kind != ToolKind::Latch) {
+	const int32_t node = cellToComponent_[cellIndex];
+	if (node < 0 || nodeKinds_[node] != ToolKind::Latch) {
 		errorReason = "not_latch";
 		return false;
 	}
-
-	const std::vector<int32_t> previousStates = getStates();
-	componentStates_[componentId] = componentStates_[componentId] == 0 ? 1 : 0;
-	resolveConnectorNetworks(componentStates_, networkStates_);
-	changes = makeStateDeltas(previousStates);
+	const uint8_t previousState = componentStates_[componentIndexByNode_[node]];
+	const uint8_t nextState = previousState == 0 ? 1 : 0;
+	setNodeState(node, nextState);
+	propagateStateChange(node, previousState, nextState);
+	changes = drainStateChanges();
 	return true;
 }
 
 void SimulationCore::advanceState() {
-	nextComponentStates_ = componentStates_;
-	nextClockPhases_ = clockPhases_;
-	for (int32_t component = 0; component < static_cast<int32_t>(components_.size()); ++component) {
-		const Component &definition = components_[component];
-		if (definition.kind == ToolKind::Clock) {
-			int32_t phase = clockPhases_[component] + 1;
-			if (phase >= definition.clockHoldTicks) {
-				phase = 0;
-				nextComponentStates_[component] = componentStates_[component] == 0 ? 1 : 0;
+	currentGateWords_.swap(nextGateWords_);
+	currentGateSummaryWords_.swap(nextGateSummaryWords_);
+	std::fill(nextGateWords_.begin(), nextGateWords_.end(), 0);
+	std::fill(nextGateSummaryWords_.begin(), nextGateSummaryWords_.end(), 0);
+	pendingStateNodes_.clear();
+	pendingPreviousStates_.clear();
+	pendingNextStates_.clear();
+	for (size_t summaryWordIndex = 0; summaryWordIndex < currentGateSummaryWords_.size(); ++summaryWordIndex) {
+		uint64_t summary = currentGateSummaryWords_[summaryWordIndex];
+		while (summary != 0) {
+			const int32_t wordOffset = countTrailingZeros(summary);
+			summary &= summary - 1U;
+			const size_t gateWordIndex = summaryWordIndex * 64U + static_cast<size_t>(wordOffset);
+			if (gateWordIndex >= currentGateWords_.size()) {
+				continue;
 			}
-			nextClockPhases_[component] = phase;
-		} else {
-			nextComponentStates_[component] = evaluateComponent(component, networkStates_, componentStates_[component]);
+			uint64_t gates = currentGateWords_[gateWordIndex];
+			while (gates != 0) {
+				const int32_t gateOffset = countTrailingZeros(gates);
+				gates &= gates - 1U;
+				const size_t component = gateWordIndex * 64U + static_cast<size_t>(gateOffset);
+				if (component >= componentNodes_.size()) {
+					continue;
+				}
+				const int32_t node = componentNodes_[component];
+				const uint8_t nextState = evaluateComponent(node);
+				const uint8_t previousState = componentStates_[component];
+				if (nextState != previousState) {
+					pendingStateNodes_.push_back(node);
+					pendingPreviousStates_.push_back(previousState);
+					pendingNextStates_.push_back(nextState);
+				}
+			}
 		}
 	}
-
-	resolveConnectorNetworks(nextComponentStates_, nextNetworkStates_);
-
-	componentStates_.swap(nextComponentStates_);
-	networkStates_.swap(nextNetworkStates_);
-	clockPhases_.swap(nextClockPhases_);
+	for (int32_t node : clockNodes_) {
+		int32_t phase = clockPhases_[node] + 1;
+		if (phase >= nodeClockHoldTicks_[node]) {
+			phase = 0;
+			const uint8_t previousState = componentStates_[componentIndexByNode_[node]];
+			const uint8_t nextState = previousState == 0 ? 1 : 0;
+			pendingStateNodes_.push_back(node);
+			pendingPreviousStates_.push_back(previousState);
+			pendingNextStates_.push_back(nextState);
+		}
+		clockPhases_[node] = phase;
+	}
+	for (size_t index = 0; index < pendingStateNodes_.size(); ++index) {
+		setNodeState(pendingStateNodes_[index], pendingNextStates_[index]);
+	}
+	connectorQueueNodes_.clear();
+	connectorQueueDeltas_.clear();
+	for (size_t index = 0; index < pendingStateNodes_.size(); ++index) {
+		connectorQueueNodes_.push_back(pendingStateNodes_[index]);
+		connectorQueueDeltas_.push_back(pendingNextStates_[index] != 0 ? 1 : -1);
+	}
+	drainConnectorQueue();
 	++tickCount_;
 }
 
@@ -847,24 +1385,30 @@ std::vector<int32_t> SimulationCore::advanceTick() {
 	return advanceTicks(1);
 }
 
+std::vector<int32_t> SimulationCore::advanceTicksSilent(int32_t tickCount) {
+	if (!compiled_ || tickCount <= 0) {
+		return {};
+	}
+	for (int32_t tick = 0; tick < tickCount; ++tick) {
+		advanceState();
+	}
+	return {};
+}
+
 std::vector<int32_t> SimulationCore::advanceTicks(int32_t tickCount) {
 	if (!compiled_ || tickCount <= 0) {
 		return {};
 	}
-	const std::vector<int32_t> previousStates = getStates();
-	for (int32_t tick = 0; tick < tickCount; ++tick) {
-		advanceState();
-	}
-	return makeStateDeltas(previousStates);
+	advanceTicksSilent(tickCount);
+	return drainStateChanges();
 }
 
 std::vector<int32_t> SimulationCore::reset() {
 	if (!compiled_) {
 		return {};
 	}
-	const std::vector<int32_t> previousStates = getStates();
 	resetInternal();
-	return makeStateDeltas(previousStates);
+	return drainStateChanges();
 }
 
 uint64_t SimulationCore::makeTopologySignature() const {
@@ -885,17 +1429,21 @@ std::vector<uint8_t> SimulationCore::captureState() const {
 		return {};
 	}
 	std::vector<uint8_t> snapshot;
-	snapshot.reserve(32 + componentStates_.size() * 5 + networkStates_.size());
+	snapshot.reserve(32 + snapshotComponentNodes_.size() * 5 + snapshotConnectorNodes_.size());
 	appendU32(snapshot, SnapshotMagic);
 	appendU32(snapshot, SnapshotVersion);
 	appendU64(snapshot, topologySignature_);
-	appendU32(snapshot, static_cast<uint32_t>(componentStates_.size()));
-	appendU32(snapshot, static_cast<uint32_t>(networkStates_.size()));
+	appendU32(snapshot, static_cast<uint32_t>(snapshotComponentNodes_.size()));
+	appendU32(snapshot, static_cast<uint32_t>(snapshotConnectorNodes_.size()));
 	appendU64(snapshot, tickCount_);
-	snapshot.insert(snapshot.end(), componentStates_.begin(), componentStates_.end());
-	snapshot.insert(snapshot.end(), networkStates_.begin(), networkStates_.end());
-	for (int32_t phase : clockPhases_) {
-		appendU32(snapshot, static_cast<uint32_t>(phase));
+	for (int32_t node : snapshotComponentNodes_) {
+		snapshot.push_back(nodeStates_[node]);
+	}
+	for (int32_t node : snapshotConnectorNodes_) {
+		snapshot.push_back(nodeStates_[node]);
+	}
+	for (int32_t node : snapshotComponentNodes_) {
+		appendU32(snapshot, static_cast<uint32_t>(clockPhases_[node]));
 	}
 	return snapshot;
 }
@@ -922,7 +1470,7 @@ bool SimulationCore::restoreState(const std::vector<uint8_t> &snapshot, std::str
 		errorReason = "unsupported_snapshot";
 		return false;
 	}
-	if (signature != topologySignature_ || componentCount != componentStates_.size() || networkCount != networkStates_.size()) {
+	if (signature != topologySignature_ || componentCount != snapshotComponentNodes_.size() || networkCount != snapshotConnectorNodes_.size()) {
 		errorReason = "snapshot_topology_mismatch";
 		return false;
 	}
@@ -947,7 +1495,7 @@ bool SimulationCore::restoreState(const std::vector<uint8_t> &snapshot, std::str
 			return false;
 		}
 	}
-	std::vector<int32_t> clockPhases(componentCount, 0);
+	std::vector<int32_t> clockPhases(clockPhases_.size(), 0);
 	for (uint32_t component = 0; component < componentCount; ++component) {
 		uint32_t phase = 0;
 		if (!readU32(snapshot, offset, phase)) {
@@ -958,21 +1506,42 @@ bool SimulationCore::restoreState(const std::vector<uint8_t> &snapshot, std::str
 			errorReason = "invalid_snapshot_state";
 			return false;
 		}
-		if (components_[component].kind == ToolKind::Clock && phase >= static_cast<uint32_t>(components_[component].clockHoldTicks)) {
+		const int32_t node = snapshotComponentNodes_[component];
+		if (nodeKinds_[node] == ToolKind::Clock && phase >= static_cast<uint32_t>(nodeClockHoldTicks_[node])) {
 			errorReason = "invalid_snapshot_state";
 			return false;
 		}
-		clockPhases[component] = static_cast<int32_t>(phase);
+		clockPhases[node] = static_cast<int32_t>(phase);
 	}
-	componentStates_ = std::move(componentStates);
-	networkStates_ = std::move(networkStates);
+	visibleStates_.assign(visibleStates_.size(), 0);
+	changedCells_.clear();
+	std::fill(changedCellStamps_.begin(), changedCellStamps_.end(), 0);
+	changeStamp_ = 1;
+	std::vector<uint8_t> componentStatesInRuntimeOrder(componentNodes_.size(), 0);
+	for (int32_t component = 0; component < static_cast<int32_t>(snapshotComponentNodes_.size()); ++component) {
+		const int32_t node = snapshotComponentNodes_[component];
+		const auto runtimePosition = std::lower_bound(componentNodes_.begin(), componentNodes_.end(), node);
+		componentStatesInRuntimeOrder[static_cast<size_t>(runtimePosition - componentNodes_.begin())] = componentStates[component];
+	}
+	rebuildDerivedState(componentStatesInRuntimeOrder);
+	for (int32_t node = 0; node < static_cast<int32_t>(nodeStates_.size()); ++node) {
+		if (nodeStates_[node] != 0) {
+			updateVisibleCellsForNode(node);
+		}
+	}
 	clockPhases_ = std::move(clockPhases);
 	tickCount_ = tickCount;
+	reportedVisibleStates_ = visibleStates_;
+	resetChangeCollector();
 	return true;
 }
 
 bool SimulationCore::isCompiled() const {
 	return compiled_;
+}
+
+int64_t SimulationCore::getGraphLocalityScore() const {
+	return graphLocalityScore_;
 }
 
 } // namespace ocb

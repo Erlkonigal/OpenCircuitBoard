@@ -54,15 +54,20 @@ struct CompileError {
 
 class SimulationCore {
 public:
+	explicit SimulationCore(bool useGraphLocalityOrdering = true);
+
 	bool compile(const CompileInput &input, CompileError &error);
 	std::vector<int32_t> advanceTick();
 	std::vector<int32_t> advanceTicks(int32_t tickCount);
+	std::vector<int32_t> advanceTicksSilent(int32_t tickCount);
+	std::vector<int32_t> drainStateChanges();
 	std::vector<int32_t> getStates() const;
 	bool toggleLatch(int32_t cellIndex, std::vector<int32_t> &changes, std::string &errorReason);
 	std::vector<int32_t> reset();
 	std::vector<uint8_t> captureState() const;
 	bool restoreState(const std::vector<uint8_t> &snapshot, std::string &errorReason);
 	bool isCompiled() const;
+	int64_t getGraphLocalityScore() const;
 
 private:
 	struct Component {
@@ -97,11 +102,18 @@ private:
 	static bool allowsMultipleWrites(ToolKind kind);
 	static int32_t colorForKind(ToolKind kind);
 
-	uint8_t evaluateComponent(int32_t componentId, const std::vector<uint8_t> &networkStates, uint8_t currentState) const;
-	void resolveConnectorNetworks(const std::vector<uint8_t> &componentStates, std::vector<uint8_t> &networkStates) const;
+	uint8_t evaluateComponent(int32_t node) const;
+	void buildExecutionGraph();
+	void rebuildDerivedState(const std::vector<uint8_t> &componentStates);
+	void propagateStateChange(int32_t sourceNode, uint8_t oldState, uint8_t newState);
+	void drainConnectorQueue();
+	void enqueueGate(int32_t node);
+	void setNodeState(int32_t node, uint8_t state);
+	void updateVisibleCellsForNode(int32_t node);
+	void updateVisibleCell(int32_t cell);
+	void resetChangeCollector();
 	void advanceState();
 	void resetInternal();
-	std::vector<int32_t> makeStateDeltas(const std::vector<int32_t> &previousStates) const;
 	uint64_t makeTopologySignature() const;
 	void clear();
 
@@ -110,6 +122,8 @@ private:
 	bool compiled_ = false;
 	uint64_t topologySignature_ = 0;
 	uint64_t tickCount_ = 0;
+	int64_t graphLocalityScore_ = 0;
+	bool useGraphLocalityOrdering_ = true;
 	std::vector<int32_t> kinds_;
 	std::vector<int32_t> initialStates_;
 	std::vector<int32_t> clockHoldTicks_;
@@ -125,12 +139,45 @@ private:
 	std::vector<int32_t> crossVerticalNetworkByCell_;
 	std::vector<int32_t> readBindingByCell_;
 	std::vector<int32_t> writeNetworkByCell_;
-	std::vector<uint8_t> componentStates_;
+	std::vector<int32_t> readVisibleNodeByCell_;
+	std::vector<uint8_t> nodeStates_;
 	std::vector<uint8_t> networkStates_;
 	std::vector<int32_t> clockPhases_;
-	std::vector<uint8_t> nextComponentStates_;
-	std::vector<uint8_t> nextNetworkStates_;
-	std::vector<int32_t> nextClockPhases_;
+	std::vector<uint8_t> nodeIsComponent_;
+	std::vector<ToolKind> nodeKinds_;
+	std::vector<int32_t> nodeClockHoldTicks_;
+	std::vector<uint8_t> nodeLatchInitialStates_;
+	std::vector<int32_t> componentIndexByNode_;
+	std::vector<uint8_t> componentStates_;
+	std::vector<int32_t> componentInputCounts_;
+	std::vector<int32_t> componentInputHighCounts_;
+	std::vector<int32_t> nodeInputHighCounts_;
+	std::vector<int32_t> outgoingOffsets_;
+	std::vector<int32_t> outgoingTargets_;
+	std::vector<int32_t> incomingOffsets_;
+	std::vector<int32_t> incomingSources_;
+	std::vector<int32_t> componentNodes_;
+	std::vector<int32_t> connectorNodes_;
+	std::vector<int32_t> snapshotComponentNodes_;
+	std::vector<int32_t> snapshotConnectorNodes_;
+	std::vector<int32_t> clockNodes_;
+	std::vector<uint64_t> nextGateWords_;
+	std::vector<uint64_t> nextGateSummaryWords_;
+	std::vector<uint64_t> currentGateWords_;
+	std::vector<uint64_t> currentGateSummaryWords_;
+	std::vector<int32_t> pendingStateNodes_;
+	std::vector<uint8_t> pendingPreviousStates_;
+	std::vector<uint8_t> pendingNextStates_;
+	std::vector<int32_t> connectorQueueNodes_;
+	std::vector<int8_t> connectorQueueDeltas_;
+	std::vector<std::vector<int32_t>> nodeVisibleCells_;
+	std::vector<int32_t> cellPrimaryNode_;
+	std::vector<int32_t> cellSecondaryNode_;
+	std::vector<uint8_t> visibleStates_;
+	std::vector<uint8_t> reportedVisibleStates_;
+	std::vector<uint32_t> changedCellStamps_;
+	std::vector<int32_t> changedCells_;
+	uint32_t changeStamp_ = 1;
 };
 
 } // namespace ocb

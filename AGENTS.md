@@ -4,7 +4,6 @@
 
 - Use PascalCase for project-owned filenames, resource names, type names, script members, scene nodes, shader uniforms, and static constants. Use lowerCamel for functions, signals, parameters, local variables, IDs, JSON keys, config keys, and dynamic method names. Preserve Godot and tool-required names, including built-in snake_case properties and skill naming conventions.
 - Keep the runtime editor, rendering, dialogs, ZIP handling, and project format in GDScript. Native code is limited to the `OcbSimulation` `RefCounted` GDExtension backend.
-- Do not add support for, refer to, distribute, or import `.vcb` data or openVCB materials. The only project format is the versioned `.ocb` container.
 - `thirdparty/godotcpp` is the only external source dependency and must remain a Git submodule. Do not vendor generated Godot bindings.
 
 ## Build And Validation

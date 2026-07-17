@@ -104,6 +104,56 @@ void testBatchAdvanceMatchesSingleTicks() {
 	expect(batchCore.getStates() == statesBeforeNoOp, "non-positive batch does not advance state");
 }
 
+void testSilentAdvanceDrainsOnlyFinalChanges() {
+	CompileInput input = makeInput(5, 1);
+	setKind(input, 0, 0, ToolKind::Clock);
+	setKind(input, 1, 0, ToolKind::Read);
+	setKind(input, 2, 0, ToolKind::Trace);
+	setKind(input, 3, 0, ToolKind::Write);
+	setKind(input, 4, 0, ToolKind::Buffer);
+	SimulationCore exactCore;
+	SimulationCore silentCore;
+	CompileError error;
+	expect(exactCore.compile(input, error), "exact silent-delta comparison circuit compiles");
+	expect(silentCore.compile(input, error), "silent-delta comparison circuit compiles");
+	const std::vector<int32_t> expectedChanges = exactCore.advanceTicks(8);
+	expect(silentCore.advanceTicksSilent(8).empty(), "silent advance never returns a delta");
+	expect(silentCore.drainStateChanges() == expectedChanges, "drain returns the same final delta as exact batch advance");
+	expect(silentCore.getStates() == exactCore.getStates(), "silent advance reaches the exact batch state");
+	expect(silentCore.drainStateChanges().empty(), "second drain is empty after final delta is consumed");
+
+	CompileInput clockInput = makeInput(1, 1);
+	setKind(clockInput, 0, 0, ToolKind::Clock);
+	SimulationCore clockCore;
+	expect(clockCore.compile(clockInput, error), "standalone Clock compiles for final-delta filtering");
+	clockCore.advanceTicksSilent(2);
+	expect(clockCore.drainStateChanges().empty(), "silent collection omits a cell that returns to its reported state");
+}
+
+void testGraphOrderingPreservesExternalStatesAndDeltas() {
+	CompileInput input = makeInput(8, 1);
+	setKind(input, 0, 0, ToolKind::Clock);
+	setKind(input, 1, 0, ToolKind::Read);
+	setKind(input, 2, 0, ToolKind::Trace);
+	setKind(input, 3, 0, ToolKind::Write);
+	setKind(input, 4, 0, ToolKind::Read);
+	setKind(input, 5, 0, ToolKind::Trace);
+	setKind(input, 6, 0, ToolKind::Write);
+	setKind(input, 7, 0, ToolKind::Buffer);
+	SimulationCore baselineCore(false);
+	SimulationCore orderedCore;
+	CompileError error;
+	expect(baselineCore.compile(input, error), "unreordered reference circuit compiles");
+	expect(orderedCore.compile(input, error), "reordered reference circuit compiles");
+	expect(orderedCore.getStates() == baselineCore.getStates(), "reordered compile preserves initial visible states");
+	for (int32_t tick = 0; tick < 12; ++tick) {
+		const std::vector<int32_t> baselineChanges = baselineCore.advanceTick();
+		const std::vector<int32_t> orderedChanges = orderedCore.advanceTick();
+		expect(orderedChanges == baselineChanges, "reordered execution preserves sorted external delta order");
+		expect(orderedCore.getStates() == baselineCore.getStates(), "reordered execution preserves each tick's visible state");
+	}
+}
+
 void testReadWriteZeroDelayPeerPorts() {
 	CompileInput input = makeInput(8, 1);
 	setKind(input, 0, 0, ToolKind::Clock);
@@ -531,6 +581,7 @@ void testSnapshotRestore() {
 	expectState(core, input, 2, 1, 1, "snapshot captures the direct Read-to-Write signal");
 	expectState(core, input, 3, 1, 0, "logical target has not advanced at the snapshot tick");
 	const std::vector<uint8_t> snapshot = core.captureState();
+	expect(snapshot.size() == 44, "snapshot keeps the v1 header and original component/network payload layout");
 	core.advanceTick();
 	expect(core.getStates() != expectedStates, "second tick changes the direct connector chain");
 	std::string restoreError;
@@ -547,6 +598,8 @@ void testSnapshotRestore() {
 int main() {
 	testReadWritePipeline();
 	testBatchAdvanceMatchesSingleTicks();
+	testSilentAdvanceDrainsOnlyFinalChanges();
+	testGraphOrderingPreservesExternalStatesAndDeltas();
 	testReadWriteZeroDelayPeerPorts();
 	testWriteAcceptsReadInput();
 	testAlternatingReadWriteChain();

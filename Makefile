@@ -21,7 +21,7 @@ godotExecutable := $(downloadedGodotExecutable)
 godotDownloadPrerequisite := downloadGodot
 endif
 
-.PHONY: help init build frontend backend native coreTest nativeTest frontendTest test run clean \
+.PHONY: help init build frontend backend native coreTest coreBenchmark nativeTest frontendTest test run clean \
 	checkPlatform checkBackendTools checkGodotExecutable downloadGodot
 
 help:
@@ -29,6 +29,7 @@ help:
 	@echo "make backend targetPlatform=<linux|windows>  Build the OcbSimulation GDExtension"
 	@echo "make build targetPlatform=<linux|windows>    Build the frontend target and GDExtension"
 	@echo "make coreTest targetPlatform=<linux|windows> Run native SimulationCore tests"
+	@echo "make coreBenchmark targetPlatform=<linux|windows> Run the Release SimulationCore throughput benchmark"
 	@echo "make nativeTest targetPlatform=<linux|windows> Run headless GDExtension smoke tests"
 	@echo "make frontendTest targetPlatform=<linux|windows> Run real-renderer frontend tests"
 	@echo "make test targetPlatform=<linux|windows> Run core, native, and frontend tests"
@@ -83,7 +84,7 @@ backend: checkGodotExecutable checkBackendTools
 		-DGODOTCPPDIR="$(godotCppRoot)" \
 		-DOCBOUTPUTDIR="$(targetBuildRoot)" \
 		-DGODOTCPP_CUSTOM_API_FILE="$(targetBuildRoot)/extensionApi.json" \
-		-DGODOTCPP_BUILD_PROFILE="$(targetBuildRoot)/godotcppProfile.json"
+		-DGODOTCPP_BUILD_PROFILE="$(targetBuildRoot)/godotcppProfile.json" $(if $(buildType),-DCMAKE_BUILD_TYPE="$(buildType)")
 	@cmake --build "$(backendBuildRoot)"
 
 build: frontend backend
@@ -92,6 +93,11 @@ native: backend
 
 coreTest: backend
 	@ctest --test-dir "$(backendBuildRoot)" --output-on-failure
+
+coreBenchmark: buildType := Release
+coreBenchmark: backend
+	@cmake --build "$(backendBuildRoot)" --target ocbsimulation_core_benchmark
+	@cd "$(backendBuildRoot)" && ./ocbsimulation_core_benchmark$(if $(filter windows,$(targetPlatform)),.exe)
 
 nativeTest: backend
 	@"$(godotExecutable)" --headless --path "$(projectRoot)" --script "$(projectRoot)/scripts/tests/NativeSimulationTest.gd"

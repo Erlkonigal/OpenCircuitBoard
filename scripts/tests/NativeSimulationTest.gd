@@ -49,6 +49,21 @@ func runNativeSimulationTest() -> void:
 		push_error("OcbSimulationNoOpBatchAdvanceInvalid")
 		quit(1)
 		return
+	var silentBatchChanges: Variant = simulation.call("advanceTicksSilent", 3)
+	if not (silentBatchChanges is PackedInt32Array) or not (silentBatchChanges as PackedInt32Array).is_empty():
+		push_error("OcbSimulationSilentBatchAdvanceInvalid")
+		quit(1)
+		return
+	var drainedChanges: Variant = simulation.call("drainStateChanges")
+	if not (drainedChanges is PackedInt32Array):
+		push_error("OcbSimulationDrainStateChangesInvalid")
+		quit(1)
+		return
+	var drainedChangesAgain: Variant = simulation.call("drainStateChanges")
+	if not (drainedChangesAgain is PackedInt32Array) or not (drainedChangesAgain as PackedInt32Array).is_empty():
+		push_error("OcbSimulationDrainStateChangesNotCleared")
+		quit(1)
+		return
 	var restoreResult: Dictionary = simulation.call("restoreState", snapshot)
 	if not bool(restoreResult.get("ok", false)):
 		push_error("OcbSimulationRestoreFailed:%s" % String(restoreResult.get("errorReason", "Unknown")))

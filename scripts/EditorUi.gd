@@ -992,7 +992,7 @@ func probeLoopFrequencyMaximum() -> Dictionary:
 	var startedUsec := Time.get_ticks_usec()
 	var advancedTickCount := 0
 	while Time.get_ticks_usec() - startedUsec < SimulationFrequencyProbeDurationUsec:
-		var advanceResult := SimulationBridgeInstance.advanceTicks(SimulationFrequencyProbeBatchTickCount)
+		var advanceResult := SimulationBridgeInstance.advanceTicksSilent(SimulationFrequencyProbeBatchTickCount)
 		if not bool(advanceResult.get("ok", false)):
 			return advanceResult
 		advancedTickCount += SimulationFrequencyProbeBatchTickCount
@@ -1081,18 +1081,18 @@ func advanceLoopingSimulation(requestedTickCount: int, delta: float) -> Dictiona
 	var advancedTickCount := 0
 	while advancedTickCount < requestedTickCount and Time.get_ticks_usec() < frameDeadlineUsec:
 		var batchTickCount := mini(SimulationBatchTickCount, requestedTickCount - advancedTickCount)
-		var advanceResult := SimulationBridgeInstance.advanceTicks(batchTickCount)
+		var advanceResult := SimulationBridgeInstance.advanceTicksSilent(batchTickCount)
 		if not bool(advanceResult.get("ok", false)):
 			failActiveSimulation(advanceResult)
 			return {"ok": false}
 		advancedTickCount += batchTickCount
 	if advancedTickCount <= 0:
 		return {"ok": true, "advancedTickCount": 0, "ticksPerSecond": 0.0}
-	var statesResult := SimulationBridgeInstance.getCurrentUpdates()
-	if not bool(statesResult.get("ok", false)):
-		failActiveSimulation(statesResult)
+	var drainResult := SimulationBridgeInstance.drainStateChanges()
+	if not bool(drainResult.get("ok", false)):
+		failActiveSimulation(drainResult)
 		return {"ok": false}
-	applySimulationUpdates(statesResult.get("updates", []) as Array)
+	applySimulationUpdates(drainResult.get("updates", []) as Array)
 	var elapsedUsec := maxi(1, Time.get_ticks_usec() - startedUsec)
 	return {
 		"ok": true,

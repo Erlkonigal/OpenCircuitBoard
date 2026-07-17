@@ -76,6 +76,12 @@ func run(context) -> void:
 	main.call("showPreviousSimulationTick")
 	assert(int(main.get("SimulationTick")) == 0)
 	assert(not bool(board.call("getRuntimeTileState", clockCoordinates)))
+	main.call("toggleLoopStepMode")
+	assert(bool(main.get("IsLooping")))
+	var loopingAdvanceResult := main.call("advanceLoopingSimulation", 1, 1.0) as Dictionary
+	assert(bool(loopingAdvanceResult.get("ok", false)))
+	assert(int(loopingAdvanceResult.get("advancedTickCount", 0)) == 1)
+	assert(bool(board.call("getRuntimeTileState", clockCoordinates)))
 	main.call("leaveSimulation")
 	assert(not bool(main.get("IsSimulating")))
 	assert(bool(board.get("EditorInputEnabled")))
