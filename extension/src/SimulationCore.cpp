@@ -13,7 +13,7 @@ namespace ocb {
 namespace {
 
 constexpr uint32_t SnapshotMagic = 0x4f434253;
-constexpr uint32_t SnapshotVersion = 1;
+constexpr uint32_t SnapshotVersion = 2;
 constexpr uint64_t FnvOffsetBasis = 1469598103934665603ULL;
 constexpr uint64_t FnvPrime = 1099511628211ULL;
 
@@ -1748,7 +1748,7 @@ std::vector<uint8_t> SimulationCore::captureState() const {
 		return {};
 	}
 	std::vector<uint8_t> snapshot;
-	snapshot.reserve(32 + snapshotComponentNodes_.size() * 5 + snapshotConnectorNodes_.size());
+	snapshot.reserve(32 + snapshotComponentNodes_.size() * 6 + snapshotConnectorNodes_.size());
 	appendU32(snapshot, SnapshotMagic);
 	appendU32(snapshot, SnapshotVersion);
 	appendU64(snapshot, topologySignature_);
@@ -1763,6 +1763,10 @@ std::vector<uint8_t> SimulationCore::captureState() const {
 	}
 	for (int32_t node : snapshotComponentNodes_) {
 		appendU32(snapshot, static_cast<uint32_t>(clockPhases_[node]));
+	}
+	for (int32_t node : snapshotComponentNodes_) {
+		const uint8_t queuedState = isComponentGateQueued(node) ? static_cast<uint8_t>(nextGateStates_[node] + 1U) : 0;
+		snapshot.push_back(queuedState);
 	}
 	return snapshot;
 }
@@ -1793,7 +1797,7 @@ bool SimulationCore::restoreState(const std::vector<uint8_t> &snapshot, std::str
 		errorReason = "snapshot_topology_mismatch";
 		return false;
 	}
-	const size_t expectedTail = static_cast<size_t>(componentCount) + static_cast<size_t>(networkCount) + static_cast<size_t>(componentCount) * 4U;
+	const size_t expectedTail = static_cast<size_t>(componentCount) * 2U + static_cast<size_t>(networkCount) + static_cast<size_t>(componentCount) * 4U;
 	if (offset > snapshot.size() || snapshot.size() - offset != expectedTail) {
 		errorReason = "invalid_snapshot";
 		return false;
@@ -1832,6 +1836,15 @@ bool SimulationCore::restoreState(const std::vector<uint8_t> &snapshot, std::str
 		}
 		clockPhases[node] = static_cast<int32_t>(phase);
 	}
+	std::vector<uint8_t> queuedGateStates(componentCount, 0);
+	for (uint32_t component = 0; component < componentCount; ++component) {
+		const uint8_t queuedState = snapshot[offset++];
+		if (queuedState > 2) {
+			errorReason = "invalid_snapshot_state";
+			return false;
+		}
+		queuedGateStates[component] = queuedState;
+	}
 	visibleStates_.assign(visibleStates_.size(), 0);
 	changedCells_.clear();
 	std::fill(changedCellStamps_.begin(), changedCellStamps_.end(), 0);
@@ -1847,6 +1860,15 @@ bool SimulationCore::restoreState(const std::vector<uint8_t> &snapshot, std::str
 		componentStatesInRuntimeOrder[static_cast<size_t>(runtimePosition - componentNodes_.begin())] = componentStates[component];
 	}
 	rebuildDerivedState(componentStatesInRuntimeOrder);
+	std::fill(nextGateWords_.begin(), nextGateWords_.end(), 0);
+	std::fill(nextGateSummaryWords_.begin(), nextGateSummaryWords_.end(), 0);
+	std::fill(nextGateStates_.begin(), nextGateStates_.end(), 0);
+	for (int32_t component = 0; component < static_cast<int32_t>(snapshotComponentNodes_.size()); ++component) {
+		const uint8_t queuedState = queuedGateStates[component];
+		if (queuedState != 0) {
+			enqueueComponentGate(snapshotComponentNodes_[component], queuedState - 1U);
+		}
+	}
 	markAllVisibleNodesDirty();
 	materializeVisibleStates();
 	clockPhases_ = std::move(clockPhases);

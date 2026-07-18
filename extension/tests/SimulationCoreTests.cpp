@@ -176,6 +176,28 @@ void testInputDrivenLatchPreservesNormalFlushDelay() {
 	expectState(core, input, 4, 0, 0, "input-driven Latch commits the later low input");
 }
 
+void testSnapshotRestoresPendingLatchTransition() {
+	CompileInput input = makeInput(5, 1);
+	setKind(input, 0, 0, ToolKind::Clock);
+	setKind(input, 1, 0, ToolKind::Read);
+	setKind(input, 2, 0, ToolKind::Trace);
+	setKind(input, 3, 0, ToolKind::Write);
+	setKind(input, 4, 0, ToolKind::Latch);
+	SimulationCore core;
+	CompileError error;
+	expect(core.compile(input, error), "snapshot Latch pipeline compiles");
+	core.advanceTick();
+	core.advanceTick();
+	expectState(core, input, 4, 0, 1, "Latch is high before its queued low transition");
+	const std::vector<uint8_t> snapshot = core.captureState();
+	core.advanceTick();
+	expectState(core, input, 4, 0, 0, "Latch commits the queued low transition");
+	std::string restoreError;
+	expect(core.restoreState(snapshot, restoreError), "Latch snapshot restores");
+	core.advanceTick();
+	expectState(core, input, 4, 0, 0, "restored Latch commits its queued low transition");
+}
+
 void testDirectComponentTargetsPreserveTickBarrier() {
 	CompileInput input = makeInput(9, 1);
 	setKind(input, 0, 0, ToolKind::Clock);
@@ -1225,7 +1247,7 @@ void testSnapshotRestore() {
 	expectState(core, input, 2, 1, 1, "snapshot captures the direct Read-to-Write signal");
 	expectState(core, input, 3, 1, 0, "logical target has not advanced at the snapshot tick");
 	const std::vector<uint8_t> snapshot = core.captureState();
-	expect(snapshot.size() == 44, "snapshot keeps the v1 header and original component/network payload layout");
+	expect(snapshot.size() == 46, "snapshot keeps the v2 header and pending gate payload layout");
 	core.advanceTick();
 	expect(core.getStates() != expectedStates, "second tick changes the direct connector chain");
 	std::string restoreError;
@@ -1247,6 +1269,7 @@ int main() {
 	testConnectorQueueEventEncoding();
 	testGateAndClockCommitBeforeDrain();
 	testInputDrivenLatchPreservesNormalFlushDelay();
+	testSnapshotRestoresPendingLatchTransition();
 	testDirectComponentTargetsPreserveTickBarrier();
 	testEncodedDirectComponentTargetPreservesDeferredState();
 	testSharedConnectorMultipleSourceDelta();

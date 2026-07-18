@@ -70,6 +70,37 @@ func run(context) -> void:
 	assert(board.call("removeTile", readCoordinates))
 	assert(board.call("removeTile", traceCoordinates))
 
+	await context.resetMain()
+	await context.waitFrames(1)
+	main = context.MainSceneRoot as Control
+	board = context.CircuitBoard as Node2D
+	var clockCoordinates := Vector2i.ZERO
+	readCoordinates = Vector2i(1, 0)
+	traceCoordinates = Vector2i(2, 0)
+	var writeCoordinates := Vector2i(3, 0)
+	latchCoordinates = Vector2i(4, 0)
+	assert(board.call("placeTile", clockCoordinates, "clock"))
+	assert(board.call("placeTile", readCoordinates, "read"))
+	assert(board.call("placeTile", traceCoordinates, "trace"))
+	assert(board.call("placeTile", writeCoordinates, "write"))
+	assert(board.call("placeTile", latchCoordinates, "latch"))
+	assert(board.call("setTileState", latchCoordinates, false))
+	main.call("enterSimulation")
+	main.call("toggleLoopStepMode")
+	main.call("showNextSimulationTick")
+	assert(not bool(board.call("getRuntimeTileState", latchCoordinates)))
+	main.call("showNextSimulationTick")
+	assert(bool(board.call("getRuntimeTileState", latchCoordinates)))
+	main.call("showNextSimulationTick")
+	assert(not bool(board.call("getRuntimeTileState", latchCoordinates)))
+	assertLatchIcon(board, latchCoordinates, false)
+	main.call("leaveSimulation")
+	assert(board.call("removeTile", clockCoordinates))
+	assert(board.call("removeTile", readCoordinates))
+	assert(board.call("removeTile", traceCoordinates))
+	assert(board.call("removeTile", writeCoordinates))
+	assert(board.call("removeTile", latchCoordinates))
+
 func assertLatchIcon(board: Node2D, coordinates: Vector2i, isOn: bool) -> void:
 	var occupancy: Dictionary = board.get("Occupancy")
 	var latchTile := occupancy.get(coordinates) as Node2D
