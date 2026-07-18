@@ -934,8 +934,8 @@ func toggleSimulationLatchAt(coordinates: Vector2i) -> bool:
 	if not bool(toggleResult.get("ok", false)):
 		failActiveSimulation(toggleResult)
 		return false
-	applySimulationUpdates(toggleResult.get("updates", []) as Array)
 	if IsLooping:
+		applySimulationUpdates(toggleResult.get("updates", []) as Array)
 		refreshSimulationControls()
 		return true
 	var snapshotResult := SimulationBridgeInstance.captureState()
@@ -948,6 +948,11 @@ func toggleSimulationLatchAt(coordinates: Vector2i) -> bool:
 		failActiveSimulation({"ok": false, "errorReason": "SimulationTimelineInvalid"})
 		return false
 	SimulationTimeline[SimulationTick] = snapshotResult.get("snapshot", PackedByteArray()) as PackedByteArray
+	var statesResult := SimulationBridgeInstance.getCurrentUpdates()
+	if not bool(statesResult.get("ok", false)):
+		failActiveSimulation(statesResult)
+		return false
+	applySimulationUpdates(statesResult.get("updates", []) as Array)
 	SimulationAccumulator = 0.0
 	refreshSimulationControls()
 	return true
