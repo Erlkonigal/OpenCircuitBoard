@@ -1928,7 +1928,9 @@ std::vector<int32_t> SimulationCore::drainStateChanges() {
 		return {};
 	}
 	std::vector<int32_t> changes(changedCells_.size() * 2U);
-	changes.resize(drainStateChangesTo(changes.data(), changes.size()));
+	const size_t changeCount = drainStateChangesTo(changes.data(), changes.size());
+	assert(changeCount <= changes.size());
+	changes.erase(changes.begin() + static_cast<std::ptrdiff_t>(changeCount), changes.end());
 	return changes;
 }
 
