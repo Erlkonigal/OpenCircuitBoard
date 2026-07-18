@@ -180,6 +180,7 @@ private:
 	void finishPropagationBatch(bool hasPrequeuedGates);
 	void flushComponentInputDeltas();
 	void flushComponentInputDeltasWithoutPrequeuedGates();
+	void flushComponentInputDeltasWithoutPrequeuedOrForceDeferredGates();
 	void initializeConnectorWorkWordHierarchy(size_t workWordCount);
 	bool hasActiveConnectorWorkWords() const {
 		return !connectorActiveWordLevelOffsets_.empty() &&
@@ -356,6 +357,7 @@ private:
 	std::vector<int32_t> nodeClockHoldTicks_;
 	std::vector<uint8_t> nodeLatchInitialStates_;
 	std::vector<uint8_t> nodeEvaluationPolicies_;
+	bool hasForceDeferredComponentInputs_ = false;
 	std::vector<int32_t> nodeInputCounts_;
 	std::vector<int32_t> nodeInputHighCounts_;
 	std::vector<int32_t> outgoingOffsets_;

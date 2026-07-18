@@ -157,6 +157,25 @@ void testGateAndClockCommitBeforeDrain() {
 			"subsequent simultaneous transitions preserve the tick barrier");
 }
 
+void testInputDrivenLatchPreservesNormalFlushDelay() {
+	CompileInput input = makeInput(5, 1);
+	setKind(input, 0, 0, ToolKind::Clock);
+	setKind(input, 1, 0, ToolKind::Read);
+	setKind(input, 2, 0, ToolKind::Trace);
+	setKind(input, 3, 0, ToolKind::Write);
+	setKind(input, 4, 0, ToolKind::Latch);
+	SimulationCore core;
+	CompileError error;
+	expect(core.compile(input, error), "input-driven Latch pipeline compiles");
+	expectState(core, input, 4, 0, 0, "input-driven Latch starts low");
+	core.advanceTick();
+	expectState(core, input, 4, 0, 0, "input-driven Latch remains deferred after the Clock rises");
+	core.advanceTick();
+	expectState(core, input, 4, 0, 1, "input-driven Latch commits the prior high input");
+	core.advanceTick();
+	expectState(core, input, 4, 0, 0, "input-driven Latch commits the later low input");
+}
+
 void testDirectComponentTargetsPreserveTickBarrier() {
 	CompileInput input = makeInput(9, 1);
 	setKind(input, 0, 0, ToolKind::Clock);
@@ -1227,6 +1246,7 @@ int main() {
 	testBatchAdvanceMatchesSingleTicks();
 	testConnectorQueueEventEncoding();
 	testGateAndClockCommitBeforeDrain();
+	testInputDrivenLatchPreservesNormalFlushDelay();
 	testDirectComponentTargetsPreserveTickBarrier();
 	testEncodedDirectComponentTargetPreservesDeferredState();
 	testSharedConnectorMultipleSourceDelta();

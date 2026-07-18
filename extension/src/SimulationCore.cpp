@@ -354,6 +354,7 @@ void SimulationCore::clear() {
 	nodeClockHoldTicks_.clear();
 	nodeLatchInitialStates_.clear();
 	nodeEvaluationPolicies_.clear();
+	hasForceDeferredComponentInputs_ = false;
 	nodeInputCounts_.clear();
 	nodeInputHighCounts_.clear();
 	outgoingOffsets_.clear();
@@ -1155,6 +1156,7 @@ void SimulationCore::buildExecutionGraph() {
 		nodeInputCounts_[node] = incomingOffsets_[node + 1] - incomingOffsets_[node];
 	}
 	nodeEvaluationPolicies_.assign(originalComponentCount, static_cast<uint8_t>(EvaluationMode::State));
+	hasForceDeferredComponentInputs_ = false;
 	for (int32_t node : componentNodes_) {
 		const int32_t inputCount = nodeInputCounts_[node];
 		EvaluationMode mode = EvaluationMode::State;
@@ -1189,6 +1191,7 @@ void SimulationCore::buildExecutionGraph() {
 		const bool forceDeferredGate = nodeKinds_[node] == ToolKind::Latch || mode == EvaluationMode::State;
 		nodeEvaluationPolicies_[node] = static_cast<uint8_t>(mode) |
 				(forceDeferredGate ? ForceDeferredGatePolicyBit : uint8_t{0});
+		hasForceDeferredComponentInputs_ |= forceDeferredGate && inputCount != 0;
 	}
 	const size_t gateWordCount = (componentNodes_.size() + 63U) / 64U;
 	const size_t gateSummaryWordCount = (gateWordCount + 63U) / 64U;
@@ -1457,6 +1460,23 @@ void SimulationCore::flushComponentInputDeltasWithoutPrequeuedGates() {
 	}
 }
 
+void SimulationCore::flushComponentInputDeltasWithoutPrequeuedOrForceDeferredGates() {
+	for (int32_t node : pendingComponentInputs_) {
+		const int32_t inputDelta = pendingComponentInputDeltas_[node];
+		if (inputDelta == 0) {
+			continue;
+		}
+		const uint8_t evaluationPolicy = nodeEvaluationPolicies_[node];
+		assert((evaluationPolicy & ForceDeferredGatePolicyBit) == 0);
+		const int32_t nextHighInputCount = nodeInputHighCounts_[node] + inputDelta;
+		nodeInputHighCounts_[node] = nextHighInputCount;
+		const uint8_t nextState = evaluateComponent(node, nextHighInputCount, evaluationPolicy);
+		if (nextState != nodeStates_[node]) {
+			enqueueNewComponentGate(node, nextState);
+		}
+	}
+}
+
 void SimulationCore::finishPropagationBatch(bool hasPrequeuedGates) {
 	while (hasActiveConnectorWorkWords()) {
 		const size_t workWordIndex = firstActiveConnectorWorkWord();
@@ -1489,7 +1509,11 @@ void SimulationCore::finishPropagationBatch(bool hasPrequeuedGates) {
 		flushComponentInputDeltas();
 		return;
 	}
-	flushComponentInputDeltasWithoutPrequeuedGates();
+	if (hasForceDeferredComponentInputs_) {
+		flushComponentInputDeltasWithoutPrequeuedGates();
+		return;
+	}
+	flushComponentInputDeltasWithoutPrequeuedOrForceDeferredGates();
 }
 
 void SimulationCore::drainConnectorQueue() {
