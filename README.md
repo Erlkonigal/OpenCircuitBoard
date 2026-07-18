@@ -12,17 +12,23 @@ Initialize the third-party submodule, then select the target platform:
 
 ```bash
 make init
-make build TARGET_PLATFORM=linux
+make build-release TARGET_PLATFORM=linux
 make core-benchmark TARGET_PLATFORM=linux
+```
+
+Build the editor-facing debug variant when running the project from Godot:
+
+```bash
+make build-debug TARGET_PLATFORM=linux
 ```
 
 Run Windows targets from an MSYS2 UCRT64 Bash shell:
 
 ```bash
-make build TARGET_PLATFORM=windows
+make build-release TARGET_PLATFORM=windows
 make core-benchmark TARGET_PLATFORM=windows
 ```
 
-`make build TARGET_PLATFORM=<linux|windows>` builds the GDExtension. `make clean` removes generated build output.
+`make build TARGET_PLATFORM=<linux|windows> BUILD_TYPE=<Debug|Release>` builds one GDExtension variant. The `build-debug` and `build-release` shortcuts write separate artifacts that match the debug and release entries in `OcbSimulation.gdextension`. `make clean` removes generated build output.
 
 `core-benchmark` defaults to a 1024x1024 board with 256 continuously toggling pipelines and reports median TPS against the 100K target. Use `CORE_BENCHMARK_ARGS="--quick --compare-ordering"` for the legacy-sized graph-ordering comparison.

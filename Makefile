@@ -7,7 +7,18 @@ GODOT_CPP_ROOT := $(PROJECT_ROOT)/thirdparty/godotcpp
 TARGET_PLATFORM ?= windows
 BUILD_TYPE ?= Release
 CORE_BENCHMARK_ARGS ?=
-TARGET_BUILD_ROOT := $(BUILD_ROOT)/$(TARGET_PLATFORM)
+
+ifeq ($(BUILD_TYPE),Debug)
+BUILD_VARIANT := debug
+GODOTCPP_TARGET_FOR_BUILD := template_debug
+else ifeq ($(BUILD_TYPE),Release)
+BUILD_VARIANT := release
+GODOTCPP_TARGET_FOR_BUILD := template_release
+else
+$(error Unsupported BUILD_TYPE: $(BUILD_TYPE). Use Debug or Release.)
+endif
+
+TARGET_BUILD_ROOT := $(BUILD_ROOT)/$(TARGET_PLATFORM)/$(BUILD_VARIANT)
 BACKEND_BUILD_ROOT := $(TARGET_BUILD_ROOT)/extension
 BACKEND_LIBRARY := $(TARGET_BUILD_ROOT)/ocbsimulation$(if $(filter windows,$(TARGET_PLATFORM)),.dll,.so)
 EXTENSION_API := $(TARGET_BUILD_ROOT)/extension-api.json
@@ -15,6 +26,7 @@ GODOT_CPP_PROFILE := $(TARGET_BUILD_ROOT)/godot-cpp-profile.json
 BACKEND_BUILD_CONFIGURATION := $(BACKEND_BUILD_ROOT)/build-configuration
 BACKEND_CONFIGURE_STAMP := $(BACKEND_BUILD_ROOT)/.configured
 GODOT_CPP_BUILD_STAMP := $(BACKEND_BUILD_ROOT)/.godot-cpp-built
+RELEASE_BACKEND_BUILD_ROOT := $(BUILD_ROOT)/$(TARGET_PLATFORM)/release/extension
 
 # Godot toolchain
 GODOT_VERSION := 4.7
@@ -30,7 +42,8 @@ GODOT_DOWNLOAD_PREREQUISITE := download-godot
 GODOT_EXECUTABLE_INPUT := $(DOWNLOADED_GODOT_EXECUTABLE)
 endif
 
-.PHONY: help init build core-test core-benchmark native-test frontend-test test run clean \
+
+.PHONY: help init build build-debug build-release core-test core-benchmark native-test frontend-test test run clean \
 	check-platform check-backend-tools check-godot-executable download-godot force
 
 EXTENSION_BUILD_INPUTS := $(shell find "$(PROJECT_ROOT)/extension" -type f -print)
@@ -55,7 +68,9 @@ BACKEND_CONFIGURE_INPUTS := \
 	$(GODOT_CPP_INPUT_DIRECTORIES)
 
 help:
-	@echo "make build TARGET_PLATFORM=<linux|windows> Build the OcbSimulation GDExtension"
+	@echo "make build TARGET_PLATFORM=<linux|windows> [BUILD_TYPE=<Debug|Release>] Build one OcbSimulation variant"
+	@echo "make build-debug TARGET_PLATFORM=<linux|windows> Build the editor/debug GDExtension variant"
+	@echo "make build-release TARGET_PLATFORM=<linux|windows> Build the optimized export GDExtension variant"
 	@echo "make core-test TARGET_PLATFORM=<linux|windows> Run native SimulationCore tests"
 	@echo "make core-benchmark TARGET_PLATFORM=<linux|windows> Run the 1024x1024 Release mixed-gate SimulationCore throughput benchmark"
 	@echo "make native-test TARGET_PLATFORM=<linux|windows> Run headless GDExtension smoke tests"
@@ -117,16 +132,17 @@ $(GODOT_CPP_PROFILE): $(PROJECT_ROOT)/BuildProfile.json | $(TARGET_BUILD_ROOT)
 force:
 
 $(BACKEND_BUILD_CONFIGURATION): force | $(BACKEND_BUILD_ROOT)
-	@printf '%s\n' "$(BUILD_TYPE)" > "$@.tmp"; \
+	@printf '%s\n' "$(BUILD_TYPE)|$(GODOTCPP_TARGET_FOR_BUILD)" > "$@.tmp"; \
 	if ! cmp -s "$@.tmp" "$@"; then mv "$@.tmp" "$@"; else rm "$@.tmp"; fi
 
-$(BACKEND_CONFIGURE_STAMP): $(BACKEND_CONFIGURE_INPUTS) | $(BACKEND_BUILD_ROOT) check-backend-tools
+$(BACKEND_CONFIGURE_STAMP): $(BACKEND_CONFIGURE_INPUTS) | $(BACKEND_BUILD_ROOT) check-platform check-backend-tools
 	@cmake -S "$(PROJECT_ROOT)/extension" -B "$(BACKEND_BUILD_ROOT)" \
 		-DGODOTCPPDIR="$(GODOT_CPP_ROOT)" \
 		-DOCBOUTPUTDIR="$(TARGET_BUILD_ROOT)" \
 		-DGODOTCPP_CUSTOM_API_FILE="$(EXTENSION_API)" \
 		-DGODOTCPP_BUILD_PROFILE="$(GODOT_CPP_PROFILE)" \
-		-DCMAKE_BUILD_TYPE="$(BUILD_TYPE)"
+		-DCMAKE_BUILD_TYPE="$(BUILD_TYPE)" \
+		-DGODOTCPP_TARGET="$(GODOTCPP_TARGET_FOR_BUILD)"
 	@touch "$@"
 
 $(GODOT_CPP_BUILD_STAMP): $(BACKEND_CONFIGURE_STAMP) $(GODOT_CPP_SOURCE_INPUTS) | check-backend-tools
@@ -139,18 +155,23 @@ $(BACKEND_LIBRARY): $(BACKEND_CONFIGURE_STAMP) $(GODOT_CPP_BUILD_STAMP) $(EXTENS
 
 build: $(BACKEND_LIBRARY)
 
-core-test: build
-	@ctest --test-dir "$(BACKEND_BUILD_ROOT)" --output-on-failure
+build-debug:
+	@$(MAKE) --no-print-directory build TARGET_PLATFORM="$(TARGET_PLATFORM)" BUILD_TYPE=Debug
 
-core-benchmark: BUILD_TYPE := Release
-core-benchmark: build
-	@cmake --build "$(BACKEND_BUILD_ROOT)" --target ocbsimulation_core_benchmark
-	@cd "$(BACKEND_BUILD_ROOT)" && ./ocbsimulation_core_benchmark$(if $(filter windows,$(TARGET_PLATFORM)),.exe) $(CORE_BENCHMARK_ARGS)
+build-release:
+	@$(MAKE) --no-print-directory build TARGET_PLATFORM="$(TARGET_PLATFORM)" BUILD_TYPE=Release
 
-native-test: build
+core-test: build-release
+	@ctest --test-dir "$(RELEASE_BACKEND_BUILD_ROOT)" --output-on-failure
+
+core-benchmark: build-release
+	@cmake --build "$(RELEASE_BACKEND_BUILD_ROOT)" --target ocbsimulation_core_benchmark
+	@cd "$(RELEASE_BACKEND_BUILD_ROOT)" && ./ocbsimulation_core_benchmark$(if $(filter windows,$(TARGET_PLATFORM)),.exe) $(CORE_BENCHMARK_ARGS)
+
+native-test: build-debug
 	@"$(GODOT_EXECUTABLE)" --headless --path "$(PROJECT_ROOT)" --script "$(PROJECT_ROOT)/scripts/tests/NativeSimulationTest.gd"
 
-frontend-test: build
+frontend-test: build-debug
 	@"$(GODOT_EXECUTABLE)" --rendering-method gl_compatibility --path "$(PROJECT_ROOT)" --script "$(PROJECT_ROOT)/scripts/tests/FrontendTest.gd"
 
 test: core-test native-test frontend-test

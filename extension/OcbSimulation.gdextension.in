@@ -5,7 +5,7 @@ compatibility_minimum = "4.7"
 
 [libraries]
 
-linux.debug.x86_64 = "res://build/linux/ocbsimulation.so"
-linux.release.x86_64 = "res://build/linux/ocbsimulation.so"
-windows.debug.x86_64 = "res://build/windows/ocbsimulation.dll"
-windows.release.x86_64 = "res://build/windows/ocbsimulation.dll"
+linux.debug.x86_64 = "res://build/linux/debug/ocbsimulation.so"
+linux.release.x86_64 = "res://build/linux/release/ocbsimulation.so"
+windows.debug.x86_64 = "res://build/windows/debug/ocbsimulation.dll"
+windows.release.x86_64 = "res://build/windows/release/ocbsimulation.dll"
