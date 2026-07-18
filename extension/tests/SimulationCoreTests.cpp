@@ -176,6 +176,32 @@ void testInputDrivenLatchPreservesNormalFlushDelay() {
 	expectState(core, input, 4, 0, 0, "input-driven Latch commits the later low input");
 }
 
+void testMixedDeferredAndNormalGateFrontiers() {
+	CompileInput input = makeInput(5, 3);
+	setKind(input, 0, 0, ToolKind::Clock);
+	setKind(input, 1, 0, ToolKind::Read);
+	setKind(input, 2, 0, ToolKind::Trace);
+	setKind(input, 3, 0, ToolKind::Write);
+	setKind(input, 4, 0, ToolKind::Buffer);
+	setKind(input, 0, 2, ToolKind::Clock);
+	setKind(input, 1, 2, ToolKind::Read);
+	setKind(input, 2, 2, ToolKind::Trace);
+	setKind(input, 3, 2, ToolKind::Write);
+	setKind(input, 4, 2, ToolKind::Latch);
+	SimulationCore core;
+	CompileError error;
+	expect(core.compile(input, error), "mixed normal and deferred frontier circuit compiles");
+	core.advanceTick();
+	expectState(core, input, 4, 0, 0, "Buffer stays deferred after the source clock rises");
+	expectState(core, input, 4, 2, 0, "Latch stays deferred after the source clock rises");
+	core.advanceTick();
+	expectState(core, input, 4, 0, 1, "Buffer commits alongside an input-driven Latch");
+	expectState(core, input, 4, 2, 1, "Latch commits alongside a normal Buffer");
+	core.advanceTick();
+	expectState(core, input, 4, 0, 0, "Buffer commits the following low input");
+	expectState(core, input, 4, 2, 0, "Latch commits the following low input");
+}
+
 void testSnapshotRestoresPendingLatchTransition() {
 	CompileInput input = makeInput(5, 1);
 	setKind(input, 0, 0, ToolKind::Clock);
@@ -460,6 +486,30 @@ void testLargeComponentFrontierPropagatesAcrossLanes() {
 	}
 }
 
+void testSparseGateFrontierClearsPreviousTick() {
+	constexpr int32_t SparseComponentCount = 16385;
+	CompileInput input = makeInput(5, SparseComponentCount);
+	setKind(input, 0, 0, ToolKind::Clock);
+	setKind(input, 1, 0, ToolKind::Read);
+	setKind(input, 2, 0, ToolKind::Trace);
+	setKind(input, 3, 0, ToolKind::Write);
+	setKind(input, 4, 0, ToolKind::Buffer);
+	for (int32_t y = 1; y < SparseComponentCount; ++y) {
+		setKind(input, 4, y, y % 2 == 0 ? ToolKind::Buffer : ToolKind::Latch);
+	}
+	SimulationCore core;
+	CompileError error;
+	expect(core.compile(input, error), "sparse gate frontier circuit compiles");
+	core.advanceTick();
+	expectState(core, input, 4, 0, 0, "sparse frontier keeps Buffer deferred after the high input");
+	core.advanceTick();
+	expectState(core, input, 4, 0, 1, "sparse frontier commits the pending high Buffer state");
+	core.advanceTick();
+	expectState(core, input, 4, 0, 0, "sparse frontier clears the previous gate before scheduling low");
+	core.advanceTick();
+	expectState(core, input, 4, 0, 1, "sparse frontier schedules a new high gate after clearing");
+}
+
 void testQueuedComponentGateTracksLaterDelta() {
 	CompileInput input = makeInput(5, 1);
 	setKind(input, 0, 0, ToolKind::Latch);
@@ -531,7 +581,7 @@ void testSilentAdvanceDrainsOnlyFinalChanges() {
 	expect(exactCore.compile(input, error), "exact silent-delta comparison circuit compiles");
 	expect(silentCore.compile(input, error), "silent-delta comparison circuit compiles");
 	const std::vector<int32_t> expectedChanges = exactCore.advanceTicks(8);
-	expect(silentCore.advanceTicksSilent(8).empty(), "silent advance never returns a delta");
+	silentCore.advanceTicksSilent(8);
 	expect(silentCore.drainStateChanges() == expectedChanges, "drain returns the same final delta as exact batch advance");
 	expect(silentCore.getStates() == exactCore.getStates(), "silent advance reaches the exact batch state");
 	expect(silentCore.drainStateChanges().empty(), "second drain is empty after final delta is consumed");
@@ -561,7 +611,7 @@ void testDeferredVisibleStateMaterialization() {
 	SimulationCore core;
 	CompileError error;
 	expect(core.compile(input, error), "deferred materialization pipeline compiles");
-	expect(core.advanceTicksSilent(1).empty(), "silent deferred materialization does not return a delta");
+	core.advanceTicksSilent(1);
 	expect(
 			core.getStates() == std::vector<int32_t>({1, 1, 1, 1, 0}),
 			"getStates materializes the latest node state without advancing simulation");
@@ -1269,6 +1319,7 @@ int main() {
 	testConnectorQueueEventEncoding();
 	testGateAndClockCommitBeforeDrain();
 	testInputDrivenLatchPreservesNormalFlushDelay();
+	testMixedDeferredAndNormalGateFrontiers();
 	testSnapshotRestoresPendingLatchTransition();
 	testDirectComponentTargetsPreserveTickBarrier();
 	testEncodedDirectComponentTargetPreservesDeferredState();
@@ -1277,6 +1328,7 @@ int main() {
 	testUnequalDepthConnectorDiamondConverges();
 	testConnectorQueueSpansTopologicalRankWords();
 	testLargeComponentFrontierPropagatesAcrossLanes();
+	testSparseGateFrontierClearsPreviousTick();
 	testQueuedComponentGateTracksLaterDelta();
 	testTerminalConnectorAliases();
 	testSilentAdvanceDrainsOnlyFinalChanges();

@@ -997,9 +997,8 @@ func probeLoopFrequencyMaximum() -> Dictionary:
 	var startedUsec := Time.get_ticks_usec()
 	var advancedTickCount := 0
 	while Time.get_ticks_usec() - startedUsec < SimulationFrequencyProbeDurationUsec:
-		var advanceResult := SimulationBridgeInstance.advanceTicksSilent(SimulationFrequencyProbeBatchTickCount)
-		if not bool(advanceResult.get("ok", false)):
-			return advanceResult
+		if not SimulationBridgeInstance.advanceTicksSilent(SimulationFrequencyProbeBatchTickCount):
+			return {"ok": false, "errorReason": "BackendUnavailable"}
 		advancedTickCount += SimulationFrequencyProbeBatchTickCount
 	var elapsedUsec := maxi(1, Time.get_ticks_usec() - startedUsec)
 	var restoreResult := SimulationBridgeInstance.restoreState(snapshotResult.get("snapshot", PackedByteArray()) as PackedByteArray)
@@ -1086,9 +1085,8 @@ func advanceLoopingSimulation(requestedTickCount: int, delta: float) -> Dictiona
 	var advancedTickCount := 0
 	while advancedTickCount < requestedTickCount and Time.get_ticks_usec() < frameDeadlineUsec:
 		var batchTickCount := mini(SimulationBatchTickCount, requestedTickCount - advancedTickCount)
-		var advanceResult := SimulationBridgeInstance.advanceTicksSilent(batchTickCount)
-		if not bool(advanceResult.get("ok", false)):
-			failActiveSimulation(advanceResult)
+		if not SimulationBridgeInstance.advanceTicksSilent(batchTickCount):
+			failActiveSimulation({"ok": false, "errorReason": "BackendUnavailable"})
 			return {"ok": false}
 		advancedTickCount += batchTickCount
 	if advancedTickCount <= 0:

@@ -354,7 +354,6 @@ void SimulationCore::clear() {
 	nodeClockHoldTicks_.clear();
 	nodeLatchInitialStates_.clear();
 	nodeEvaluationPolicies_.clear();
-	hasForceDeferredComponentInputs_ = false;
 	nodeInputCounts_.clear();
 	nodeInputHighCounts_.clear();
 	outgoingOffsets_.clear();
@@ -372,12 +371,20 @@ void SimulationCore::clear() {
 	nextGateSummaryWords_.clear();
 	currentGateWords_.clear();
 	currentGateSummaryWords_.clear();
+	nextGateActiveSummaryWordCount_ = 0;
+	currentGateActiveSummaryWordCount_ = 0;
 	nextGateStates_.clear();
 	currentGateStates_.clear();
 	connectorQueueEvents_.clear();
 	pendingComponentInputDeltas_.clear();
 	componentInputStamps_.clear();
 	pendingComponentInputs_.clear();
+	for (std::vector<int32_t> &pendingInputs : pendingNormalComponentInputsByMode_) {
+		pendingInputs.clear();
+	}
+	for (std::vector<int32_t> &pendingInputs : pendingForceDeferredComponentInputsByMode_) {
+		pendingInputs.clear();
+	}
 	pendingConnectorDeltas_.clear();
 	connectorDeltaStamps_.clear();
 	connectorWorkWords_.clear();
@@ -385,6 +392,7 @@ void SimulationCore::clear() {
 	connectorActiveWordHierarchy_.clear();
 	connectorActiveWordLevelOffsets_.clear();
 	propagationStamp_ = 1;
+	collectSpecializedComponentInputs_ = false;
 	visibleCellOffsets_.clear();
 	visibleCellIndices_.clear();
 	cellPrimaryNode_.clear();
@@ -1156,7 +1164,6 @@ void SimulationCore::buildExecutionGraph() {
 		nodeInputCounts_[node] = incomingOffsets_[node + 1] - incomingOffsets_[node];
 	}
 	nodeEvaluationPolicies_.assign(originalComponentCount, static_cast<uint8_t>(EvaluationMode::State));
-	hasForceDeferredComponentInputs_ = false;
 	for (int32_t node : componentNodes_) {
 		const int32_t inputCount = nodeInputCounts_[node];
 		EvaluationMode mode = EvaluationMode::State;
@@ -1191,7 +1198,6 @@ void SimulationCore::buildExecutionGraph() {
 		const bool forceDeferredGate = nodeKinds_[node] == ToolKind::Latch || mode == EvaluationMode::State;
 		nodeEvaluationPolicies_[node] = static_cast<uint8_t>(mode) |
 				(forceDeferredGate ? ForceDeferredGatePolicyBit : uint8_t{0});
-		hasForceDeferredComponentInputs_ |= forceDeferredGate && inputCount != 0;
 	}
 	const size_t gateWordCount = (componentNodes_.size() + 63U) / 64U;
 	const size_t gateSummaryWordCount = (gateWordCount + 63U) / 64U;
@@ -1199,6 +1205,8 @@ void SimulationCore::buildExecutionGraph() {
 	nextGateSummaryWords_.assign(gateSummaryWordCount, 0);
 	currentGateWords_.assign(gateWordCount, 0);
 	currentGateSummaryWords_.assign(gateSummaryWordCount, 0);
+	nextGateActiveSummaryWordCount_ = 0;
+	currentGateActiveSummaryWordCount_ = 0;
 	nextGateStates_.assign(originalComponentCount, 0);
 	currentGateStates_.assign(originalComponentCount, 0);
 	connectorQueueEvents_.clear();
@@ -1207,6 +1215,12 @@ void SimulationCore::buildExecutionGraph() {
 	componentInputStamps_.assign(originalNodeCount, 0);
 	pendingComponentInputs_.clear();
 	pendingComponentInputs_.reserve(componentNodes_.size());
+	for (std::vector<int32_t> &pendingInputs : pendingNormalComponentInputsByMode_) {
+		pendingInputs.clear();
+	}
+	for (std::vector<int32_t> &pendingInputs : pendingForceDeferredComponentInputsByMode_) {
+		pendingInputs.clear();
+	}
 	pendingConnectorDeltas_.assign(originalNodeCount, 0);
 	connectorDeltaStamps_.assign(originalNodeCount, 0);
 	const size_t connectorWorkWordCount = (connectorNodes_.size() + 63U) / 64U;
@@ -1412,8 +1426,17 @@ void SimulationCore::propagateStateChange(int32_t sourceNode, uint8_t oldState, 
 	drainConnectorQueue();
 }
 
-void SimulationCore::beginPropagationBatch() {
+void SimulationCore::beginPropagationBatch(bool hasPrequeuedGates) {
 	pendingComponentInputs_.clear();
+	collectSpecializedComponentInputs_ = !hasPrequeuedGates;
+	if (collectSpecializedComponentInputs_) {
+		for (std::vector<int32_t> &pendingInputs : pendingNormalComponentInputsByMode_) {
+			pendingInputs.clear();
+		}
+		for (std::vector<int32_t> &pendingInputs : pendingForceDeferredComponentInputsByMode_) {
+			pendingInputs.clear();
+		}
+	}
 	assert(!hasActiveConnectorWorkWords());
 	++propagationStamp_;
 	if (propagationStamp_ != 0) {
@@ -1443,38 +1466,107 @@ void SimulationCore::flushComponentInputDeltas() {
 	}
 }
 
-void SimulationCore::flushComponentInputDeltasWithoutPrequeuedGates() {
-	for (int32_t node : pendingComponentInputs_) {
-		const int32_t inputDelta = pendingComponentInputDeltas_[node];
-		const uint8_t evaluationPolicy = nodeEvaluationPolicies_[node];
-		const bool forceDeferredGate = (evaluationPolicy & ForceDeferredGatePolicyBit) != 0;
-		if (inputDelta == 0 && !forceDeferredGate) {
-			continue;
+void SimulationCore::flushUnqueuedComponentInputDeltas() {
+	const auto flushZeroThresholdInputs = [this](const std::vector<int32_t> &pendingInputs, bool invertOutput) {
+		for (int32_t node : pendingInputs) {
+			const int32_t inputDelta = pendingComponentInputDeltas_[node];
+			if (inputDelta == 0) {
+				continue;
+			}
+			const int32_t previousHighInputCount = nodeInputHighCounts_[node];
+			const int32_t nextHighInputCount = previousHighInputCount + inputDelta;
+			nodeInputHighCounts_[node] = nextHighInputCount;
+			assert(nodeStates_[node] == ((previousHighInputCount != 0) ^ invertOutput ? 1 : 0));
+			if ((previousHighInputCount == 0) == (nextHighInputCount == 0)) {
+				continue;
+			}
+			enqueueNewComponentGate(node, (nextHighInputCount != 0) ^ invertOutput ? 1 : 0);
 		}
-		const int32_t nextHighInputCount = nodeInputHighCounts_[node] + inputDelta;
-		nodeInputHighCounts_[node] = nextHighInputCount;
-		const uint8_t nextState = evaluateComponent(node, nextHighInputCount, evaluationPolicy);
-		if (forceDeferredGate || nextState != nodeStates_[node]) {
-			enqueueNewComponentGate(node, nextState);
+	};
+	const auto flushAllHighThresholdInputs = [this](const std::vector<int32_t> &pendingInputs, bool invertOutput) {
+		for (int32_t node : pendingInputs) {
+			const int32_t inputDelta = pendingComponentInputDeltas_[node];
+			if (inputDelta == 0) {
+				continue;
+			}
+			const int32_t previousHighInputCount = nodeInputHighCounts_[node];
+			const int32_t nextHighInputCount = previousHighInputCount + inputDelta;
+			nodeInputHighCounts_[node] = nextHighInputCount;
+			const int32_t inputCount = nodeInputCounts_[node];
+			assert(nodeStates_[node] == ((previousHighInputCount == inputCount) ^ invertOutput ? 1 : 0));
+			if ((previousHighInputCount == inputCount) == (nextHighInputCount == inputCount)) {
+				continue;
+			}
+			enqueueNewComponentGate(node, (nextHighInputCount == inputCount) ^ invertOutput ? 1 : 0);
 		}
-	}
-}
+	};
+	const auto flushParityInputs = [this](const std::vector<int32_t> &pendingInputs, bool invertOutput) {
+		for (int32_t node : pendingInputs) {
+			const int32_t inputDelta = pendingComponentInputDeltas_[node];
+			if (inputDelta == 0) {
+				continue;
+			}
+			const int32_t previousHighInputCount = nodeInputHighCounts_[node];
+			const int32_t nextHighInputCount = previousHighInputCount + inputDelta;
+			nodeInputHighCounts_[node] = nextHighInputCount;
+			assert(nodeStates_[node] == (((previousHighInputCount & 1) != 0) ^ invertOutput ? 1 : 0));
+			if (inputDelta % 2 == 0) {
+				continue;
+			}
+			enqueueNewComponentGate(node, ((nextHighInputCount & 1) != 0) ^ invertOutput ? 1 : 0);
+		}
+	};
+	const auto flushForceDeferredInputs = [this](const std::vector<int32_t> &pendingInputs, const auto &evaluate) {
+		for (int32_t node : pendingInputs) {
+			const int32_t inputDelta = pendingComponentInputDeltas_[node];
+			const int32_t nextHighInputCount = nodeInputHighCounts_[node] + inputDelta;
+			nodeInputHighCounts_[node] = nextHighInputCount;
+			enqueueNewComponentGate(node, evaluate(node, nextHighInputCount));
+		}
+	};
+	const auto high = [](int32_t, int32_t highInputCount) {
+		return highInputCount != 0 ? uint8_t{1} : uint8_t{0};
+	};
+	const auto low = [](int32_t, int32_t highInputCount) {
+		return highInputCount == 0 ? uint8_t{1} : uint8_t{0};
+	};
+	const auto allHigh = [this](int32_t node, int32_t highInputCount) {
+		return highInputCount == nodeInputCounts_[node] ? uint8_t{1} : uint8_t{0};
+	};
+	const auto notAllHigh = [this](int32_t node, int32_t highInputCount) {
+		return highInputCount != nodeInputCounts_[node] ? uint8_t{1} : uint8_t{0};
+	};
+	const auto oddParity = [](int32_t, int32_t highInputCount) {
+		return (highInputCount & 1) != 0 ? uint8_t{1} : uint8_t{0};
+	};
+	const auto evenParity = [](int32_t, int32_t highInputCount) {
+		return (highInputCount & 1) == 0 ? uint8_t{1} : uint8_t{0};
+	};
+	const auto state = [this](int32_t node, int32_t) {
+		return nodeStates_[node];
+	};
+	const size_t stateIndex = static_cast<size_t>(EvaluationMode::State);
+	const size_t highIndex = static_cast<size_t>(EvaluationMode::High);
+	const size_t lowIndex = static_cast<size_t>(EvaluationMode::Low);
+	const size_t allHighIndex = static_cast<size_t>(EvaluationMode::AllHigh);
+	const size_t notAllHighIndex = static_cast<size_t>(EvaluationMode::NotAllHigh);
+	const size_t oddParityIndex = static_cast<size_t>(EvaluationMode::OddParity);
+	const size_t evenParityIndex = static_cast<size_t>(EvaluationMode::EvenParity);
 
-void SimulationCore::flushComponentInputDeltasWithoutPrequeuedOrForceDeferredGates() {
-	for (int32_t node : pendingComponentInputs_) {
-		const int32_t inputDelta = pendingComponentInputDeltas_[node];
-		if (inputDelta == 0) {
-			continue;
-		}
-		const uint8_t evaluationPolicy = nodeEvaluationPolicies_[node];
-		assert((evaluationPolicy & ForceDeferredGatePolicyBit) == 0);
-		const int32_t nextHighInputCount = nodeInputHighCounts_[node] + inputDelta;
-		nodeInputHighCounts_[node] = nextHighInputCount;
-		const uint8_t nextState = evaluateComponent(node, nextHighInputCount, evaluationPolicy);
-		if (nextState != nodeStates_[node]) {
-			enqueueNewComponentGate(node, nextState);
-		}
-	}
+	flushZeroThresholdInputs(pendingNormalComponentInputsByMode_[highIndex], false);
+	flushZeroThresholdInputs(pendingNormalComponentInputsByMode_[lowIndex], true);
+	flushAllHighThresholdInputs(pendingNormalComponentInputsByMode_[allHighIndex], false);
+	flushAllHighThresholdInputs(pendingNormalComponentInputsByMode_[notAllHighIndex], true);
+	flushParityInputs(pendingNormalComponentInputsByMode_[oddParityIndex], false);
+	flushParityInputs(pendingNormalComponentInputsByMode_[evenParityIndex], true);
+
+	flushForceDeferredInputs(pendingForceDeferredComponentInputsByMode_[stateIndex], state);
+	flushForceDeferredInputs(pendingForceDeferredComponentInputsByMode_[highIndex], high);
+	flushForceDeferredInputs(pendingForceDeferredComponentInputsByMode_[lowIndex], low);
+	flushForceDeferredInputs(pendingForceDeferredComponentInputsByMode_[allHighIndex], allHigh);
+	flushForceDeferredInputs(pendingForceDeferredComponentInputsByMode_[notAllHighIndex], notAllHigh);
+	flushForceDeferredInputs(pendingForceDeferredComponentInputsByMode_[oddParityIndex], oddParity);
+	flushForceDeferredInputs(pendingForceDeferredComponentInputsByMode_[evenParityIndex], evenParity);
 }
 
 void SimulationCore::finishPropagationBatch(bool hasPrequeuedGates) {
@@ -1509,15 +1601,11 @@ void SimulationCore::finishPropagationBatch(bool hasPrequeuedGates) {
 		flushComponentInputDeltas();
 		return;
 	}
-	if (hasForceDeferredComponentInputs_) {
-		flushComponentInputDeltasWithoutPrequeuedGates();
-		return;
-	}
-	flushComponentInputDeltasWithoutPrequeuedOrForceDeferredGates();
+	flushUnqueuedComponentInputDeltas();
 }
 
 void SimulationCore::drainConnectorQueue() {
-	beginPropagationBatch();
+	beginPropagationBatch(true);
 	// Seed every component transition before committing connectors, so converging paths share one final delta.
 	const size_t initialQueueSize = connectorQueueEvents_.size();
 	for (size_t cursor = 0; cursor < initialQueueSize; ++cursor) {
@@ -1537,6 +1625,8 @@ void SimulationCore::rebuildDerivedState(const std::vector<uint8_t> &componentSt
 	std::fill(nextGateSummaryWords_.begin(), nextGateSummaryWords_.end(), 0);
 	std::fill(currentGateWords_.begin(), currentGateWords_.end(), 0);
 	std::fill(currentGateSummaryWords_.begin(), currentGateSummaryWords_.end(), 0);
+	nextGateActiveSummaryWordCount_ = 0;
+	currentGateActiveSummaryWordCount_ = 0;
 	std::fill(nextGateStates_.begin(), nextGateStates_.end(), 0);
 	std::fill(currentGateStates_.begin(), currentGateStates_.end(), 0);
 	connectorQueueEvents_.clear();
@@ -1560,6 +1650,8 @@ void SimulationCore::resetInternal() {
 	std::fill(nextGateSummaryWords_.begin(), nextGateSummaryWords_.end(), 0);
 	std::fill(currentGateWords_.begin(), currentGateWords_.end(), 0);
 	std::fill(currentGateSummaryWords_.begin(), currentGateSummaryWords_.end(), 0);
+	nextGateActiveSummaryWordCount_ = 0;
+	currentGateActiveSummaryWordCount_ = 0;
 	std::fill(nextGateStates_.begin(), nextGateStates_.end(), 0);
 	std::fill(currentGateStates_.begin(), currentGateStates_.end(), 0);
 	connectorQueueEvents_.clear();
@@ -1654,14 +1746,35 @@ bool SimulationCore::toggleLatch(int32_t cellIndex, std::vector<int32_t> &change
 	return true;
 }
 
+void SimulationCore::clearNextGateFrontier() {
+	const size_t sparseClearThreshold =
+			(nextGateSummaryWords_.size() + GateFrontierSparseClearDivisor - 1U) / GateFrontierSparseClearDivisor;
+	if (nextGateActiveSummaryWordCount_ < sparseClearThreshold) {
+		for (size_t summaryWordIndex = 0; summaryWordIndex < nextGateSummaryWords_.size(); ++summaryWordIndex) {
+			uint64_t summary = nextGateSummaryWords_[summaryWordIndex];
+			while (summary != 0) {
+				const int32_t wordOffset = countTrailingZeros(summary);
+				summary &= summary - 1U;
+				const size_t gateWordIndex = summaryWordIndex * 64U + static_cast<size_t>(wordOffset);
+				nextGateWords_[gateWordIndex] = 0;
+			}
+			nextGateSummaryWords_[summaryWordIndex] = 0;
+		}
+	} else {
+		std::fill(nextGateWords_.begin(), nextGateWords_.end(), 0);
+		std::fill(nextGateSummaryWords_.begin(), nextGateSummaryWords_.end(), 0);
+	}
+	nextGateActiveSummaryWordCount_ = 0;
+}
+
 void SimulationCore::advanceState() {
 	currentGateWords_.swap(nextGateWords_);
 	currentGateSummaryWords_.swap(nextGateSummaryWords_);
 	currentGateStates_.swap(nextGateStates_);
-	std::fill(nextGateWords_.begin(), nextGateWords_.end(), 0);
-	std::fill(nextGateSummaryWords_.begin(), nextGateSummaryWords_.end(), 0);
+	std::swap(currentGateActiveSummaryWordCount_, nextGateActiveSummaryWordCount_);
+	clearNextGateFrontier();
 	connectorQueueEvents_.clear();
-	beginPropagationBatch();
+	beginPropagationBatch(false);
 	for (size_t summaryWordIndex = 0; summaryWordIndex < currentGateSummaryWords_.size(); ++summaryWordIndex) {
 		uint64_t summary = currentGateSummaryWords_[summaryWordIndex];
 		while (summary != 0) {
@@ -1704,14 +1817,13 @@ std::vector<int32_t> SimulationCore::advanceTick() {
 	return advanceTicks(1);
 }
 
-std::vector<int32_t> SimulationCore::advanceTicksSilent(int32_t tickCount) {
+void SimulationCore::advanceTicksSilent(int32_t tickCount) {
 	if (!compiled_ || tickCount <= 0) {
-		return {};
+		return;
 	}
 	for (int32_t tick = 0; tick < tickCount; ++tick) {
 		advanceState();
 	}
-	return {};
 }
 
 std::vector<int32_t> SimulationCore::advanceTicks(int32_t tickCount) {
@@ -1862,6 +1974,7 @@ bool SimulationCore::restoreState(const std::vector<uint8_t> &snapshot, std::str
 	rebuildDerivedState(componentStatesInRuntimeOrder);
 	std::fill(nextGateWords_.begin(), nextGateWords_.end(), 0);
 	std::fill(nextGateSummaryWords_.begin(), nextGateSummaryWords_.end(), 0);
+	nextGateActiveSummaryWordCount_ = 0;
 	std::fill(nextGateStates_.begin(), nextGateStates_.end(), 0);
 	for (int32_t component = 0; component < static_cast<int32_t>(snapshotComponentNodes_.size()); ++component) {
 		const uint8_t queuedState = queuedGateStates[component];

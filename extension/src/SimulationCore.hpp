@@ -1,6 +1,7 @@
 #pragma once
 
 #include <algorithm>
+#include <array>
 #include <cassert>
 #include <cstddef>
 #include <cstdint>
@@ -66,7 +67,7 @@ public:
 	bool compile(const CompileInput &input, CompileError &error);
 	std::vector<int32_t> advanceTick();
 	std::vector<int32_t> advanceTicks(int32_t tickCount);
-	std::vector<int32_t> advanceTicksSilent(int32_t tickCount);
+	void advanceTicksSilent(int32_t tickCount);
 	std::vector<int32_t> drainStateChanges();
 	std::vector<int32_t> getStates() const;
 	bool toggleLatch(int32_t cellIndex, std::vector<int32_t> &changes, std::string &errorReason);
@@ -89,6 +90,8 @@ private:
 	};
 	static constexpr uint8_t EvaluationModePolicyMask = 0x7FU;
 	static constexpr uint8_t ForceDeferredGatePolicyBit = 0x80U;
+	static constexpr size_t EvaluationModeCount = 7U;
+	static constexpr size_t GateFrontierSparseClearDivisor = 4U;
 
 	struct Component {
 		ToolKind kind = ToolKind::Empty;
@@ -176,11 +179,11 @@ private:
 	void rebuildDerivedState(const std::vector<uint8_t> &componentStates);
 	void propagateStateChange(int32_t sourceNode, uint8_t oldState, uint8_t newState);
 	void drainConnectorQueue();
-	void beginPropagationBatch();
+	void beginPropagationBatch(bool hasPrequeuedGates);
 	void finishPropagationBatch(bool hasPrequeuedGates);
 	void flushComponentInputDeltas();
-	void flushComponentInputDeltasWithoutPrequeuedGates();
-	void flushComponentInputDeltasWithoutPrequeuedOrForceDeferredGates();
+	void flushUnqueuedComponentInputDeltas();
+	void clearNextGateFrontier();
 	void initializeConnectorWorkWordHierarchy(size_t workWordCount);
 	bool hasActiveConnectorWorkWords() const {
 		return !connectorActiveWordLevelOffsets_.empty() &&
@@ -236,7 +239,16 @@ private:
 		if (componentInputStamps_[componentNode] != propagationStamp_) {
 			componentInputStamps_[componentNode] = propagationStamp_;
 			pendingComponentInputDeltas_[componentNode] = stateDelta;
-			pendingComponentInputs_.push_back(componentNode);
+			if (collectSpecializedComponentInputs_) {
+				const uint8_t evaluationPolicy = nodeEvaluationPolicies_[componentNode];
+				const size_t evaluationMode = static_cast<size_t>(evaluationPolicy & EvaluationModePolicyMask);
+				auto &pendingInputs = (evaluationPolicy & ForceDeferredGatePolicyBit) != 0 ?
+						pendingForceDeferredComponentInputsByMode_[evaluationMode] :
+						pendingNormalComponentInputsByMode_[evaluationMode];
+				pendingInputs.push_back(componentNode);
+			} else {
+				pendingComponentInputs_.push_back(componentNode);
+			}
 			return;
 		}
 		pendingComponentInputDeltas_[componentNode] += stateDelta;
@@ -289,7 +301,11 @@ private:
 			return;
 		}
 		const size_t summaryWordIndex = wordIndex / 64U;
-		nextGateSummaryWords_[summaryWordIndex] |= uint64_t{1} << (wordIndex % 64U);
+		uint64_t &summaryWord = nextGateSummaryWords_[summaryWordIndex];
+		if (summaryWord == 0) {
+			++nextGateActiveSummaryWordCount_;
+		}
+		summaryWord |= uint64_t{1} << (wordIndex % 64U);
 	}
 	void enqueueNewComponentGate(int32_t componentNode, uint8_t nextState) {
 		// Normal propagation starts with an empty frontier and visits each pending component once.
@@ -305,7 +321,11 @@ private:
 			return;
 		}
 		const size_t summaryWordIndex = wordIndex / 64U;
-		nextGateSummaryWords_[summaryWordIndex] |= uint64_t{1} << (wordIndex % 64U);
+		uint64_t &summaryWord = nextGateSummaryWords_[summaryWordIndex];
+		if (summaryWord == 0) {
+			++nextGateActiveSummaryWordCount_;
+		}
+		summaryWord |= uint64_t{1} << (wordIndex % 64U);
 	}
 	void markVisibleNodeDirty(int32_t node, uint8_t initialState, bool forceMaterialization = false);
 	void setChangedNodeState(int32_t node, uint8_t state) {
@@ -357,7 +377,6 @@ private:
 	std::vector<int32_t> nodeClockHoldTicks_;
 	std::vector<uint8_t> nodeLatchInitialStates_;
 	std::vector<uint8_t> nodeEvaluationPolicies_;
-	bool hasForceDeferredComponentInputs_ = false;
 	std::vector<int32_t> nodeInputCounts_;
 	std::vector<int32_t> nodeInputHighCounts_;
 	std::vector<int32_t> outgoingOffsets_;
@@ -375,12 +394,16 @@ private:
 	std::vector<uint64_t> nextGateSummaryWords_;
 	std::vector<uint64_t> currentGateWords_;
 	std::vector<uint64_t> currentGateSummaryWords_;
+	size_t nextGateActiveSummaryWordCount_ = 0;
+	size_t currentGateActiveSummaryWordCount_ = 0;
 	std::vector<uint8_t> nextGateStates_;
 	std::vector<uint8_t> currentGateStates_;
 	ConnectorEventQueue connectorQueueEvents_;
 	std::vector<int32_t> pendingComponentInputDeltas_;
 	std::vector<uint32_t> componentInputStamps_;
 	std::vector<int32_t> pendingComponentInputs_;
+	std::array<std::vector<int32_t>, EvaluationModeCount> pendingNormalComponentInputsByMode_;
+	std::array<std::vector<int32_t>, EvaluationModeCount> pendingForceDeferredComponentInputsByMode_;
 	std::vector<int32_t> pendingConnectorDeltas_;
 	std::vector<uint32_t> connectorDeltaStamps_;
 	std::vector<uint64_t> connectorWorkWords_;
@@ -388,6 +411,7 @@ private:
 	std::vector<uint64_t> connectorActiveWordHierarchy_;
 	std::vector<size_t> connectorActiveWordLevelOffsets_;
 	uint32_t propagationStamp_ = 1;
+	bool collectSpecializedComponentInputs_ = false;
 	std::vector<size_t> visibleCellOffsets_;
 	std::vector<int32_t> visibleCellIndices_;
 	std::vector<int32_t> cellPrimaryNode_;

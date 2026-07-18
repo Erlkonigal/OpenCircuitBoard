@@ -49,11 +49,7 @@ func runNativeSimulationTest() -> void:
 		push_error("OcbSimulationNoOpBatchAdvanceInvalid")
 		quit(1)
 		return
-	var silentBatchChanges: Variant = simulation.call("advanceTicksSilent", 3)
-	if not (silentBatchChanges is PackedInt32Array) or not (silentBatchChanges as PackedInt32Array).is_empty():
-		push_error("OcbSimulationSilentBatchAdvanceInvalid")
-		quit(1)
-		return
+	simulation.call("advanceTicksSilent", 3)
 	var drainedChanges: Variant = simulation.call("drainStateChanges")
 	if not (drainedChanges is PackedInt32Array):
 		push_error("OcbSimulationDrainStateChangesInvalid")

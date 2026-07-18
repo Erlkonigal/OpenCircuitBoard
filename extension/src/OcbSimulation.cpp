@@ -72,8 +72,8 @@ godot::PackedInt32Array OcbSimulation::advanceTicks(int32_t tickCount) {
 	return makePackedInt32Array(core_.advanceTicks(tickCount));
 }
 
-godot::PackedInt32Array OcbSimulation::advanceTicksSilent(int32_t tickCount) {
-	return makePackedInt32Array(core_.advanceTicksSilent(tickCount));
+void OcbSimulation::advanceTicksSilent(int32_t tickCount) {
+	core_.advanceTicksSilent(tickCount);
 }
 
 godot::PackedInt32Array OcbSimulation::drainStateChanges() {
