@@ -176,6 +176,20 @@ void testInputDrivenLatchPreservesNormalFlushDelay() {
 	expectState(core, input, 4, 0, 0, "input-driven Latch commits the later low input");
 }
 
+void testInputDrivenLatchSamplesInitialLowWrite() {
+	CompileInput input = makeInput(3, 1);
+	setKind(input, 0, 0, ToolKind::Latch);
+	setInitialState(input, 0, 0, true);
+	setKind(input, 1, 0, ToolKind::Write);
+	setKind(input, 2, 0, ToolKind::Trace);
+	SimulationCore core;
+	CompileError error;
+	expect(core.compile(input, error), "initial-low Write to Latch compiles");
+	expectState(core, input, 0, 0, 1, "Latch preserves its configured state before the first tick");
+	core.advanceTick();
+	expectState(core, input, 0, 0, 0, "Latch samples an initially low Write on the first tick");
+}
+
 void testMixedDeferredAndNormalGateFrontiers() {
 	CompileInput input = makeInput(5, 3);
 	setKind(input, 0, 0, ToolKind::Clock);
@@ -1319,6 +1333,7 @@ int main() {
 	testConnectorQueueEventEncoding();
 	testGateAndClockCommitBeforeDrain();
 	testInputDrivenLatchPreservesNormalFlushDelay();
+	testInputDrivenLatchSamplesInitialLowWrite();
 	testMixedDeferredAndNormalGateFrontiers();
 	testSnapshotRestoresPendingLatchTransition();
 	testDirectComponentTargetsPreserveTickBarrier();

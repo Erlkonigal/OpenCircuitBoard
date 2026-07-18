@@ -1677,6 +1677,13 @@ void SimulationCore::resetInternal() {
 		}
 	}
 	drainConnectorQueue();
+	// A static low Write produces no transition during reset, but it is still a Latch input.
+	// Queue every input-driven Latch once so its first tick samples the resolved initial value.
+	for (int32_t node : componentNodes_) {
+		if (nodeKinds_[node] == ToolKind::Latch && nodeInputCounts_[node] != 0) {
+			enqueueComponentGate(node, evaluateComponent(node));
+		}
+	}
 }
 
 std::vector<int32_t> SimulationCore::getStates() const {
