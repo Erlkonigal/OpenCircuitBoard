@@ -353,7 +353,7 @@ void SimulationCore::clear() {
 	nodeKinds_.clear();
 	nodeClockHoldTicks_.clear();
 	nodeLatchInitialStates_.clear();
-	nodeEvaluationModes_.clear();
+	nodeEvaluationPolicies_.clear();
 	nodeInputCounts_.clear();
 	nodeInputHighCounts_.clear();
 	outgoingOffsets_.clear();
@@ -1154,37 +1154,41 @@ void SimulationCore::buildExecutionGraph() {
 		const int32_t node = componentNodes_[componentIndex];
 		nodeInputCounts_[node] = incomingOffsets_[node + 1] - incomingOffsets_[node];
 	}
-	nodeEvaluationModes_.assign(originalComponentCount, EvaluationMode::State);
+	nodeEvaluationPolicies_.assign(originalComponentCount, static_cast<uint8_t>(EvaluationMode::State));
 	for (int32_t node : componentNodes_) {
 		const int32_t inputCount = nodeInputCounts_[node];
+		EvaluationMode mode = EvaluationMode::State;
 		switch (nodeKinds_[node]) {
 			case ToolKind::Buffer:
 			case ToolKind::Or:
 			case ToolKind::Led:
-				nodeEvaluationModes_[node] = EvaluationMode::High;
+				mode = EvaluationMode::High;
 				break;
 			case ToolKind::Not:
 			case ToolKind::Nor:
-				nodeEvaluationModes_[node] = EvaluationMode::Low;
+				mode = EvaluationMode::Low;
 				break;
 			case ToolKind::And:
-				nodeEvaluationModes_[node] = inputCount == 1 ? EvaluationMode::High : EvaluationMode::AllHigh;
+				mode = inputCount == 1 ? EvaluationMode::High : EvaluationMode::AllHigh;
 				break;
 			case ToolKind::Nand:
-				nodeEvaluationModes_[node] = inputCount == 1 ? EvaluationMode::Low : EvaluationMode::NotAllHigh;
+				mode = inputCount == 1 ? EvaluationMode::Low : EvaluationMode::NotAllHigh;
 				break;
 			case ToolKind::Xor:
-				nodeEvaluationModes_[node] = inputCount == 1 ? EvaluationMode::High : EvaluationMode::OddParity;
+				mode = inputCount == 1 ? EvaluationMode::High : EvaluationMode::OddParity;
 				break;
 			case ToolKind::Xnor:
-				nodeEvaluationModes_[node] = inputCount == 1 ? EvaluationMode::Low : EvaluationMode::EvenParity;
+				mode = inputCount == 1 ? EvaluationMode::Low : EvaluationMode::EvenParity;
 				break;
 			case ToolKind::Latch:
-				nodeEvaluationModes_[node] = inputCount == 0 ? EvaluationMode::State : EvaluationMode::High;
+				mode = inputCount == 0 ? EvaluationMode::State : EvaluationMode::High;
 				break;
 			default:
 				break;
 		}
+		const bool forceDeferredGate = nodeKinds_[node] == ToolKind::Latch || mode == EvaluationMode::State;
+		nodeEvaluationPolicies_[node] = static_cast<uint8_t>(mode) |
+				(forceDeferredGate ? ForceDeferredGatePolicyBit : uint8_t{0});
 	}
 	const size_t gateWordCount = (componentNodes_.size() + 63U) / 64U;
 	const size_t gateSummaryWordCount = (gateWordCount + 63U) / 64U;
@@ -1295,7 +1299,11 @@ uint8_t SimulationCore::evaluateComponent(int32_t node) const {
 }
 
 uint8_t SimulationCore::evaluateComponent(int32_t node, int32_t highInputCount) const {
-	const EvaluationMode mode = nodeEvaluationModes_[node];
+	return evaluateComponent(node, highInputCount, nodeEvaluationPolicies_[node]);
+}
+
+uint8_t SimulationCore::evaluateComponent(int32_t node, int32_t highInputCount, uint8_t evaluationPolicy) const {
+	const EvaluationMode mode = static_cast<EvaluationMode>(evaluationPolicy & EvaluationModePolicyMask);
 	if (mode == EvaluationMode::High) {
 		return highInputCount != 0 ? 1 : 0;
 	}
@@ -1418,15 +1426,15 @@ void SimulationCore::flushComponentInputDeltas() {
 	for (int32_t node : pendingComponentInputs_) {
 		const int32_t inputDelta = pendingComponentInputDeltas_[node];
 		const bool gateAlreadyQueued = isComponentGateQueued(node);
-		if (inputDelta == 0 && nodeKinds_[node] != ToolKind::Latch && nodeEvaluationModes_[node] != EvaluationMode::State &&
-				!gateAlreadyQueued) {
+		const uint8_t evaluationPolicy = nodeEvaluationPolicies_[node];
+		const bool forceDeferredGate = (evaluationPolicy & ForceDeferredGatePolicyBit) != 0;
+		if (inputDelta == 0 && !forceDeferredGate && !gateAlreadyQueued) {
 			continue;
 		}
 		const int32_t nextHighInputCount = nodeInputHighCounts_[node] + inputDelta;
 		nodeInputHighCounts_[node] = nextHighInputCount;
-		const uint8_t nextState = evaluateComponent(node, nextHighInputCount);
-		if (nodeKinds_[node] == ToolKind::Latch || nodeEvaluationModes_[node] == EvaluationMode::State ||
-				gateAlreadyQueued || nextState != nodeStates_[node]) {
+		const uint8_t nextState = evaluateComponent(node, nextHighInputCount, evaluationPolicy);
+		if (forceDeferredGate || gateAlreadyQueued || nextState != nodeStates_[node]) {
 			enqueueComponentGate(node, nextState);
 		}
 	}
@@ -1435,14 +1443,15 @@ void SimulationCore::flushComponentInputDeltas() {
 void SimulationCore::flushComponentInputDeltasWithoutPrequeuedGates() {
 	for (int32_t node : pendingComponentInputs_) {
 		const int32_t inputDelta = pendingComponentInputDeltas_[node];
-		if (inputDelta == 0 && nodeKinds_[node] != ToolKind::Latch && nodeEvaluationModes_[node] != EvaluationMode::State) {
+		const uint8_t evaluationPolicy = nodeEvaluationPolicies_[node];
+		const bool forceDeferredGate = (evaluationPolicy & ForceDeferredGatePolicyBit) != 0;
+		if (inputDelta == 0 && !forceDeferredGate) {
 			continue;
 		}
 		const int32_t nextHighInputCount = nodeInputHighCounts_[node] + inputDelta;
 		nodeInputHighCounts_[node] = nextHighInputCount;
-		const uint8_t nextState = evaluateComponent(node, nextHighInputCount);
-		if (nodeKinds_[node] == ToolKind::Latch || nodeEvaluationModes_[node] == EvaluationMode::State ||
-				nextState != nodeStates_[node]) {
+		const uint8_t nextState = evaluateComponent(node, nextHighInputCount, evaluationPolicy);
+		if (forceDeferredGate || nextState != nodeStates_[node]) {
 			enqueueNewComponentGate(node, nextState);
 		}
 	}

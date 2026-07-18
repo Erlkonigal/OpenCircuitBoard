@@ -87,6 +87,8 @@ private:
 		OddParity,
 		EvenParity,
 	};
+	static constexpr uint8_t EvaluationModePolicyMask = 0x7FU;
+	static constexpr uint8_t ForceDeferredGatePolicyBit = 0x80U;
 
 	struct Component {
 		ToolKind kind = ToolKind::Empty;
@@ -169,6 +171,7 @@ private:
 
 	uint8_t evaluateComponent(int32_t node) const;
 	uint8_t evaluateComponent(int32_t node, int32_t highInputCount) const;
+	uint8_t evaluateComponent(int32_t node, int32_t highInputCount, uint8_t evaluationPolicy) const;
 	void buildExecutionGraph();
 	void rebuildDerivedState(const std::vector<uint8_t> &componentStates);
 	void propagateStateChange(int32_t sourceNode, uint8_t oldState, uint8_t newState);
@@ -352,7 +355,7 @@ private:
 	std::vector<ToolKind> nodeKinds_;
 	std::vector<int32_t> nodeClockHoldTicks_;
 	std::vector<uint8_t> nodeLatchInitialStates_;
-	std::vector<EvaluationMode> nodeEvaluationModes_;
+	std::vector<uint8_t> nodeEvaluationPolicies_;
 	std::vector<int32_t> nodeInputCounts_;
 	std::vector<int32_t> nodeInputHighCounts_;
 	std::vector<int32_t> outgoingOffsets_;
