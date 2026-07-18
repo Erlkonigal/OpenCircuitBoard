@@ -181,6 +181,44 @@ void testDirectComponentTargetsPreserveTickBarrier() {
 	expectState(core, input, 8, 0, 1, "second Buffer evaluates the first Buffer's prior state");
 }
 
+void testEncodedDirectComponentTargetPreservesDeferredState() {
+	CompileInput input = makeInput(8, 1);
+	setKind(input, 0, 0, ToolKind::Buffer);
+	setKind(input, 1, 0, ToolKind::Write);
+	setKind(input, 2, 0, ToolKind::Trace);
+	setKind(input, 3, 0, ToolKind::Read);
+	setKind(input, 4, 0, ToolKind::Write);
+	setKind(input, 5, 0, ToolKind::Trace);
+	setKind(input, 6, 0, ToolKind::Read);
+	setKind(input, 7, 0, ToolKind::Latch);
+	SimulationCore core;
+	CompileError error;
+	std::vector<int32_t> changes;
+	std::string toggleError;
+	expect(core.compile(input, error), "reverse direct-target pipeline compiles");
+	expect(core.toggleLatch(cellIndex(input, 7, 0), changes, toggleError), "source Latch toggles high");
+	expectState(core, input, 5, 0, 1, "connector source resolves before its deferred Buffer target");
+	expectState(core, input, 0, 0, 0, "component zero remains deferred after direct connector propagation");
+
+	const std::vector<uint8_t> snapshot = core.captureState();
+	core.reset();
+	expectState(core, input, 7, 0, 0, "reset clears the direct-target Latch source");
+	expectState(core, input, 5, 0, 0, "reset clears the direct connector source");
+	expectState(core, input, 0, 0, 0, "reset keeps component zero low");
+	std::string restoreError;
+	expect(core.restoreState(snapshot, restoreError), "direct-target snapshot restores");
+	expectState(core, input, 5, 0, 1, "snapshot restores the direct connector source");
+	expectState(core, input, 0, 0, 0, "snapshot preserves the pending Buffer delay");
+
+	core.advanceTick();
+	expectState(core, input, 0, 0, 1, "component zero commits on the following tick");
+	expect(core.toggleLatch(cellIndex(input, 7, 0), changes, toggleError), "source Latch toggles low");
+	expectState(core, input, 5, 0, 0, "direct connector source clears immediately");
+	expectState(core, input, 0, 0, 1, "component zero keeps its prior state until the next tick");
+	core.advanceTick();
+	expectState(core, input, 0, 0, 0, "component zero commits the later low state");
+}
+
 void testSharedConnectorMultipleSourceDelta() {
 	CompileInput input = makeInput(7, 3);
 	setKind(input, 0, 0, ToolKind::Clock);
@@ -1190,6 +1228,7 @@ int main() {
 	testConnectorQueueEventEncoding();
 	testGateAndClockCommitBeforeDrain();
 	testDirectComponentTargetsPreserveTickBarrier();
+	testEncodedDirectComponentTargetPreservesDeferredState();
 	testSharedConnectorMultipleSourceDelta();
 	testOppositeClockFanoutPreservesResolvedConnector();
 	testUnequalDepthConnectorDiamondConverges();

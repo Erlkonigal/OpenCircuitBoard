@@ -259,6 +259,10 @@ private:
 	}
 	inline void seedSourceDelta(int32_t sourceNode, int32_t stateDelta) {
 		const int32_t componentEdgeEnd = outgoingComponentEnds_[sourceNode];
+		if (componentEdgeEnd < 0) {
+			accumulateComponentInputDelta(-componentEdgeEnd - 1, stateDelta);
+			return;
+		}
 		for (int32_t edge = outgoingOffsets_[sourceNode]; edge < componentEdgeEnd; ++edge) {
 			accumulateComponentInputDelta(outgoingTargets_[edge], stateDelta);
 		}

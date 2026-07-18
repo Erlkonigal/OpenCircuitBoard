@@ -1088,6 +1088,16 @@ void SimulationCore::buildExecutionGraph() {
 		}
 	}
 #endif
+	// Runtime propagation only needs the component edge boundary for non-singleton fanout.
+	// Encode a sole component target as -(target + 1) to bypass CSR range setup on the hot path.
+	for (int32_t source = 0; source < originalNodeCount; ++source) {
+		const int32_t edgeBegin = outgoingOffsets_[source];
+		const int32_t componentEdgeEnd = outgoingComponentEnds_[source];
+		const int32_t edgeEnd = outgoingOffsets_[source + 1];
+		if (componentEdgeEnd == edgeBegin + 1 && edgeEnd == componentEdgeEnd) {
+			outgoingComponentEnds_[source] = -outgoingTargets_[edgeBegin] - 1;
+		}
+	}
 	for (int32_t &component : cellToComponent_) {
 		if (component >= 0) {
 			component = order.oldToNew[component];
