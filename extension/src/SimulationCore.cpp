@@ -1443,7 +1443,7 @@ void SimulationCore::flushComponentInputDeltasWithoutPrequeuedGates() {
 		const uint8_t nextState = evaluateComponent(node, nextHighInputCount);
 		if (nodeKinds_[node] == ToolKind::Latch || nodeEvaluationModes_[node] == EvaluationMode::State ||
 				nextState != nodeStates_[node]) {
-			enqueueComponentGate(node, nextState);
+			enqueueNewComponentGate(node, nextState);
 		}
 	}
 }

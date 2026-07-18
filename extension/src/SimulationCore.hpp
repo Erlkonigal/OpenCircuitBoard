@@ -287,6 +287,22 @@ private:
 		const size_t summaryWordIndex = wordIndex / 64U;
 		nextGateSummaryWords_[summaryWordIndex] |= uint64_t{1} << (wordIndex % 64U);
 	}
+	void enqueueNewComponentGate(int32_t componentNode, uint8_t nextState) {
+		// Normal propagation starts with an empty frontier and visits each pending component once.
+		nextGateStates_[componentNode] = nextState;
+		const size_t gateIndex = static_cast<size_t>(componentNode);
+		const size_t wordIndex = gateIndex / 64U;
+		const uint64_t gateMask = uint64_t{1} << (gateIndex % 64U);
+		uint64_t &gateWord = nextGateWords_[wordIndex];
+		assert((gateWord & gateMask) == 0);
+		const bool firstGateInWord = gateWord == 0;
+		gateWord |= gateMask;
+		if (!firstGateInWord) {
+			return;
+		}
+		const size_t summaryWordIndex = wordIndex / 64U;
+		nextGateSummaryWords_[summaryWordIndex] |= uint64_t{1} << (wordIndex % 64U);
+	}
 	void markVisibleNodeDirty(int32_t node, uint8_t initialState, bool forceMaterialization = false);
 	void setChangedNodeState(int32_t node, uint8_t state) {
 		const uint8_t previousState = nodeStates_[node];
