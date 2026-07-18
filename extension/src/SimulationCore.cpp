@@ -283,20 +283,6 @@ bool SimulationCore::isWriteTarget(ToolKind kind) {
 	return (isDevice(kind) && kind != ToolKind::Clock) || kind == ToolKind::Read;
 }
 
-bool SimulationCore::allowsMultipleWrites(ToolKind kind) {
-	switch (kind) {
-		case ToolKind::And:
-		case ToolKind::Nand:
-		case ToolKind::Or:
-		case ToolKind::Nor:
-		case ToolKind::Xor:
-		case ToolKind::Xnor:
-			return true;
-		default:
-			return false;
-	}
-}
-
 int32_t SimulationCore::colorForKind(ToolKind kind) {
 	switch (kind) {
 		case ToolKind::Trace:
@@ -337,15 +323,12 @@ void SimulationCore::clear() {
 	components_.clear();
 	readBindings_.clear();
 	writeBindings_.clear();
-	componentInputNetworks_.clear();
 	cellToComponent_.clear();
 	cellNetwork_.clear();
-	meshNetworkByCell_.clear();
-	crossHorizontalNetworkByCell_.clear();
-	crossVerticalNetworkByCell_.clear();
+	meshNetworksByCell_.clear();
+	crossNetworksByCell_.clear();
 	readBindingByCell_.clear();
-	writeNetworkByCell_.clear();
-	readVisibleNodeByCell_.clear();
+	writeBindingByCell_.clear();
 	nodeStates_.clear();
 	networkStates_.clear();
 	clockPhases_.clear();
@@ -377,14 +360,9 @@ void SimulationCore::clear() {
 	currentGateStates_.clear();
 	connectorQueueEvents_.clear();
 	pendingComponentInputDeltas_.clear();
+	pendingComponentRisingCounts_.clear();
 	componentInputStamps_.clear();
 	pendingComponentInputs_.clear();
-	for (std::vector<int32_t> &pendingInputs : pendingNormalComponentInputsByMode_) {
-		pendingInputs.clear();
-	}
-	for (std::vector<int32_t> &pendingInputs : pendingForceDeferredComponentInputsByMode_) {
-		pendingInputs.clear();
-	}
 	pendingConnectorDeltas_.clear();
 	connectorDeltaStamps_.clear();
 	connectorWorkWords_.clear();
@@ -392,11 +370,11 @@ void SimulationCore::clear() {
 	connectorActiveWordHierarchy_.clear();
 	connectorActiveWordLevelOffsets_.clear();
 	propagationStamp_ = 1;
-	collectSpecializedComponentInputs_ = false;
+	suppressLatchInputEdges_ = false;
 	visibleCellOffsets_.clear();
 	visibleCellIndices_.clear();
-	cellPrimaryNode_.clear();
-	cellSecondaryNode_.clear();
+	cellVisibleNodeOffsets_.clear();
+	cellVisibleNodes_.clear();
 	nodeHasVisibleCells_.clear();
 	dirtyNodeStamps_.clear();
 	dirtyNodeInitialStates_.clear();
@@ -515,6 +493,20 @@ bool SimulationCore::compile(const CompileInput &input, CompileError &error) {
 		cellToComponent_[cell] = componentId;
 	}
 
+	DisjointSet portSet(cellCount);
+	for (int32_t cell = 0; cell < cellCount; ++cell) {
+		const ToolKind kind = static_cast<ToolKind>(kinds_[cell]);
+		if (kind != ToolKind::Read && kind != ToolKind::Write) {
+			continue;
+		}
+		for (const std::array<int32_t, 2> direction : {std::array<int32_t, 2>{1, 0}, std::array<int32_t, 2>{0, 1}}) {
+			const int32_t neighbor = neighborAt(cell, direction[0], direction[1]);
+			if (neighbor >= 0 && static_cast<ToolKind>(kinds_[neighbor]) == kind) {
+				portSet.unite(cell, neighbor);
+			}
+		}
+	}
+
 	DisjointSet conductorSet(cellCount);
 	for (int32_t cell = 0; cell < cellCount; ++cell) {
 		const ToolKind kind = static_cast<ToolKind>(kinds_[cell]);
@@ -530,75 +522,86 @@ bool SimulationCore::compile(const CompileInput &input, CompileError &error) {
 		}
 	}
 
-	std::vector<int32_t> crossHorizontalRepresentative(cellCount, -1);
-	std::vector<int32_t> crossVerticalRepresentative(cellCount, -1);
-	const auto connectCrossPair = [&](int32_t cross, int32_t first, int32_t second, std::vector<int32_t> &representatives) {
-		if (first < 0 || second < 0) {
-			return;
-		}
-		const ToolKind firstKind = static_cast<ToolKind>(kinds_[first]);
-		const ToolKind secondKind = static_cast<ToolKind>(kinds_[second]);
-		if (!isConductor(firstKind) || !isConductor(secondKind)) {
-			return;
-		}
-		if (colorForKind(firstKind) != colorForKind(secondKind)) {
-			return;
-		}
-		conductorSet.unite(first, second);
-		representatives[cross] = first;
+	const auto makeColorChannels = []() {
+		std::array<int32_t, SignalColorCount> channels;
+		channels.fill(-1);
+		return channels;
 	};
+	const auto makeCrossChannels = []() {
+		std::array<int32_t, CrossChannelCount> channels;
+		channels.fill(-1);
+		return channels;
+	};
+	const auto colorIndex = [](int32_t color) {
+		return static_cast<size_t>(color - 1);
+	};
+
+	std::vector<std::array<int32_t, CrossChannelCount>> crossAnchors(cellCount, makeCrossChannels());
 	for (int32_t cell = 0; cell < cellCount; ++cell) {
 		if (static_cast<ToolKind>(kinds_[cell]) != ToolKind::Cross) {
 			continue;
 		}
-		connectCrossPair(cell, neighborAt(cell, -1, 0), neighborAt(cell, 1, 0), crossHorizontalRepresentative);
-		connectCrossPair(cell, neighborAt(cell, 0, -1), neighborAt(cell, 0, 1), crossVerticalRepresentative);
+		for (size_t channel = 0; channel < CrossChannelCount; ++channel) {
+			crossAnchors[cell][channel] = conductorSet.add();
+		}
+	}
+	for (int32_t cell = 0; cell < cellCount; ++cell) {
+		if (static_cast<ToolKind>(kinds_[cell]) != ToolKind::Cross) {
+			continue;
+		}
+		for (size_t orientation = 0; orientation < 2U; ++orientation) {
+			const std::array<std::array<int32_t, 2>, 2> channelDirections = orientation == 0U ?
+					std::array<std::array<int32_t, 2>, 2>{{{{-1, 0}}, {{1, 0}}}} :
+					std::array<std::array<int32_t, 2>, 2>{{{{0, -1}}, {{0, 1}}}};
+			for (int32_t color = 1; color <= static_cast<int32_t>(SignalColorCount); ++color) {
+				const size_t channel = orientation * SignalColorCount + colorIndex(color);
+				const int32_t anchor = crossAnchors[cell][channel];
+				for (const std::array<int32_t, 2> &direction : channelDirections) {
+					const int32_t neighbor = neighborAt(cell, direction[0], direction[1]);
+					if (neighbor < 0) {
+						continue;
+					}
+					const ToolKind neighborKind = static_cast<ToolKind>(kinds_[neighbor]);
+					if (isConductor(neighborKind) && colorForKind(neighborKind) == color) {
+						conductorSet.unite(anchor, neighbor);
+					} else if (neighborKind == ToolKind::Cross) {
+						conductorSet.unite(anchor, crossAnchors[neighbor][channel]);
+					}
+				}
+			}
+		}
 	}
 
-	std::vector<int32_t> meshAnchorRepresentative(cellCount, -1);
+	std::vector<std::array<int32_t, SignalColorCount>> meshAnchorsByCell(cellCount, makeColorChannels());
 	std::unordered_map<uint64_t, int32_t> meshAnchors;
 	for (int32_t cell = 0; cell < cellCount; ++cell) {
 		if (static_cast<ToolKind>(kinds_[cell]) != ToolKind::Mesh) {
 			continue;
 		}
-		std::vector<int32_t> traceNeighbors;
-		// A Mesh carries one channel, selected by the first Trace in W/E/N/S order.
-		int32_t color = 0;
 		for (const std::array<int32_t, 2> &direction : directions) {
 			const int32_t neighbor = neighborAt(cell, direction[0], direction[1]);
 			if (neighbor < 0 || !isTrace(static_cast<ToolKind>(kinds_[neighbor]))) {
 				continue;
 			}
-			const int32_t neighborColor = colorForKind(static_cast<ToolKind>(kinds_[neighbor]));
-			if (color == 0) {
-				color = neighborColor;
+			const int32_t color = colorForKind(static_cast<ToolKind>(kinds_[neighbor]));
+			const uint64_t key =
+					(static_cast<uint64_t>(static_cast<uint32_t>(meshIds_[cell])) << 8U) | static_cast<uint64_t>(color);
+			auto found = meshAnchors.find(key);
+			int32_t anchor = -1;
+			if (found == meshAnchors.end()) {
+				anchor = conductorSet.add();
+				meshAnchors.emplace(key, anchor);
+			} else {
+				anchor = found->second;
 			}
-			if (color == neighborColor) {
-				traceNeighbors.push_back(neighbor);
-			}
-		}
-		if (traceNeighbors.empty()) {
-			continue;
-		}
-		const uint64_t key = (static_cast<uint64_t>(static_cast<uint32_t>(meshIds_[cell])) << 8U) | static_cast<uint64_t>(color);
-		auto found = meshAnchors.find(key);
-		int32_t anchor = -1;
-		if (found == meshAnchors.end()) {
-			anchor = conductorSet.add();
-			meshAnchors.emplace(key, anchor);
-		} else {
-			anchor = found->second;
-		}
-		meshAnchorRepresentative[cell] = anchor;
-		for (int32_t neighbor : traceNeighbors) {
+			meshAnchorsByCell[cell][colorIndex(color)] = anchor;
 			conductorSet.unite(anchor, neighbor);
 		}
 	}
 
 	cellNetwork_.assign(cellCount, -1);
-	meshNetworkByCell_.assign(cellCount, -1);
-	crossHorizontalNetworkByCell_.assign(cellCount, -1);
-	crossVerticalNetworkByCell_.assign(cellCount, -1);
+	meshNetworksByCell_.assign(cellCount, makeColorChannels());
+	crossNetworksByCell_.assign(cellCount, makeCrossChannels());
 	std::unordered_map<int32_t, int32_t> networkByRoot;
 	const auto getNetwork = [&](int32_t node) {
 		const int32_t root = conductorSet.find(node);
@@ -614,240 +617,146 @@ bool SimulationCore::compile(const CompileInput &input, CompileError &error) {
 		if (isConductor(static_cast<ToolKind>(kinds_[cell]))) {
 			cellNetwork_[cell] = getNetwork(cell);
 		}
-		if (meshAnchorRepresentative[cell] >= 0) {
-			meshNetworkByCell_[cell] = getNetwork(meshAnchorRepresentative[cell]);
+		for (size_t color = 0; color < SignalColorCount; ++color) {
+			if (meshAnchorsByCell[cell][color] >= 0) {
+				meshNetworksByCell_[cell][color] = getNetwork(meshAnchorsByCell[cell][color]);
+			}
 		}
-		if (crossHorizontalRepresentative[cell] >= 0) {
-			crossHorizontalNetworkByCell_[cell] = getNetwork(crossHorizontalRepresentative[cell]);
-		}
-		if (crossVerticalRepresentative[cell] >= 0) {
-			crossVerticalNetworkByCell_[cell] = getNetwork(crossVerticalRepresentative[cell]);
+		for (size_t channel = 0; channel < CrossChannelCount; ++channel) {
+			if (crossAnchors[cell][channel] >= 0) {
+				crossNetworksByCell_[cell][channel] = getNetwork(crossAnchors[cell][channel]);
+			}
 		}
 	}
 	networkStates_.assign(networkByRoot.size(), 0);
 
 	readBindingByCell_.assign(cellCount, -1);
-	writeNetworkByCell_.assign(cellCount, -1);
-	componentInputNetworks_.resize(components_.size());
-	struct ReadPort {
-		int32_t sourceComponent = -1;
-		int32_t sourceWriteCell = -1;
-		std::vector<int32_t> outputNetworks;
-		std::vector<int32_t> adjacentWriteCells;
-	};
-	struct WritePort {
-		int32_t inputNetwork = -1;
-		int32_t inputReadCell = -1;
-		std::vector<int32_t> targetComponents;
-		std::vector<int32_t> adjacentReadCells;
-	};
-	std::vector<ReadPort> readPorts(cellCount);
-	std::vector<WritePort> writePorts(cellCount);
+	writeBindingByCell_.assign(cellCount, -1);
+	std::unordered_map<int32_t, int32_t> readBindingByRoot;
+	std::unordered_map<int32_t, int32_t> writeBindingByRoot;
 	for (int32_t cell = 0; cell < cellCount; ++cell) {
 		const ToolKind kind = static_cast<ToolKind>(kinds_[cell]);
+		if (kind != ToolKind::Read && kind != ToolKind::Write) {
+			continue;
+		}
+		const int32_t root = portSet.find(cell);
 		if (kind == ToolKind::Read) {
-			ReadPort &port = readPorts[cell];
-			for (const std::array<int32_t, 2> &direction : directions) {
-				const int32_t neighbor = neighborAt(cell, direction[0], direction[1]);
-				if (neighbor < 0) {
-					continue;
-				}
-				const ToolKind neighborKind = static_cast<ToolKind>(kinds_[neighbor]);
-				if (isTrace(neighborKind)) {
-					appendUnique(port.outputNetworks, cellNetwork_[neighbor]);
-				} else if (neighborKind == ToolKind::Write) {
-					appendUnique(port.adjacentWriteCells, neighbor);
-				} else if (isReadSource(neighborKind)) {
-					const int32_t component = cellToComponent_[neighbor];
-					if (port.sourceComponent >= 0 && port.sourceComponent != component) {
-						return fail(cell, "read_requires_one_source");
-					}
-					port.sourceComponent = component;
-				}
+			auto found = readBindingByRoot.find(root);
+			int32_t bindingId = -1;
+			if (found == readBindingByRoot.end()) {
+				bindingId = static_cast<int32_t>(readBindings_.size());
+				readBindingByRoot.emplace(root, bindingId);
+				readBindings_.push_back(ReadBinding());
+			} else {
+				bindingId = found->second;
 			}
+			readBindings_[bindingId].cells.push_back(cell);
+			readBindingByCell_[cell] = bindingId;
 			continue;
 		}
-		if (kind != ToolKind::Write) {
+		auto found = writeBindingByRoot.find(root);
+		int32_t bindingId = -1;
+		if (found == writeBindingByRoot.end()) {
+			bindingId = static_cast<int32_t>(writeBindings_.size());
+			writeBindingByRoot.emplace(root, bindingId);
+			writeBindings_.push_back(WriteBinding());
+		} else {
+			bindingId = found->second;
+		}
+		writeBindings_[bindingId].cells.push_back(cell);
+		writeBindingByCell_[cell] = bindingId;
+	}
+
+	for (int32_t cell = 0; cell < cellCount; ++cell) {
+		const ToolKind kind = static_cast<ToolKind>(kinds_[cell]);
+		if (kind != ToolKind::Read && kind != ToolKind::Write) {
 			continue;
 		}
-		WritePort &port = writePorts[cell];
-		int32_t traceSides = 0;
 		for (const std::array<int32_t, 2> &direction : directions) {
 			const int32_t neighbor = neighborAt(cell, direction[0], direction[1]);
 			if (neighbor < 0) {
 				continue;
 			}
 			const ToolKind neighborKind = static_cast<ToolKind>(kinds_[neighbor]);
-			if (isTrace(neighborKind)) {
-				++traceSides;
-				port.inputNetwork = cellNetwork_[neighbor];
-			} else if (neighborKind == ToolKind::Read) {
-				appendUnique(port.adjacentReadCells, neighbor);
-			} else if (isWriteTarget(neighborKind)) {
-				appendUnique(port.targetComponents, cellToComponent_[neighbor]);
-			}
-		}
-		if (traceSides > 1) {
-			return fail(cell, "write_requires_one_input");
-		}
-	}
-
-	for (int32_t cell = 0; cell < cellCount; ++cell) {
-		if (static_cast<ToolKind>(kinds_[cell]) != ToolKind::Read) {
-			continue;
-		}
-		ReadPort &readPort = readPorts[cell];
-		for (int32_t writeCell : readPort.adjacentWriteCells) {
-			if (writePorts[writeCell].inputNetwork < 0) {
+			if (kind == ToolKind::Read) {
+				ReadBinding &binding = readBindings_[readBindingByCell_[cell]];
+				if (isTrace(neighborKind)) {
+					appendUnique(binding.outputNetworks, cellNetwork_[neighbor]);
+				} else if (neighborKind == ToolKind::Write) {
+					appendUnique(binding.adjacentWriteBindings, writeBindingByCell_[neighbor]);
+				} else if (isReadSource(neighborKind)) {
+					appendUnique(binding.sourceComponents, cellToComponent_[neighbor]);
+				}
 				continue;
 			}
-			if (readPort.sourceComponent >= 0 || (readPort.sourceWriteCell >= 0 && readPort.sourceWriteCell != writeCell)) {
-				return fail(cell, "read_requires_one_source");
+			WriteBinding &binding = writeBindings_[writeBindingByCell_[cell]];
+			if (isTrace(neighborKind)) {
+				appendUnique(binding.inputNetworks, cellNetwork_[neighbor]);
+			} else if (neighborKind == ToolKind::Read) {
+				appendUnique(binding.adjacentReadBindings, readBindingByCell_[neighbor]);
+			} else if (isWriteTarget(neighborKind)) {
+				appendUnique(binding.targetComponents, cellToComponent_[neighbor]);
 			}
-			readPort.sourceWriteCell = writeCell;
 		}
 	}
 
-	// Resolve direct connector direction from device or Trace inputs: Read drives Write, then Write drives Read.
+	std::vector<uint8_t> readHasInput(readBindings_.size(), 0);
+	std::vector<uint8_t> writeHasInput(writeBindings_.size(), 0);
+	for (int32_t bindingId = 0; bindingId < static_cast<int32_t>(readBindings_.size()); ++bindingId) {
+		readHasInput[bindingId] = !readBindings_[bindingId].sourceComponents.empty() ? 1 : 0;
+	}
+	for (int32_t bindingId = 0; bindingId < static_cast<int32_t>(writeBindings_.size()); ++bindingId) {
+		writeHasInput[bindingId] = !writeBindings_[bindingId].inputNetworks.empty() ? 1 : 0;
+	}
 	bool changed = true;
 	while (changed) {
 		changed = false;
-		for (int32_t cell = 0; cell < cellCount; ++cell) {
-			if (static_cast<ToolKind>(kinds_[cell]) != ToolKind::Read) {
-				continue;
-			}
-			const ReadPort &readPort = readPorts[cell];
-			if (readPort.sourceComponent < 0 && readPort.sourceWriteCell < 0) {
-				continue;
-			}
-			for (int32_t writeCell : readPort.adjacentWriteCells) {
-				WritePort &writePort = writePorts[writeCell];
-				if (readPort.sourceWriteCell == writeCell) {
-					continue;
+		for (int32_t bindingId = 0; bindingId < static_cast<int32_t>(readBindings_.size()); ++bindingId) {
+			for (int32_t writeBinding : readBindings_[bindingId].adjacentWriteBindings) {
+				if (readHasInput[bindingId] != 0 && writeHasInput[writeBinding] == 0) {
+					writeHasInput[writeBinding] = 1;
+					changed = true;
 				}
-				if (writePort.inputNetwork >= 0) {
-					continue;
-				}
-				if (writePort.inputReadCell >= 0) {
-					if (writePort.inputReadCell != cell) {
-						return fail(writeCell, "write_requires_one_input");
-					}
-					continue;
-				}
-				writePort.inputReadCell = cell;
-				changed = true;
-			}
-		}
-		for (int32_t cell = 0; cell < cellCount; ++cell) {
-			if (static_cast<ToolKind>(kinds_[cell]) != ToolKind::Write) {
-				continue;
-			}
-			const WritePort &writePort = writePorts[cell];
-			if (writePort.inputNetwork < 0 && writePort.inputReadCell < 0) {
-				continue;
-			}
-			for (int32_t readCell : writePort.adjacentReadCells) {
-				if (readCell == writePort.inputReadCell) {
-					continue;
-				}
-				ReadPort &readPort = readPorts[readCell];
-				if (readPort.sourceComponent >= 0 || (readPort.sourceWriteCell >= 0 && readPort.sourceWriteCell != cell)) {
-					return fail(readCell, "read_requires_one_source");
-				}
-				if (readPort.sourceWriteCell < 0) {
-					readPort.sourceWriteCell = cell;
+				if (writeHasInput[writeBinding] != 0 && readHasInput[bindingId] == 0) {
+					readHasInput[bindingId] = 1;
 					changed = true;
 				}
 			}
 		}
 	}
-
-	for (int32_t cell = 0; cell < cellCount; ++cell) {
-		if (static_cast<ToolKind>(kinds_[cell]) != ToolKind::Read) {
-			continue;
+	for (const ReadBinding &binding : readBindings_) {
+		if (binding.sourceComponents.empty() && binding.adjacentWriteBindings.empty()) {
+			return fail(binding.cells.front(), "read_requires_one_source");
 		}
-		const ReadPort &readPort = readPorts[cell];
-		if ((readPort.sourceComponent >= 0) == (readPort.sourceWriteCell >= 0)) {
-			return fail(cell, "read_requires_one_source");
+		if (binding.outputNetworks.empty() && binding.adjacentWriteBindings.empty()) {
+			return fail(binding.cells.front(), "read_requires_output");
 		}
-		bool hasDirectWriteOutput = false;
-		for (int32_t writeCell : readPort.adjacentWriteCells) {
-			if (writePorts[writeCell].inputReadCell == cell) {
-				hasDirectWriteOutput = true;
-				break;
-			}
-		}
-		if (readPort.outputNetworks.empty() && !hasDirectWriteOutput) {
-			return fail(cell, "read_requires_output");
-		}
-		ReadBinding readBinding;
-		readBinding.sourceComponent = readPort.sourceComponent;
-		readBinding.sourceWriteCell = readPort.sourceWriteCell;
-		readBinding.outputNetworks = readPort.outputNetworks;
-		const int32_t bindingId = static_cast<int32_t>(readBindings_.size());
-		readBindingByCell_[cell] = bindingId;
-		readBindings_.push_back(std::move(readBinding));
 	}
-
-	for (int32_t cell = 0; cell < cellCount; ++cell) {
-		if (static_cast<ToolKind>(kinds_[cell]) != ToolKind::Write) {
-			continue;
+	for (const WriteBinding &binding : writeBindings_) {
+		if (binding.inputNetworks.empty() && binding.adjacentReadBindings.empty()) {
+			return fail(binding.cells.front(), "write_requires_one_input");
 		}
-		const WritePort &writePort = writePorts[cell];
-		if (writePort.inputNetwork < 0 && writePort.inputReadCell < 0) {
-			return fail(cell, "write_requires_one_input");
+		if (binding.targetComponents.empty() && binding.adjacentReadBindings.empty()) {
+			return fail(binding.cells.front(), "write_requires_target");
 		}
-		bool hasDirectedReadTarget = false;
-		for (int32_t readCell : writePort.adjacentReadCells) {
-			if (readCell != writePort.inputReadCell && readPorts[readCell].sourceWriteCell == cell) {
-				hasDirectedReadTarget = true;
-				break;
-			}
-		}
-		if (writePort.targetComponents.empty() && !hasDirectedReadTarget) {
-			return fail(cell, "write_requires_target");
-		}
-		WriteBinding binding;
-		binding.cell = cell;
-		binding.inputNetwork = writePort.inputNetwork;
-		binding.inputReadCell = writePort.inputReadCell;
-		binding.targetComponents = writePort.targetComponents;
-		writeBindings_.push_back(std::move(binding));
 	}
-
+	for (int32_t bindingId = 0; bindingId < static_cast<int32_t>(readBindings_.size()); ++bindingId) {
+		if (readHasInput[bindingId] == 0) {
+			return fail(readBindings_[bindingId].cells.front(), "read_requires_one_source");
+		}
+	}
+	for (int32_t bindingId = 0; bindingId < static_cast<int32_t>(writeBindings_.size()); ++bindingId) {
+		if (writeHasInput[bindingId] == 0) {
+			return fail(writeBindings_[bindingId].cells.front(), "write_requires_one_input");
+		}
+	}
 	for (ReadBinding &binding : readBindings_) {
 		binding.signalNetwork = static_cast<int32_t>(networkStates_.size());
 		networkStates_.push_back(0);
 	}
-
 	for (WriteBinding &binding : writeBindings_) {
-		if (binding.inputReadCell >= 0) {
-			const int32_t readBindingId = readBindingByCell_[binding.inputReadCell];
-			if (readBindingId < 0) {
-				return fail(binding.inputReadCell, "write_requires_one_input");
-			}
-			binding.inputNetwork = readBindings_[readBindingId].signalNetwork;
-		}
-		writeNetworkByCell_[binding.cell] = binding.inputNetwork;
-		for (int32_t component : binding.targetComponents) {
-			componentInputNetworks_[component].push_back(binding.inputNetwork);
-		}
-	}
-
-	for (ReadBinding &binding : readBindings_) {
-		if (binding.sourceWriteCell < 0) {
-			continue;
-		}
-		binding.sourceNetwork = writeNetworkByCell_[binding.sourceWriteCell];
-		if (binding.sourceNetwork < 0) {
-			return fail(binding.sourceWriteCell, "read_requires_one_source");
-		}
-	}
-
-	for (int32_t component = 0; component < static_cast<int32_t>(components_.size()); ++component) {
-		if (!allowsMultipleWrites(components_[component].kind) && componentInputNetworks_[component].size() > 1) {
-			return fail(components_[component].cells.front(), "multiple_write_inputs");
-		}
+		binding.signalNetwork = static_cast<int32_t>(networkStates_.size());
+		networkStates_.push_back(0);
 	}
 
 	buildExecutionGraph();
@@ -869,20 +778,31 @@ void SimulationCore::buildExecutionGraph() {
 			rawEdges.emplace_back(source, target);
 		}
 	};
+	// Directly adjacent Read and Write bindings are one logical port, condensed as one connector signal.
 	for (const ReadBinding &binding : readBindings_) {
-		std::vector<int32_t> targets = binding.outputNetworks;
-		targets.push_back(binding.signalNetwork);
-		for (int32_t target : targets) {
-			if (binding.sourceComponent >= 0) {
-				addRawEdge(binding.sourceComponent, originalComponentCount + target);
-			} else if (binding.sourceNetwork >= 0) {
-				addRawEdge(originalComponentCount + binding.sourceNetwork, originalComponentCount + target);
-			}
+		for (int32_t source : binding.sourceComponents) {
+			addRawEdge(source, originalComponentCount + binding.signalNetwork);
+		}
+		for (int32_t target : binding.outputNetworks) {
+			addRawEdge(originalComponentCount + binding.signalNetwork, originalComponentCount + target);
+		}
+		for (int32_t writeBinding : binding.adjacentWriteBindings) {
+			addRawEdge(
+					originalComponentCount + binding.signalNetwork,
+					originalComponentCount + writeBindings_[writeBinding].signalNetwork);
 		}
 	}
 	for (const WriteBinding &binding : writeBindings_) {
+		for (int32_t source : binding.inputNetworks) {
+			addRawEdge(originalComponentCount + source, originalComponentCount + binding.signalNetwork);
+		}
+		for (int32_t readBinding : binding.adjacentReadBindings) {
+			addRawEdge(
+					originalComponentCount + binding.signalNetwork,
+					originalComponentCount + readBindings_[readBinding].signalNetwork);
+		}
 		for (int32_t target : binding.targetComponents) {
-			addRawEdge(originalComponentCount + binding.inputNetwork, target);
+			addRawEdge(originalComponentCount + binding.signalNetwork, target);
 		}
 	}
 	std::sort(rawEdges.begin(), rawEdges.end());
@@ -1132,29 +1052,21 @@ void SimulationCore::buildExecutionGraph() {
 	for (int32_t &network : cellNetwork_) {
 		network = remapConnector(network);
 	}
-	for (int32_t &network : meshNetworkByCell_) {
-		network = remapConnector(network);
-	}
-	for (int32_t &network : crossHorizontalNetworkByCell_) {
-		network = remapConnector(network);
-	}
-	for (int32_t &network : crossVerticalNetworkByCell_) {
-		network = remapConnector(network);
-	}
-	for (int32_t &network : writeNetworkByCell_) {
-		network = remapConnector(network);
-	}
-	readVisibleNodeByCell_.assign(kinds_.size(), -1);
-	for (int32_t cell = 0; cell < static_cast<int32_t>(kinds_.size()); ++cell) {
-		if (static_cast<ToolKind>(kinds_[cell]) != ToolKind::Read) {
-			continue;
+	for (std::array<int32_t, SignalColorCount> &channels : meshNetworksByCell_) {
+		for (int32_t &network : channels) {
+			network = remapConnector(network);
 		}
-		const ReadBinding &binding = readBindings_[readBindingByCell_[cell]];
-		if (binding.sourceComponent >= 0) {
-			readVisibleNodeByCell_[cell] = order.oldToNew[binding.sourceComponent];
-		} else {
-			readVisibleNodeByCell_[cell] = remapConnector(binding.sourceNetwork);
+	}
+	for (std::array<int32_t, CrossChannelCount> &channels : crossNetworksByCell_) {
+		for (int32_t &network : channels) {
+			network = remapConnector(network);
 		}
+	}
+	for (ReadBinding &binding : readBindings_) {
+		binding.signalNetwork = remapConnector(binding.signalNetwork);
+	}
+	for (WriteBinding &binding : writeBindings_) {
+		binding.signalNetwork = remapConnector(binding.signalNetwork);
 	}
 
 	nodeInputCounts_.assign(originalNodeCount, 0);
@@ -1165,7 +1077,6 @@ void SimulationCore::buildExecutionGraph() {
 	}
 	nodeEvaluationPolicies_.assign(originalComponentCount, static_cast<uint8_t>(EvaluationMode::State));
 	for (int32_t node : componentNodes_) {
-		const int32_t inputCount = nodeInputCounts_[node];
 		EvaluationMode mode = EvaluationMode::State;
 		switch (nodeKinds_[node]) {
 			case ToolKind::Buffer:
@@ -1178,26 +1089,24 @@ void SimulationCore::buildExecutionGraph() {
 				mode = EvaluationMode::Low;
 				break;
 			case ToolKind::And:
-				mode = inputCount == 1 ? EvaluationMode::High : EvaluationMode::AllHigh;
+				mode = EvaluationMode::AllHigh;
 				break;
 			case ToolKind::Nand:
-				mode = inputCount == 1 ? EvaluationMode::Low : EvaluationMode::NotAllHigh;
+				mode = EvaluationMode::NotAllHigh;
 				break;
 			case ToolKind::Xor:
-				mode = inputCount == 1 ? EvaluationMode::High : EvaluationMode::OddParity;
+				mode = EvaluationMode::OddParity;
 				break;
 			case ToolKind::Xnor:
-				mode = inputCount == 1 ? EvaluationMode::Low : EvaluationMode::EvenParity;
+				mode = EvaluationMode::EvenParity;
 				break;
 			case ToolKind::Latch:
-				mode = inputCount == 0 ? EvaluationMode::State : EvaluationMode::High;
+				mode = EvaluationMode::LatchToggle;
 				break;
 			default:
 				break;
 		}
-		const bool forceDeferredGate = nodeKinds_[node] == ToolKind::Latch || mode == EvaluationMode::State;
-		nodeEvaluationPolicies_[node] = static_cast<uint8_t>(mode) |
-				(forceDeferredGate ? ForceDeferredGatePolicyBit : uint8_t{0});
+		nodeEvaluationPolicies_[node] = static_cast<uint8_t>(mode);
 	}
 	const size_t gateWordCount = (componentNodes_.size() + 63U) / 64U;
 	const size_t gateSummaryWordCount = (gateWordCount + 63U) / 64U;
@@ -1212,15 +1121,10 @@ void SimulationCore::buildExecutionGraph() {
 	connectorQueueEvents_.clear();
 	connectorQueueEvents_.reserve(originalNodeCount);
 	pendingComponentInputDeltas_.assign(originalNodeCount, 0);
+	pendingComponentRisingCounts_.assign(originalNodeCount, 0);
 	componentInputStamps_.assign(originalNodeCount, 0);
 	pendingComponentInputs_.clear();
 	pendingComponentInputs_.reserve(componentNodes_.size());
-	for (std::vector<int32_t> &pendingInputs : pendingNormalComponentInputsByMode_) {
-		pendingInputs.clear();
-	}
-	for (std::vector<int32_t> &pendingInputs : pendingForceDeferredComponentInputsByMode_) {
-		pendingInputs.clear();
-	}
 	pendingConnectorDeltas_.assign(originalNodeCount, 0);
 	connectorDeltaStamps_.assign(originalNodeCount, 0);
 	const size_t connectorWorkWordCount = (connectorNodes_.size() + 63U) / 64U;
@@ -1230,32 +1134,48 @@ void SimulationCore::buildExecutionGraph() {
 	propagationStamp_ = 1;
 	nodeStates_.assign(originalNodeCount, 0);
 	clockPhases_.assign(originalNodeCount, 0);
-	cellPrimaryNode_.assign(kinds_.size(), -1);
-	cellSecondaryNode_.assign(kinds_.size(), -1);
-	visibleCellOffsets_.assign(static_cast<size_t>(originalNodeCount) + 1U, 0);
+	std::vector<std::vector<int32_t>> visibleNodesByCell(kinds_.size());
 	for (int32_t cell = 0; cell < static_cast<int32_t>(kinds_.size()); ++cell) {
 		const ToolKind kind = static_cast<ToolKind>(kinds_[cell]);
+		std::vector<int32_t> &nodes = visibleNodesByCell[cell];
+		const auto appendVisibleNode = [&](int32_t node) {
+			if (node >= 0) {
+				appendUnique(nodes, node);
+			}
+		};
 		if (isConductor(kind)) {
-			cellPrimaryNode_[cell] = cellNetwork_[cell];
+			appendVisibleNode(cellNetwork_[cell]);
 		} else if (kind == ToolKind::Mesh) {
-			cellPrimaryNode_[cell] = meshNetworkByCell_[cell];
+			for (int32_t node : meshNetworksByCell_[cell]) {
+				appendVisibleNode(node);
+			}
 		} else if (kind == ToolKind::Cross) {
-			cellPrimaryNode_[cell] = crossHorizontalNetworkByCell_[cell];
-			cellSecondaryNode_[cell] = crossVerticalNetworkByCell_[cell];
+			for (int32_t node : crossNetworksByCell_[cell]) {
+				appendVisibleNode(node);
+			}
 		} else if (kind == ToolKind::Read) {
-			cellPrimaryNode_[cell] = readVisibleNodeByCell_[cell];
+			appendVisibleNode(readBindings_[readBindingByCell_[cell]].signalNetwork);
 		} else if (kind == ToolKind::Write) {
-			cellPrimaryNode_[cell] = writeNetworkByCell_[cell];
+			appendVisibleNode(writeBindings_[writeBindingByCell_[cell]].signalNetwork);
 		} else if (isDevice(kind)) {
-			cellPrimaryNode_[cell] = cellToComponent_[cell];
+			appendVisibleNode(cellToComponent_[cell]);
 		}
-		const int32_t primary = cellPrimaryNode_[cell];
-		const int32_t secondary = cellSecondaryNode_[cell];
-		if (primary >= 0) {
-			++visibleCellOffsets_[static_cast<size_t>(primary) + 1U];
-		}
-		if (secondary >= 0 && secondary != primary) {
-			++visibleCellOffsets_[static_cast<size_t>(secondary) + 1U];
+	}
+	cellVisibleNodeOffsets_.assign(kinds_.size() + 1U, 0);
+	for (size_t cell = 0; cell < visibleNodesByCell.size(); ++cell) {
+		cellVisibleNodeOffsets_[cell + 1U] = cellVisibleNodeOffsets_[cell] + visibleNodesByCell[cell].size();
+	}
+	cellVisibleNodes_.resize(cellVisibleNodeOffsets_.back());
+	for (size_t cell = 0; cell < visibleNodesByCell.size(); ++cell) {
+		std::copy(
+				visibleNodesByCell[cell].begin(),
+				visibleNodesByCell[cell].end(),
+				cellVisibleNodes_.begin() + static_cast<std::ptrdiff_t>(cellVisibleNodeOffsets_[cell]));
+	}
+	visibleCellOffsets_.assign(static_cast<size_t>(originalNodeCount) + 1U, 0);
+	for (int32_t node : cellVisibleNodes_) {
+		if (node >= 0) {
+			++visibleCellOffsets_[static_cast<size_t>(node) + 1U];
 		}
 	}
 	for (size_t node = 1; node < visibleCellOffsets_.size(); ++node) {
@@ -1264,13 +1184,9 @@ void SimulationCore::buildExecutionGraph() {
 	visibleCellIndices_.resize(visibleCellOffsets_.back());
 	std::vector<size_t> nextVisibleCellOffsets = visibleCellOffsets_;
 	for (int32_t cell = 0; cell < static_cast<int32_t>(kinds_.size()); ++cell) {
-		const int32_t primary = cellPrimaryNode_[cell];
-		const int32_t secondary = cellSecondaryNode_[cell];
-		if (primary >= 0) {
-			visibleCellIndices_[nextVisibleCellOffsets[primary]++] = cell;
-		}
-		if (secondary >= 0 && secondary != primary) {
-			visibleCellIndices_[nextVisibleCellOffsets[secondary]++] = cell;
+		for (size_t offset = cellVisibleNodeOffsets_[cell]; offset < cellVisibleNodeOffsets_[static_cast<size_t>(cell) + 1U]; ++offset) {
+			const int32_t node = cellVisibleNodes_[offset];
+			visibleCellIndices_[nextVisibleCellOffsets[node]++] = cell;
 		}
 	}
 	nodeHasVisibleCells_.assign(originalNodeCount, 0);
@@ -1290,7 +1206,6 @@ void SimulationCore::buildExecutionGraph() {
 	changedCellStamps_.assign(kinds_.size(), 0);
 	changedCells_.clear();
 	changeStamp_ = 1;
-	componentInputNetworks_.clear();
 	networkStates_.clear();
 	components_.clear();
 	components_.shrink_to_fit();
@@ -1320,7 +1235,7 @@ uint8_t SimulationCore::evaluateComponent(int32_t node, int32_t highInputCount) 
 }
 
 uint8_t SimulationCore::evaluateComponent(int32_t node, int32_t highInputCount, uint8_t evaluationPolicy) const {
-	const EvaluationMode mode = static_cast<EvaluationMode>(evaluationPolicy & EvaluationModePolicyMask);
+	const EvaluationMode mode = static_cast<EvaluationMode>(evaluationPolicy);
 	if (mode == EvaluationMode::High) {
 		return highInputCount != 0 ? 1 : 0;
 	}
@@ -1329,9 +1244,9 @@ uint8_t SimulationCore::evaluateComponent(int32_t node, int32_t highInputCount, 
 	}
 	switch (mode) {
 		case EvaluationMode::AllHigh:
-			return highInputCount == nodeInputCounts_[node] ? 1 : 0;
+			return highInputCount != 0 && highInputCount == nodeInputCounts_[node] ? 1 : 0;
 		case EvaluationMode::NotAllHigh:
-			return highInputCount != nodeInputCounts_[node] ? 1 : 0;
+			return highInputCount == 0 || highInputCount != nodeInputCounts_[node] ? 1 : 0;
 		case EvaluationMode::OddParity:
 			return (highInputCount & 1) != 0 ? 1 : 0;
 		case EvaluationMode::EvenParity:
@@ -1345,10 +1260,13 @@ void SimulationCore::updateVisibleCell(int32_t cell) const {
 	if (cell < 0 || cell >= static_cast<int32_t>(visibleStates_.size())) {
 		return;
 	}
-	const int32_t primary = cellPrimaryNode_[cell];
-	const int32_t secondary = cellSecondaryNode_[cell];
-	const uint8_t state =
-			(primary >= 0 && nodeStates_[primary] != 0) || (secondary >= 0 && nodeStates_[secondary] != 0) ? 1 : 0;
+	uint8_t state = 0;
+	for (size_t offset = cellVisibleNodeOffsets_[cell]; offset < cellVisibleNodeOffsets_[static_cast<size_t>(cell) + 1U]; ++offset) {
+		if (nodeStates_[cellVisibleNodes_[offset]] != 0) {
+			state = 1;
+			break;
+		}
+	}
 	if (visibleStates_[cell] == state) {
 		return;
 	}
@@ -1426,17 +1344,8 @@ void SimulationCore::propagateStateChange(int32_t sourceNode, uint8_t oldState, 
 	drainConnectorQueue();
 }
 
-void SimulationCore::beginPropagationBatch(bool hasPrequeuedGates) {
+void SimulationCore::beginPropagationBatch() {
 	pendingComponentInputs_.clear();
-	collectSpecializedComponentInputs_ = !hasPrequeuedGates;
-	if (collectSpecializedComponentInputs_) {
-		for (std::vector<int32_t> &pendingInputs : pendingNormalComponentInputsByMode_) {
-			pendingInputs.clear();
-		}
-		for (std::vector<int32_t> &pendingInputs : pendingForceDeferredComponentInputsByMode_) {
-			pendingInputs.clear();
-		}
-	}
 	assert(!hasActiveConnectorWorkWords());
 	++propagationStamp_;
 	if (propagationStamp_ != 0) {
@@ -1453,123 +1362,28 @@ void SimulationCore::flushComponentInputDeltas() {
 		const int32_t inputDelta = pendingComponentInputDeltas_[node];
 		const bool gateAlreadyQueued = isComponentGateQueued(node);
 		const uint8_t evaluationPolicy = nodeEvaluationPolicies_[node];
-		const bool forceDeferredGate = (evaluationPolicy & ForceDeferredGatePolicyBit) != 0;
-		if (inputDelta == 0 && !forceDeferredGate && !gateAlreadyQueued) {
-			continue;
-		}
 		const int32_t nextHighInputCount = nodeInputHighCounts_[node] + inputDelta;
 		nodeInputHighCounts_[node] = nextHighInputCount;
+		if (static_cast<EvaluationMode>(evaluationPolicy) == EvaluationMode::LatchToggle) {
+			const int32_t risingInputCount = pendingComponentRisingCounts_[node];
+			if ((risingInputCount & 1) == 0) {
+				continue;
+			}
+			const uint8_t baseState = gateAlreadyQueued ? nextGateStates_[node] : nodeStates_[node];
+			enqueueComponentGate(node, baseState == 0 ? 1 : 0);
+			continue;
+		}
+		if (inputDelta == 0 && !gateAlreadyQueued) {
+			continue;
+		}
 		const uint8_t nextState = evaluateComponent(node, nextHighInputCount, evaluationPolicy);
-		if (forceDeferredGate || gateAlreadyQueued || nextState != nodeStates_[node]) {
+		if (gateAlreadyQueued || nextState != nodeStates_[node]) {
 			enqueueComponentGate(node, nextState);
 		}
 	}
 }
 
-void SimulationCore::flushUnqueuedComponentInputDeltas() {
-	const auto flushZeroThresholdInputs = [this](const std::vector<int32_t> &pendingInputs, bool invertOutput) {
-		for (int32_t node : pendingInputs) {
-			const int32_t inputDelta = pendingComponentInputDeltas_[node];
-			if (inputDelta == 0) {
-				continue;
-			}
-			const int32_t previousHighInputCount = nodeInputHighCounts_[node];
-			const int32_t nextHighInputCount = previousHighInputCount + inputDelta;
-			nodeInputHighCounts_[node] = nextHighInputCount;
-			assert(nodeStates_[node] == ((previousHighInputCount != 0) ^ invertOutput ? 1 : 0));
-			if ((previousHighInputCount == 0) == (nextHighInputCount == 0)) {
-				continue;
-			}
-			enqueueNewComponentGate(node, (nextHighInputCount != 0) ^ invertOutput ? 1 : 0);
-		}
-	};
-	const auto flushAllHighThresholdInputs = [this](const std::vector<int32_t> &pendingInputs, bool invertOutput) {
-		for (int32_t node : pendingInputs) {
-			const int32_t inputDelta = pendingComponentInputDeltas_[node];
-			if (inputDelta == 0) {
-				continue;
-			}
-			const int32_t previousHighInputCount = nodeInputHighCounts_[node];
-			const int32_t nextHighInputCount = previousHighInputCount + inputDelta;
-			nodeInputHighCounts_[node] = nextHighInputCount;
-			const int32_t inputCount = nodeInputCounts_[node];
-			assert(nodeStates_[node] == ((previousHighInputCount == inputCount) ^ invertOutput ? 1 : 0));
-			if ((previousHighInputCount == inputCount) == (nextHighInputCount == inputCount)) {
-				continue;
-			}
-			enqueueNewComponentGate(node, (nextHighInputCount == inputCount) ^ invertOutput ? 1 : 0);
-		}
-	};
-	const auto flushParityInputs = [this](const std::vector<int32_t> &pendingInputs, bool invertOutput) {
-		for (int32_t node : pendingInputs) {
-			const int32_t inputDelta = pendingComponentInputDeltas_[node];
-			if (inputDelta == 0) {
-				continue;
-			}
-			const int32_t previousHighInputCount = nodeInputHighCounts_[node];
-			const int32_t nextHighInputCount = previousHighInputCount + inputDelta;
-			nodeInputHighCounts_[node] = nextHighInputCount;
-			assert(nodeStates_[node] == (((previousHighInputCount & 1) != 0) ^ invertOutput ? 1 : 0));
-			if (inputDelta % 2 == 0) {
-				continue;
-			}
-			enqueueNewComponentGate(node, ((nextHighInputCount & 1) != 0) ^ invertOutput ? 1 : 0);
-		}
-	};
-	const auto flushForceDeferredInputs = [this](const std::vector<int32_t> &pendingInputs, const auto &evaluate) {
-		for (int32_t node : pendingInputs) {
-			const int32_t inputDelta = pendingComponentInputDeltas_[node];
-			const int32_t nextHighInputCount = nodeInputHighCounts_[node] + inputDelta;
-			nodeInputHighCounts_[node] = nextHighInputCount;
-			enqueueNewComponentGate(node, evaluate(node, nextHighInputCount));
-		}
-	};
-	const auto high = [](int32_t, int32_t highInputCount) {
-		return highInputCount != 0 ? uint8_t{1} : uint8_t{0};
-	};
-	const auto low = [](int32_t, int32_t highInputCount) {
-		return highInputCount == 0 ? uint8_t{1} : uint8_t{0};
-	};
-	const auto allHigh = [this](int32_t node, int32_t highInputCount) {
-		return highInputCount == nodeInputCounts_[node] ? uint8_t{1} : uint8_t{0};
-	};
-	const auto notAllHigh = [this](int32_t node, int32_t highInputCount) {
-		return highInputCount != nodeInputCounts_[node] ? uint8_t{1} : uint8_t{0};
-	};
-	const auto oddParity = [](int32_t, int32_t highInputCount) {
-		return (highInputCount & 1) != 0 ? uint8_t{1} : uint8_t{0};
-	};
-	const auto evenParity = [](int32_t, int32_t highInputCount) {
-		return (highInputCount & 1) == 0 ? uint8_t{1} : uint8_t{0};
-	};
-	const auto state = [this](int32_t node, int32_t) {
-		return nodeStates_[node];
-	};
-	const size_t stateIndex = static_cast<size_t>(EvaluationMode::State);
-	const size_t highIndex = static_cast<size_t>(EvaluationMode::High);
-	const size_t lowIndex = static_cast<size_t>(EvaluationMode::Low);
-	const size_t allHighIndex = static_cast<size_t>(EvaluationMode::AllHigh);
-	const size_t notAllHighIndex = static_cast<size_t>(EvaluationMode::NotAllHigh);
-	const size_t oddParityIndex = static_cast<size_t>(EvaluationMode::OddParity);
-	const size_t evenParityIndex = static_cast<size_t>(EvaluationMode::EvenParity);
-
-	flushZeroThresholdInputs(pendingNormalComponentInputsByMode_[highIndex], false);
-	flushZeroThresholdInputs(pendingNormalComponentInputsByMode_[lowIndex], true);
-	flushAllHighThresholdInputs(pendingNormalComponentInputsByMode_[allHighIndex], false);
-	flushAllHighThresholdInputs(pendingNormalComponentInputsByMode_[notAllHighIndex], true);
-	flushParityInputs(pendingNormalComponentInputsByMode_[oddParityIndex], false);
-	flushParityInputs(pendingNormalComponentInputsByMode_[evenParityIndex], true);
-
-	flushForceDeferredInputs(pendingForceDeferredComponentInputsByMode_[stateIndex], state);
-	flushForceDeferredInputs(pendingForceDeferredComponentInputsByMode_[highIndex], high);
-	flushForceDeferredInputs(pendingForceDeferredComponentInputsByMode_[lowIndex], low);
-	flushForceDeferredInputs(pendingForceDeferredComponentInputsByMode_[allHighIndex], allHigh);
-	flushForceDeferredInputs(pendingForceDeferredComponentInputsByMode_[notAllHighIndex], notAllHigh);
-	flushForceDeferredInputs(pendingForceDeferredComponentInputsByMode_[oddParityIndex], oddParity);
-	flushForceDeferredInputs(pendingForceDeferredComponentInputsByMode_[evenParityIndex], evenParity);
-}
-
-void SimulationCore::finishPropagationBatch(bool hasPrequeuedGates) {
+void SimulationCore::finishPropagationBatch() {
 	while (hasActiveConnectorWorkWords()) {
 		const size_t workWordIndex = firstActiveConnectorWorkWord();
 		uint64_t &workWord = connectorWorkWords_[workWordIndex];
@@ -1597,15 +1411,11 @@ void SimulationCore::finishPropagationBatch(bool hasPrequeuedGates) {
 		}
 		deactivateConnectorWorkWord(workWordIndex);
 	}
-	if (hasPrequeuedGates) {
-		flushComponentInputDeltas();
-		return;
-	}
-	flushUnqueuedComponentInputDeltas();
+	flushComponentInputDeltas();
 }
 
 void SimulationCore::drainConnectorQueue() {
-	beginPropagationBatch(true);
+	beginPropagationBatch();
 	// Seed every component transition before committing connectors, so converging paths share one final delta.
 	const size_t initialQueueSize = connectorQueueEvents_.size();
 	for (size_t cursor = 0; cursor < initialQueueSize; ++cursor) {
@@ -1615,7 +1425,7 @@ void SimulationCore::drainConnectorQueue() {
 		seedSourceDelta(source, highState ? 1 : -1);
 	}
 	connectorQueueEvents_.clear();
-	finishPropagationBatch(true);
+	finishPropagationBatch();
 }
 
 void SimulationCore::rebuildDerivedState(const std::vector<uint8_t> &componentStates) {
@@ -1639,7 +1449,9 @@ void SimulationCore::rebuildDerivedState(const std::vector<uint8_t> &componentSt
 			connectorQueueEvents_.push_back(encodeConnectorEvent(node, 1));
 		}
 	}
+	suppressLatchInputEdges_ = true;
 	drainConnectorQueue();
+	suppressLatchInputEdges_ = false;
 }
 
 void SimulationCore::resetInternal() {
@@ -1654,6 +1466,7 @@ void SimulationCore::resetInternal() {
 	currentGateActiveSummaryWordCount_ = 0;
 	std::fill(nextGateStates_.begin(), nextGateStates_.end(), 0);
 	std::fill(currentGateStates_.begin(), currentGateStates_.end(), 0);
+	std::fill(pendingComponentRisingCounts_.begin(), pendingComponentRisingCounts_.end(), 0);
 	connectorQueueEvents_.clear();
 	for (int32_t node = 0; node < static_cast<int32_t>(nodeStates_.size()); ++node) {
 		if (nodeStates_[node] != 0) {
@@ -1676,14 +1489,9 @@ void SimulationCore::resetInternal() {
 			connectorQueueEvents_.push_back(encodeConnectorEvent(node, 1));
 		}
 	}
+	suppressLatchInputEdges_ = true;
 	drainConnectorQueue();
-	// A static low Write produces no transition during reset, but it is still a Latch input.
-	// Queue every input-driven Latch once so its first tick samples the resolved initial value.
-	for (int32_t node : componentNodes_) {
-		if (nodeKinds_[node] == ToolKind::Latch && nodeInputCounts_[node] != 0) {
-			enqueueComponentGate(node, evaluateComponent(node));
-		}
-	}
+	suppressLatchInputEdges_ = false;
 }
 
 std::vector<int32_t> SimulationCore::getStates() const {
@@ -1748,6 +1556,9 @@ bool SimulationCore::toggleLatch(int32_t cellIndex, std::vector<int32_t> &change
 	const uint8_t previousState = nodeStates_[node];
 	const uint8_t nextState = previousState == 0 ? 1 : 0;
 	setNodeState(node, nextState);
+	if (isComponentGateQueued(node)) {
+		nextGateStates_[node] = nextGateStates_[node] == 0 ? 1 : 0;
+	}
 	propagateStateChange(node, previousState, nextState);
 	changes = drainStateChanges();
 	return true;
@@ -1781,7 +1592,7 @@ void SimulationCore::advanceState() {
 	std::swap(currentGateActiveSummaryWordCount_, nextGateActiveSummaryWordCount_);
 	clearNextGateFrontier();
 	connectorQueueEvents_.clear();
-	beginPropagationBatch(false);
+	beginPropagationBatch();
 	for (size_t summaryWordIndex = 0; summaryWordIndex < currentGateSummaryWords_.size(); ++summaryWordIndex) {
 		uint64_t summary = currentGateSummaryWords_[summaryWordIndex];
 		while (summary != 0) {
@@ -1816,7 +1627,7 @@ void SimulationCore::advanceState() {
 		clockPhases_[node] = phase;
 	}
 	// This tick begins with an empty next-gate frontier, and only the final flush can populate it.
-	finishPropagationBatch(false);
+	finishPropagationBatch();
 	++tickCount_;
 }
 

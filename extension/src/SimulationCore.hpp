@@ -87,10 +87,10 @@ private:
 		NotAllHigh,
 		OddParity,
 		EvenParity,
+		LatchToggle,
 	};
-	static constexpr uint8_t EvaluationModePolicyMask = 0x7FU;
-	static constexpr uint8_t ForceDeferredGatePolicyBit = 0x80U;
-	static constexpr size_t EvaluationModeCount = 7U;
+	static constexpr size_t SignalColorCount = 6U;
+	static constexpr size_t CrossChannelCount = SignalColorCount * 2U;
 	static constexpr size_t GateFrontierSparseClearDivisor = 4U;
 
 	struct Component {
@@ -133,18 +133,19 @@ private:
 	};
 
 	struct ReadBinding {
-		int32_t sourceComponent = -1;
-		int32_t sourceWriteCell = -1;
-		int32_t sourceNetwork = -1;
+		std::vector<int32_t> cells;
+		std::vector<int32_t> sourceComponents;
 		int32_t signalNetwork = -1;
 		std::vector<int32_t> outputNetworks;
+		std::vector<int32_t> adjacentWriteBindings;
 	};
 
 	struct WriteBinding {
-		int32_t cell = -1;
-		int32_t inputNetwork = -1;
-		int32_t inputReadCell = -1;
+		std::vector<int32_t> cells;
+		std::vector<int32_t> inputNetworks;
+		int32_t signalNetwork = -1;
 		std::vector<int32_t> targetComponents;
+		std::vector<int32_t> adjacentReadBindings;
 	};
 
 	static constexpr uint8_t ForcedVisibleNodeInitialState = 2;
@@ -156,7 +157,6 @@ private:
 	static bool isDevice(ToolKind kind);
 	static bool isReadSource(ToolKind kind);
 	static bool isWriteTarget(ToolKind kind);
-	static bool allowsMultipleWrites(ToolKind kind);
 	static int32_t colorForKind(ToolKind kind);
 	// Nonnegative events encode high states; bitwise complements encode low states.
 	static int32_t encodeConnectorEvent(int32_t node, uint8_t state) {
@@ -179,10 +179,9 @@ private:
 	void rebuildDerivedState(const std::vector<uint8_t> &componentStates);
 	void propagateStateChange(int32_t sourceNode, uint8_t oldState, uint8_t newState);
 	void drainConnectorQueue();
-	void beginPropagationBatch(bool hasPrequeuedGates);
-	void finishPropagationBatch(bool hasPrequeuedGates);
+	void beginPropagationBatch();
+	void finishPropagationBatch();
 	void flushComponentInputDeltas();
-	void flushUnqueuedComponentInputDeltas();
 	void clearNextGateFrontier();
 	void initializeConnectorWorkWordHierarchy(size_t workWordCount);
 	bool hasActiveConnectorWorkWords() const {
@@ -239,19 +238,15 @@ private:
 		if (componentInputStamps_[componentNode] != propagationStamp_) {
 			componentInputStamps_[componentNode] = propagationStamp_;
 			pendingComponentInputDeltas_[componentNode] = stateDelta;
-			if (collectSpecializedComponentInputs_) {
-				const uint8_t evaluationPolicy = nodeEvaluationPolicies_[componentNode];
-				const size_t evaluationMode = static_cast<size_t>(evaluationPolicy & EvaluationModePolicyMask);
-				auto &pendingInputs = (evaluationPolicy & ForceDeferredGatePolicyBit) != 0 ?
-						pendingForceDeferredComponentInputsByMode_[evaluationMode] :
-						pendingNormalComponentInputsByMode_[evaluationMode];
-				pendingInputs.push_back(componentNode);
-			} else {
-				pendingComponentInputs_.push_back(componentNode);
-			}
+			pendingComponentRisingCounts_[componentNode] =
+					!suppressLatchInputEdges_ && nodeKinds_[componentNode] == ToolKind::Latch && stateDelta > 0 ? 1 : 0;
+			pendingComponentInputs_.push_back(componentNode);
 			return;
 		}
 		pendingComponentInputDeltas_[componentNode] += stateDelta;
+		if (!suppressLatchInputEdges_ && nodeKinds_[componentNode] == ToolKind::Latch && stateDelta > 0) {
+			++pendingComponentRisingCounts_[componentNode];
+		}
 	}
 	void accumulateConnectorDelta(int32_t connectorNode, int32_t stateDelta) {
 		if (connectorDeltaStamps_[connectorNode] == propagationStamp_) {
@@ -360,15 +355,12 @@ private:
 	std::vector<Component> components_;
 	std::vector<ReadBinding> readBindings_;
 	std::vector<WriteBinding> writeBindings_;
-	std::vector<std::vector<int32_t>> componentInputNetworks_;
 	std::vector<int32_t> cellToComponent_;
 	std::vector<int32_t> cellNetwork_;
-	std::vector<int32_t> meshNetworkByCell_;
-	std::vector<int32_t> crossHorizontalNetworkByCell_;
-	std::vector<int32_t> crossVerticalNetworkByCell_;
+	std::vector<std::array<int32_t, SignalColorCount>> meshNetworksByCell_;
+	std::vector<std::array<int32_t, CrossChannelCount>> crossNetworksByCell_;
 	std::vector<int32_t> readBindingByCell_;
-	std::vector<int32_t> writeNetworkByCell_;
-	std::vector<int32_t> readVisibleNodeByCell_;
+	std::vector<int32_t> writeBindingByCell_;
 	std::vector<uint8_t> nodeStates_;
 	std::vector<uint8_t> networkStates_;
 	std::vector<int32_t> clockPhases_;
@@ -400,10 +392,9 @@ private:
 	std::vector<uint8_t> currentGateStates_;
 	ConnectorEventQueue connectorQueueEvents_;
 	std::vector<int32_t> pendingComponentInputDeltas_;
+	std::vector<int32_t> pendingComponentRisingCounts_;
 	std::vector<uint32_t> componentInputStamps_;
 	std::vector<int32_t> pendingComponentInputs_;
-	std::array<std::vector<int32_t>, EvaluationModeCount> pendingNormalComponentInputsByMode_;
-	std::array<std::vector<int32_t>, EvaluationModeCount> pendingForceDeferredComponentInputsByMode_;
 	std::vector<int32_t> pendingConnectorDeltas_;
 	std::vector<uint32_t> connectorDeltaStamps_;
 	std::vector<uint64_t> connectorWorkWords_;
@@ -411,11 +402,11 @@ private:
 	std::vector<uint64_t> connectorActiveWordHierarchy_;
 	std::vector<size_t> connectorActiveWordLevelOffsets_;
 	uint32_t propagationStamp_ = 1;
-	bool collectSpecializedComponentInputs_ = false;
+	bool suppressLatchInputEdges_ = false;
 	std::vector<size_t> visibleCellOffsets_;
 	std::vector<int32_t> visibleCellIndices_;
-	std::vector<int32_t> cellPrimaryNode_;
-	std::vector<int32_t> cellSecondaryNode_;
+	std::vector<size_t> cellVisibleNodeOffsets_;
+	std::vector<int32_t> cellVisibleNodes_;
 	std::vector<uint8_t> nodeHasVisibleCells_;
 	mutable std::vector<uint32_t> dirtyNodeStamps_;
 	mutable std::vector<uint8_t> dirtyNodeInitialStates_;

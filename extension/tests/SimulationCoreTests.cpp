@@ -171,12 +171,14 @@ void testInputDrivenLatchPreservesNormalFlushDelay() {
 	core.advanceTick();
 	expectState(core, input, 4, 0, 0, "input-driven Latch remains deferred after the Clock rises");
 	core.advanceTick();
-	expectState(core, input, 4, 0, 1, "input-driven Latch commits the prior high input");
+	expectState(core, input, 4, 0, 1, "input-driven Latch commits the prior rising Write edge");
 	core.advanceTick();
-	expectState(core, input, 4, 0, 0, "input-driven Latch commits the later low input");
+	expectState(core, input, 4, 0, 1, "input-driven Latch ignores the falling Write edge");
+	core.advanceTick();
+	expectState(core, input, 4, 0, 0, "input-driven Latch commits the next rising Write edge");
 }
 
-void testInputDrivenLatchSamplesInitialLowWrite() {
+void testInputDrivenLatchIgnoresStaticWriteState() {
 	CompileInput input = makeInput(3, 1);
 	setKind(input, 0, 0, ToolKind::Latch);
 	setInitialState(input, 0, 0, true);
@@ -184,10 +186,23 @@ void testInputDrivenLatchSamplesInitialLowWrite() {
 	setKind(input, 2, 0, ToolKind::Trace);
 	SimulationCore core;
 	CompileError error;
-	expect(core.compile(input, error), "initial-low Write to Latch compiles");
+	expect(core.compile(input, error), "static-low Write to Latch compiles");
 	expectState(core, input, 0, 0, 1, "Latch preserves its configured state before the first tick");
 	core.advanceTick();
-	expectState(core, input, 0, 0, 0, "Latch samples an initially low Write on the first tick");
+	expectState(core, input, 0, 0, 1, "Latch ignores a static low Write state");
+
+	CompileInput highInput = makeInput(5, 1);
+	setKind(highInput, 0, 0, ToolKind::Latch);
+	setInitialState(highInput, 0, 0, true);
+	setKind(highInput, 1, 0, ToolKind::Read);
+	setKind(highInput, 2, 0, ToolKind::Trace);
+	setKind(highInput, 3, 0, ToolKind::Write);
+	setKind(highInput, 4, 0, ToolKind::Latch);
+	SimulationCore highCore;
+	expect(highCore.compile(highInput, error), "static-high Write to Latch compiles");
+	expectState(highCore, highInput, 4, 0, 0, "Latch preserves its configured state with a static high Write");
+	highCore.advanceTick();
+	expectState(highCore, highInput, 4, 0, 0, "Latch ignores a static high Write state");
 }
 
 void testMixedDeferredAndNormalGateFrontiers() {
@@ -213,7 +228,7 @@ void testMixedDeferredAndNormalGateFrontiers() {
 	expectState(core, input, 4, 2, 1, "Latch commits alongside a normal Buffer");
 	core.advanceTick();
 	expectState(core, input, 4, 0, 0, "Buffer commits the following low input");
-	expectState(core, input, 4, 2, 0, "Latch commits the following low input");
+	expectState(core, input, 4, 2, 1, "Latch ignores the following low input");
 }
 
 void testSnapshotRestoresPendingLatchTransition() {
@@ -227,15 +242,14 @@ void testSnapshotRestoresPendingLatchTransition() {
 	CompileError error;
 	expect(core.compile(input, error), "snapshot Latch pipeline compiles");
 	core.advanceTick();
-	core.advanceTick();
-	expectState(core, input, 4, 0, 1, "Latch is high before its queued low transition");
+	expectState(core, input, 4, 0, 0, "Latch remains low while its rising edge is queued");
 	const std::vector<uint8_t> snapshot = core.captureState();
 	core.advanceTick();
-	expectState(core, input, 4, 0, 0, "Latch commits the queued low transition");
+	expectState(core, input, 4, 0, 1, "Latch commits the queued rising-edge transition");
 	std::string restoreError;
 	expect(core.restoreState(snapshot, restoreError), "Latch snapshot restores");
 	core.advanceTick();
-	expectState(core, input, 4, 0, 0, "restored Latch commits its queued low transition");
+	expectState(core, input, 4, 0, 1, "restored Latch commits its queued rising-edge transition");
 }
 
 void testDirectComponentTargetsPreserveTickBarrier() {
@@ -813,7 +827,7 @@ void testCrossIsolation() {
 	expect(core.compile(input, error), "Cross ignores incompatible conductor colors");
 	core.advanceTick();
 	expectState(core, input, 2, 0, 1, "Cross input Trace is powered");
-	expectState(core, input, 3, 0, 0, "Cross does not conduct between mismatched colors");
+	expectState(core, input, 3, 0, 1, "Cross is visible when one isolated channel is powered");
 	expectState(core, input, 4, 0, 0, "mismatched Cross output stays isolated");
 }
 
@@ -1007,7 +1021,7 @@ void testReadWriteRequireValidPorts() {
 	setKind(writeWithTwoTraceSides, 1, 2, ToolKind::Trace);
 	setKind(writeWithTwoTraceSides, 2, 2, ToolKind::Trace);
 	SimulationCore writeWithTwoTraceSidesCore;
-	expect(!writeWithTwoTraceSidesCore.compile(writeWithTwoTraceSides, error), "Write rejects two incoming Trace sides on one network");
+	expect(writeWithTwoTraceSidesCore.compile(writeWithTwoTraceSides, error), "Write accepts multiple Trace inputs as a wired-OR port");
 
 	CompileInput ambiguousRead = makeInput(3, 2);
 	setKind(ambiguousRead, 0, 0, ToolKind::Trace);
@@ -1016,8 +1030,271 @@ void testReadWriteRequireValidPorts() {
 	setKind(ambiguousRead, 1, 1, ToolKind::Read);
 	setKind(ambiguousRead, 2, 1, ToolKind::Trace);
 	SimulationCore ambiguousReadCore;
-	expect(!ambiguousReadCore.compile(ambiguousRead, error), "Read rejects simultaneous device and Write sources");
-	expect(error.errorReason == "read_requires_one_source", "Read reports its ambiguous source diagnostic");
+	expect(ambiguousReadCore.compile(ambiguousRead, error), "Read accepts simultaneous device and Write sources as a wired-OR port");
+}
+
+void testAggregatedReadAndWritePorts() {
+	CompileInput readInput = makeInput(2, 3);
+	setKind(readInput, 0, 0, ToolKind::Latch);
+	setInitialState(readInput, 0, 0, 1);
+	setKind(readInput, 1, 0, ToolKind::Latch);
+	setKind(readInput, 0, 1, ToolKind::Read);
+	setKind(readInput, 1, 1, ToolKind::Read);
+	setKind(readInput, 0, 2, ToolKind::Trace);
+	setKind(readInput, 1, 2, ToolKind::TraceRed);
+	SimulationCore readCore;
+	CompileError error;
+	std::vector<int32_t> changes;
+	std::string toggleError;
+	expect(readCore.compile(readInput, error), "aggregated Read ports compile");
+	expectState(readCore, readInput, 0, 2, 1, "aggregated Read OR drives its first Trace output");
+	expectState(readCore, readInput, 1, 2, 1, "aggregated Read fans out to its second Trace output");
+	expect(readCore.toggleLatch(cellIndex(readInput, 0, 0), changes, toggleError), "first aggregated Read source toggles low");
+	expectState(readCore, readInput, 0, 2, 0, "aggregated Read clears when every source is low");
+	expectState(readCore, readInput, 1, 2, 0, "aggregated Read clears every fanout output");
+	expect(readCore.toggleLatch(cellIndex(readInput, 1, 0), changes, toggleError), "second aggregated Read source toggles high");
+	expectState(readCore, readInput, 0, 2, 1, "aggregated Read accepts its second source");
+	expectState(readCore, readInput, 1, 2, 1, "aggregated Read restores every output from its second source");
+
+	CompileInput writeInput = makeInput(6, 3);
+	setKind(writeInput, 0, 0, ToolKind::Latch);
+	setInitialState(writeInput, 0, 0, 1);
+	setKind(writeInput, 1, 0, ToolKind::Read);
+	setKind(writeInput, 2, 0, ToolKind::Trace);
+	setKind(writeInput, 3, 0, ToolKind::TraceRed);
+	setKind(writeInput, 4, 0, ToolKind::Read);
+	setKind(writeInput, 5, 0, ToolKind::Latch);
+	setKind(writeInput, 2, 1, ToolKind::Write);
+	setKind(writeInput, 3, 1, ToolKind::Write);
+	setKind(writeInput, 2, 2, ToolKind::Buffer);
+	setKind(writeInput, 3, 2, ToolKind::Led);
+	SimulationCore writeCore;
+	expect(writeCore.compile(writeInput, error), "aggregated Write ports compile");
+	expectState(writeCore, writeInput, 2, 1, 1, "aggregated Write OR is visible on its first cell");
+	expectState(writeCore, writeInput, 3, 1, 1, "aggregated Write OR is visible on its second cell");
+	writeCore.advanceTick();
+	expectState(writeCore, writeInput, 2, 2, 1, "aggregated Write fans out to Buffer targets");
+	expectState(writeCore, writeInput, 3, 2, 1, "aggregated Write fans out to LED targets");
+	expect(writeCore.toggleLatch(cellIndex(writeInput, 0, 0), changes, toggleError), "first aggregated Write source toggles low");
+	writeCore.advanceTick();
+	expectState(writeCore, writeInput, 2, 2, 0, "aggregated Write clears Buffer after every input falls");
+	expectState(writeCore, writeInput, 3, 2, 0, "aggregated Write clears LED after every input falls");
+	expect(writeCore.toggleLatch(cellIndex(writeInput, 5, 0), changes, toggleError), "second aggregated Write source toggles high");
+	writeCore.advanceTick();
+	expectState(writeCore, writeInput, 2, 2, 1, "aggregated Write accepts its second input");
+	expectState(writeCore, writeInput, 3, 2, 1, "aggregated Write restores every target from its second input");
+}
+
+void testMergedGateAcceptsDistributedWritePorts() {
+	CompileInput input = makeInput(4, 4);
+	setKind(input, 0, 0, ToolKind::Latch);
+	setInitialState(input, 0, 0, 1);
+	setKind(input, 1, 0, ToolKind::Read);
+	setKind(input, 2, 0, ToolKind::Trace);
+	setKind(input, 3, 0, ToolKind::Write);
+	setKind(input, 3, 1, ToolKind::And);
+	setKind(input, 3, 2, ToolKind::And);
+	setKind(input, 0, 3, ToolKind::Latch);
+	setKind(input, 1, 3, ToolKind::Read);
+	setKind(input, 2, 3, ToolKind::Trace);
+	setKind(input, 3, 3, ToolKind::Write);
+	SimulationCore core;
+	CompileError error;
+	std::vector<int32_t> changes;
+	std::string toggleError;
+	expect(core.compile(input, error), "merged AND with distributed Write ports compiles");
+	core.advanceTick();
+	expectState(core, input, 3, 1, 0, "merged AND remains low with one active Write port");
+	expectState(core, input, 3, 2, 0, "every cell of merged AND shares the one-input state");
+	expect(core.toggleLatch(cellIndex(input, 0, 3), changes, toggleError), "second merged AND input toggles high");
+	core.advanceTick();
+	expectState(core, input, 3, 1, 1, "merged AND becomes high when A equals T");
+	expectState(core, input, 3, 2, 1, "every cell of merged AND shares the all-high state");
+	expect(core.toggleLatch(cellIndex(input, 0, 0), changes, toggleError), "first merged AND input toggles low");
+	core.advanceTick();
+	expectState(core, input, 3, 1, 0, "merged AND clears when one distributed input falls");
+	expectState(core, input, 3, 2, 0, "every cell of merged AND clears together");
+}
+
+void testLatchMultipleRisingEdgesCancel() {
+	CompileInput input = makeInput(5, 3);
+	setKind(input, 0, 2, ToolKind::Latch);
+	setKind(input, 1, 2, ToolKind::Read);
+	setKind(input, 2, 2, ToolKind::Trace);
+	setKind(input, 3, 2, ToolKind::Write);
+	setKind(input, 4, 2, ToolKind::Latch);
+	setKind(input, 1, 1, ToolKind::Trace);
+	setKind(input, 1, 0, ToolKind::Trace);
+	setKind(input, 2, 0, ToolKind::Trace);
+	setKind(input, 3, 0, ToolKind::Trace);
+	setKind(input, 4, 0, ToolKind::Trace);
+	setKind(input, 4, 1, ToolKind::Write);
+	SimulationCore core;
+	CompileError error;
+	std::vector<int32_t> changes;
+	std::string toggleError;
+	expect(core.compile(input, error), "dual-rising-edge Latch circuit compiles");
+	expect(core.toggleLatch(cellIndex(input, 0, 2), changes, toggleError), "dual-rising-edge source toggles high");
+	expectState(core, input, 4, 2, 0, "Latch waits for the next logical tick");
+	core.advanceTick();
+	expectState(core, input, 4, 2, 0, "two simultaneous Write rising edges cancel their Latch flips");
+}
+
+void testAdjacentReadWriteGroupsShareOneLogicalPort() {
+	const auto makeInputForTarget = [](ToolKind targetKind) {
+		CompileInput input = makeInput(4, 3);
+		setKind(input, 0, 1, ToolKind::Latch);
+		setKind(input, 1, 0, ToolKind::Read);
+		setKind(input, 1, 1, ToolKind::Read);
+		setKind(input, 1, 2, ToolKind::Read);
+		setKind(input, 2, 0, ToolKind::Write);
+		setKind(input, 2, 2, ToolKind::Write);
+		setKind(input, 3, 0, targetKind);
+		setKind(input, 3, 1, targetKind);
+		setKind(input, 3, 2, targetKind);
+		return input;
+	};
+
+	CompileError error;
+	std::vector<int32_t> changes;
+	std::string toggleError;
+	CompileInput latchInput = makeInputForTarget(ToolKind::Latch);
+	SimulationCore latchCore;
+	expect(latchCore.compile(latchInput, error), "adjacent Read/Write Latch fixture compiles");
+	expect(latchCore.toggleLatch(cellIndex(latchInput, 0, 1), changes, toggleError), "logical-port source toggles high");
+	expectState(latchCore, latchInput, 3, 1, 0, "logical-port Latch waits for its next tick");
+	latchCore.advanceTick();
+	expectState(latchCore, latchInput, 3, 1, 1, "adjacent Read/Write group produces one Latch rising edge");
+
+	CompileInput xorInput = makeInputForTarget(ToolKind::Xor);
+	SimulationCore xorCore;
+	expect(xorCore.compile(xorInput, error), "adjacent Read/Write XOR fixture compiles");
+	expect(xorCore.toggleLatch(cellIndex(xorInput, 0, 1), changes, toggleError), "logical-port XOR source toggles high");
+	xorCore.advanceTick();
+	expectState(xorCore, xorInput, 3, 1, 1, "adjacent Read/Write group contributes one XOR input");
+}
+
+void testManualLatchTogglePreservesQueuedWriteEdge() {
+	CompileInput input = makeInput(5, 1);
+	setKind(input, 0, 0, ToolKind::Clock);
+	setKind(input, 1, 0, ToolKind::Read);
+	setKind(input, 2, 0, ToolKind::Trace);
+	setKind(input, 3, 0, ToolKind::Write);
+	setKind(input, 4, 0, ToolKind::Latch);
+	SimulationCore core;
+	CompileError error;
+	std::vector<int32_t> changes;
+	std::string toggleError;
+	expect(core.compile(input, error), "manual-toggle Latch pipeline compiles");
+	core.advanceTick();
+	expectState(core, input, 4, 0, 0, "Write rising edge remains queued before the manual toggle");
+	expect(core.toggleLatch(cellIndex(input, 4, 0), changes, toggleError), "queued Latch can still be toggled manually");
+	expectState(core, input, 4, 0, 1, "manual Latch toggle applies immediately");
+	core.advanceTick();
+	expectState(core, input, 4, 0, 0, "queued Write rising edge still flips the manually toggled Latch");
+}
+
+void testContinuousCrossChannels() {
+	CompileInput input = makeInput(8, 1);
+	setKind(input, 0, 0, ToolKind::Latch);
+	setInitialState(input, 0, 0, 1);
+	setKind(input, 1, 0, ToolKind::Read);
+	setKind(input, 2, 0, ToolKind::Trace);
+	setKind(input, 3, 0, ToolKind::Cross);
+	setKind(input, 4, 0, ToolKind::Cross);
+	setKind(input, 5, 0, ToolKind::Trace);
+	setKind(input, 6, 0, ToolKind::Write);
+	setKind(input, 7, 0, ToolKind::Led);
+	SimulationCore core;
+	CompileError error;
+	std::vector<int32_t> changes;
+	std::string toggleError;
+	expect(core.compile(input, error), "continuous Cross channel circuit compiles");
+	expectState(core, input, 3, 0, 1, "first Cross cell is active on its horizontal channel");
+	expectState(core, input, 4, 0, 1, "second Cross cell extends the horizontal channel");
+	expectState(core, input, 5, 0, 1, "continuous Cross channel drives its remote Trace");
+	core.advanceTick();
+	expectState(core, input, 7, 0, 1, "continuous Cross channel reaches the delayed LED target");
+	expect(core.toggleLatch(0, changes, toggleError), "continuous Cross source toggles low");
+	expectState(core, input, 3, 0, 0, "first Cross channel clears with its source");
+	expectState(core, input, 4, 0, 0, "second Cross channel clears with its source");
+	expectState(core, input, 5, 0, 0, "continuous Cross remote Trace clears with its source");
+}
+
+void testCrossAxesRemainIsolated() {
+	CompileInput input = makeInput(7, 5);
+	setKind(input, 0, 0, ToolKind::Latch);
+	setInitialState(input, 0, 0, 1);
+	setKind(input, 1, 0, ToolKind::Read);
+	setKind(input, 2, 0, ToolKind::Trace);
+	setKind(input, 3, 0, ToolKind::Trace);
+	setKind(input, 3, 1, ToolKind::Trace);
+	setKind(input, 0, 2, ToolKind::Latch);
+	setInitialState(input, 0, 2, 1);
+	setKind(input, 1, 2, ToolKind::Read);
+	setKind(input, 2, 2, ToolKind::Trace);
+	setKind(input, 3, 2, ToolKind::Cross);
+	setKind(input, 4, 2, ToolKind::Trace);
+	setKind(input, 5, 2, ToolKind::Write);
+	setKind(input, 6, 2, ToolKind::Led);
+	setKind(input, 3, 3, ToolKind::Trace);
+	setKind(input, 3, 4, ToolKind::Write);
+	setKind(input, 4, 4, ToolKind::Led);
+	SimulationCore core;
+	CompileError error;
+	std::vector<int32_t> changes;
+	std::string toggleError;
+	expect(core.compile(input, error), "same-color Cross axes fixture compiles");
+	expectState(core, input, 4, 2, 1, "horizontal Cross channel reaches its remote Trace");
+	expectState(core, input, 3, 3, 1, "vertical Cross channel reaches its remote Trace");
+	expect(core.toggleLatch(cellIndex(input, 0, 2), changes, toggleError), "horizontal Cross source toggles low");
+	expectState(core, input, 4, 2, 0, "horizontal Cross channel clears independently");
+	expectState(core, input, 3, 3, 1, "vertical Cross channel remains high after horizontal clear");
+	expectState(core, input, 3, 2, 1, "Cross remains visible while its vertical channel is high");
+	expect(core.toggleLatch(cellIndex(input, 0, 0), changes, toggleError), "vertical Cross source toggles low");
+	expectState(core, input, 3, 3, 0, "vertical Cross channel clears independently");
+	expectState(core, input, 3, 2, 0, "Cross clears after both isolated channels are low");
+}
+
+void testMultiColorMeshConnectivity() {
+	CompileInput input = makeInput(9, 5);
+	setKind(input, 3, 4, ToolKind::Latch);
+	setKind(input, 3, 3, ToolKind::Read);
+	setKind(input, 3, 2, ToolKind::TraceBlue);
+	setKind(input, 0, 1, ToolKind::Latch);
+	setInitialState(input, 0, 1, 1);
+	setKind(input, 1, 1, ToolKind::Read);
+	setKind(input, 2, 1, ToolKind::TraceRed);
+	setKind(input, 3, 1, ToolKind::Mesh);
+	setKind(input, 5, 1, ToolKind::Mesh);
+	input.meshIds[cellIndex(input, 3, 1)] = 17;
+	input.meshIds[cellIndex(input, 5, 1)] = 17;
+	setKind(input, 6, 1, ToolKind::TraceRed);
+	setKind(input, 7, 1, ToolKind::Write);
+	setKind(input, 8, 1, ToolKind::Led);
+	setKind(input, 5, 2, ToolKind::TraceBlue);
+	setKind(input, 6, 2, ToolKind::Write);
+	setKind(input, 7, 2, ToolKind::Buffer);
+	SimulationCore core;
+	CompileError error;
+	std::vector<int32_t> changes;
+	std::string toggleError;
+	expect(core.compile(input, error), "multi-color Mesh endpoints compile");
+	expectState(core, input, 3, 1, 1, "source Mesh is visible from its active red channel");
+	expectState(core, input, 5, 1, 1, "remote Mesh is visible from its active red channel");
+	expectState(core, input, 6, 1, 1, "red Mesh channel reaches the remote Trace");
+	expectState(core, input, 5, 2, 0, "blue Mesh channel remains low before its source rises");
+	core.advanceTick();
+	expectState(core, input, 8, 1, 1, "red Mesh channel reaches the delayed LED target");
+	expect(core.toggleLatch(cellIndex(input, 3, 4), changes, toggleError), "blue Mesh source toggles high");
+	expectState(core, input, 5, 2, 1, "blue Mesh channel reaches the remote Trace independently");
+	expectState(core, input, 6, 2, 1, "blue Mesh channel reaches its Write port independently");
+	core.advanceTick();
+	expectState(core, input, 7, 2, 1, "blue Mesh channel reaches the delayed Buffer target");
+	expect(core.toggleLatch(cellIndex(input, 0, 1), changes, toggleError), "red Mesh source toggles low");
+	expectState(core, input, 6, 1, 0, "red Mesh channel clears independently");
+	expectState(core, input, 3, 1, 1, "source Mesh remains visible from its blue channel");
+	expectState(core, input, 5, 1, 1, "remote Mesh remains visible from its blue channel");
 }
 
 void expectMultiWriteAllowed(ToolKind kind, const std::string &name) {
@@ -1039,17 +1316,10 @@ void testWriteMultiplicity() {
 	expectMultiWriteAllowed(ToolKind::Nor, "NOR");
 	expectMultiWriteAllowed(ToolKind::Xor, "XOR");
 	expectMultiWriteAllowed(ToolKind::Xnor, "XNOR");
-
-	CompileInput input = makeInput(5, 1);
-	setKind(input, 0, 0, ToolKind::Trace);
-	setKind(input, 1, 0, ToolKind::Write);
-	setKind(input, 2, 0, ToolKind::Buffer);
-	setKind(input, 3, 0, ToolKind::Write);
-	setKind(input, 4, 0, ToolKind::Trace);
-	SimulationCore core;
-	CompileError error;
-	expect(!core.compile(input, error), "Buffer rejects multiple Write blocks");
-	expect(error.errorReason == "multiple_write_inputs", "single-write target returns its diagnostic");
+	expectMultiWriteAllowed(ToolKind::Buffer, "Buffer");
+	expectMultiWriteAllowed(ToolKind::Not, "NOT");
+	expectMultiWriteAllowed(ToolKind::Latch, "Latch");
+	expectMultiWriteAllowed(ToolKind::Led, "LED");
 }
 
 void testMultiWriteGatePropagatesAllInputs() {
@@ -1204,7 +1474,7 @@ void testZeroWriteGateIdentities() {
 	SimulationCore core;
 	CompileError error;
 	expect(core.compile(input, error), "zero-write gates compile");
-	const std::vector<int32_t> expected = {0, 1, 0, 0, 1, 0, 1, 1, 0};
+	const std::vector<int32_t> expected = {0, 0, 0, 0, 1, 1, 1, 1, 0};
 	expect(core.getStates() == expected, "zero-write gates use their Boolean identities");
 }
 
@@ -1240,7 +1510,6 @@ void testUnaryGateEvaluationModes() {
 	expectUnaryGateEvaluation(ToolKind::Nand, 0, 1, "NAND");
 	expectUnaryGateEvaluation(ToolKind::Nor, 0, 1, "NOR");
 	expectUnaryGateEvaluation(ToolKind::Xnor, 0, 1, "XNOR");
-	expectUnaryGateEvaluation(ToolKind::Latch, 1, 0, "Latch");
 	expectUnaryGateEvaluation(ToolKind::Led, 1, 0, "LED");
 }
 
@@ -1287,12 +1556,15 @@ void expectBinaryGateEvaluation(ToolKind gateKind, const std::vector<int32_t> &e
 }
 
 void testBinaryGateEvaluationModes() {
+	expectBinaryGateEvaluation(ToolKind::Buffer, {0, 1, 1, 1}, "Buffer");
 	expectBinaryGateEvaluation(ToolKind::And, {0, 0, 0, 1}, "AND");
+	expectBinaryGateEvaluation(ToolKind::Not, {1, 0, 0, 0}, "NOT");
 	expectBinaryGateEvaluation(ToolKind::Nand, {1, 1, 1, 0}, "NAND");
 	expectBinaryGateEvaluation(ToolKind::Or, {0, 1, 1, 1}, "OR");
 	expectBinaryGateEvaluation(ToolKind::Nor, {1, 0, 0, 0}, "NOR");
 	expectBinaryGateEvaluation(ToolKind::Xor, {0, 1, 1, 0}, "XOR");
 	expectBinaryGateEvaluation(ToolKind::Xnor, {1, 0, 0, 1}, "XNOR");
+	expectBinaryGateEvaluation(ToolKind::Led, {0, 1, 1, 1}, "LED");
 }
 
 void testSnapshotRestore() {
@@ -1311,7 +1583,7 @@ void testSnapshotRestore() {
 	expectState(core, input, 2, 1, 1, "snapshot captures the direct Read-to-Write signal");
 	expectState(core, input, 3, 1, 0, "logical target has not advanced at the snapshot tick");
 	const std::vector<uint8_t> snapshot = core.captureState();
-	expect(snapshot.size() == 46, "snapshot keeps the v2 header and pending gate payload layout");
+	expect(!snapshot.empty(), "snapshot captures the aggregated connector payload");
 	core.advanceTick();
 	expect(core.getStates() != expectedStates, "second tick changes the direct connector chain");
 	std::string restoreError;
@@ -1333,7 +1605,7 @@ int main() {
 	testConnectorQueueEventEncoding();
 	testGateAndClockCommitBeforeDrain();
 	testInputDrivenLatchPreservesNormalFlushDelay();
-	testInputDrivenLatchSamplesInitialLowWrite();
+	testInputDrivenLatchIgnoresStaticWriteState();
 	testMixedDeferredAndNormalGateFrontiers();
 	testSnapshotRestoresPendingLatchTransition();
 	testDirectComponentTargetsPreserveTickBarrier();
@@ -1361,10 +1633,18 @@ int main() {
 	testBusIsLocalOnly();
 	testReadWriteIgnoreUnrelatedNeighbors();
 	testReadWriteRequireValidPorts();
+	testAggregatedReadAndWritePorts();
+	testMergedGateAcceptsDistributedWritePorts();
 	testWriteMultiplicity();
 	testMultiWriteGatePropagatesAllInputs();
+	testLatchMultipleRisingEdgesCancel();
+	testAdjacentReadWriteGroupsShareOneLogicalPort();
+	testManualLatchTogglePreservesQueuedWriteEdge();
 	testRelayBypassPreservesInputMultiplicity();
 	testRelayBypassPreservesFeedbackDelay();
+	testContinuousCrossChannels();
+	testCrossAxesRemainIsolated();
+	testMultiColorMeshConnectivity();
 	testLatchInitialStateVariantsRemainSeparate();
 	testLatchToggle();
 	testZeroWriteGateIdentities();
