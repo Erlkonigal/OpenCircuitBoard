@@ -89,6 +89,7 @@ private:
 		EvenParity,
 		LatchToggle,
 	};
+	static constexpr size_t EvaluationModeCount = static_cast<size_t>(EvaluationMode::LatchToggle) + 1U;
 	static constexpr size_t SignalColorCount = 6U;
 	static constexpr size_t CrossChannelCount = SignalColorCount * 2U;
 	static constexpr size_t GateFrontierSparseClearDivisor = 4U;
@@ -179,9 +180,10 @@ private:
 	void rebuildDerivedState(const std::vector<uint8_t> &componentStates);
 	void propagateStateChange(int32_t sourceNode, uint8_t oldState, uint8_t newState);
 	void drainConnectorQueue();
-	void beginPropagationBatch();
-	void finishPropagationBatch();
-	void flushComponentInputDeltas();
+	void beginPropagationBatch(bool nextGateFrontierIsEmpty);
+	void finishPropagationBatch(bool nextGateFrontierIsEmpty);
+	void flushQueuedComponentInputDeltas();
+	void flushUnqueuedComponentInputDeltas();
 	void clearNextGateFrontier();
 	void initializeConnectorWorkWordHierarchy(size_t workWordCount);
 	bool hasActiveConnectorWorkWords() const {
@@ -238,13 +240,15 @@ private:
 		if (componentInputStamps_[componentNode] != propagationStamp_) {
 			componentInputStamps_[componentNode] = propagationStamp_;
 			pendingComponentInputDeltas_[componentNode] = stateDelta;
+			const EvaluationMode mode = static_cast<EvaluationMode>(nodeEvaluationPolicies_[componentNode]);
 			pendingComponentRisingCounts_[componentNode] =
-					!suppressLatchInputEdges_ && nodeKinds_[componentNode] == ToolKind::Latch && stateDelta > 0 ? 1 : 0;
-			pendingComponentInputs_.push_back(componentNode);
+					!suppressLatchInputEdges_ && mode == EvaluationMode::LatchToggle && stateDelta > 0 ? 1 : 0;
+			pendingComponentInputsByMode_[static_cast<size_t>(mode)].push_back(componentNode);
 			return;
 		}
 		pendingComponentInputDeltas_[componentNode] += stateDelta;
-		if (!suppressLatchInputEdges_ && nodeKinds_[componentNode] == ToolKind::Latch && stateDelta > 0) {
+		if (!suppressLatchInputEdges_ &&
+				static_cast<EvaluationMode>(nodeEvaluationPolicies_[componentNode]) == EvaluationMode::LatchToggle && stateDelta > 0) {
 			++pendingComponentRisingCounts_[componentNode];
 		}
 	}
@@ -394,7 +398,7 @@ private:
 	std::vector<int32_t> pendingComponentInputDeltas_;
 	std::vector<int32_t> pendingComponentRisingCounts_;
 	std::vector<uint32_t> componentInputStamps_;
-	std::vector<int32_t> pendingComponentInputs_;
+	std::array<std::vector<int32_t>, EvaluationModeCount> pendingComponentInputsByMode_;
 	std::vector<int32_t> pendingConnectorDeltas_;
 	std::vector<uint32_t> connectorDeltaStamps_;
 	std::vector<uint64_t> connectorWorkWords_;

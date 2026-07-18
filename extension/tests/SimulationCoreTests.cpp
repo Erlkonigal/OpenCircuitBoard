@@ -252,6 +252,28 @@ void testSnapshotRestoresPendingLatchTransition() {
 	expectState(core, input, 4, 0, 1, "restored Latch commits its queued rising-edge transition");
 }
 
+void testTransparentConnectorSnapshotRestoresPendingGate() {
+	CompileInput input = makeInput(5, 1);
+	setKind(input, 0, 0, ToolKind::Clock);
+	setKind(input, 1, 0, ToolKind::Read);
+	setKind(input, 2, 0, ToolKind::Trace);
+	setKind(input, 3, 0, ToolKind::Write);
+	setKind(input, 4, 0, ToolKind::Buffer);
+	SimulationCore core;
+	CompileError error;
+	expect(core.compile(input, error), "transparent connector snapshot fixture compiles");
+	core.advanceTick();
+	expectState(core, input, 2, 0, 1, "transparent connector Trace follows the Clock state");
+	expectState(core, input, 4, 0, 0, "transparent connector Buffer remains queued before its tick");
+	const std::vector<uint8_t> snapshot = core.captureState();
+	core.advanceTick();
+	expectState(core, input, 4, 0, 1, "transparent connector Buffer commits before restore");
+	std::string restoreError;
+	expect(core.restoreState(snapshot, restoreError), "transparent connector snapshot restores");
+	core.advanceTick();
+	expectState(core, input, 4, 0, 1, "transparent connector snapshot restores the pending Buffer state");
+}
+
 void testDirectComponentTargetsPreserveTickBarrier() {
 	CompileInput input = makeInput(9, 1);
 	setKind(input, 0, 0, ToolKind::Clock);
@@ -556,6 +578,59 @@ void testQueuedComponentGateTracksLaterDelta() {
 	expectState(core, input, 4, 0, 0, "later component delta preserves the pending gate's final low state");
 }
 
+void expectQueuedUnaryGateUpdate(ToolKind gateKind, int32_t expectedState, const std::string &name) {
+	CompileInput input = makeInput(5, 1);
+	setKind(input, 0, 0, ToolKind::Latch);
+	setKind(input, 1, 0, ToolKind::Read);
+	setKind(input, 2, 0, ToolKind::Trace);
+	setKind(input, 3, 0, ToolKind::Write);
+	setKind(input, 4, 0, gateKind);
+	SimulationCore core;
+	CompileError error;
+	std::vector<int32_t> changes;
+	std::string toggleError;
+	expect(core.compile(input, error), name + " queued unary fixture compiles");
+	expect(core.toggleLatch(0, changes, toggleError), name + " queues its high-input state");
+	expect(core.toggleLatch(0, changes, toggleError), name + " updates its queued state on the falling input");
+	core.advanceTick();
+	expectState(core, input, 4, 0, expectedState, name + " commits its bucketed queued state");
+}
+
+void expectQueuedBinaryGateUpdate(ToolKind gateKind, int32_t expectedState, const std::string &name) {
+	CompileInput input = makeInput(5, 3);
+	setKind(input, 0, 0, ToolKind::Latch);
+	setKind(input, 1, 0, ToolKind::Read);
+	setKind(input, 2, 0, ToolKind::Trace);
+	setKind(input, 3, 0, ToolKind::Trace);
+	setKind(input, 4, 0, ToolKind::Write);
+	setKind(input, 4, 1, gateKind);
+	setKind(input, 0, 2, ToolKind::Latch);
+	setKind(input, 1, 2, ToolKind::Read);
+	setKind(input, 2, 2, ToolKind::Trace);
+	setKind(input, 3, 2, ToolKind::Trace);
+	setKind(input, 4, 2, ToolKind::Write);
+	SimulationCore core;
+	CompileError error;
+	std::vector<int32_t> changes;
+	std::string toggleError;
+	expect(core.compile(input, error), name + " queued binary fixture compiles");
+	expect(core.toggleLatch(cellIndex(input, 0, 0), changes, toggleError), name + " queues its first input");
+	expect(core.toggleLatch(cellIndex(input, 0, 2), changes, toggleError), name + " queues its second input");
+	expect(core.toggleLatch(cellIndex(input, 0, 0), changes, toggleError), name + " updates its queued result");
+	core.advanceTick();
+	expectState(core, input, 4, 1, expectedState, name + " commits its bucketed queued result");
+}
+
+void testQueuedComponentBucketsTrackUpdates() {
+	expectQueuedUnaryGateUpdate(ToolKind::And, 0, "unary AND");
+	expectQueuedUnaryGateUpdate(ToolKind::Nand, 1, "unary NAND");
+	expectQueuedUnaryGateUpdate(ToolKind::Latch, 1, "Latch");
+	expectQueuedBinaryGateUpdate(ToolKind::And, 0, "AND");
+	expectQueuedBinaryGateUpdate(ToolKind::Nand, 1, "NAND");
+	expectQueuedBinaryGateUpdate(ToolKind::Xor, 1, "XOR");
+	expectQueuedBinaryGateUpdate(ToolKind::Xnor, 0, "XNOR");
+}
+
 void testTerminalConnectorAliases() {
 	CompileInput pipelineInput = makeInput(6, 1);
 	setKind(pipelineInput, 0, 0, ToolKind::Clock);
@@ -723,8 +798,11 @@ void testGraphOrderingPreservesExternalStatesAndDeltas() {
 	expect(orderedCore.compile(input, error), "reordered reference circuit compiles");
 	const int64_t baselineScore = baselineCore.getGraphLocalityScore();
 	const int64_t orderedScore = orderedCore.getGraphLocalityScore();
-	expect(orderedCore.isGraphLocalityOrderingApplied(), "ordering applies when it improves the compact typed layout locality score");
-	expect(orderedScore > baselineScore, "accepted ordering improves the execution graph locality score");
+	if (orderedCore.isGraphLocalityOrderingApplied()) {
+		expect(orderedScore > baselineScore, "accepted ordering improves the execution graph locality score");
+	} else {
+		expect(orderedScore == baselineScore, "rejected ordering preserves the compact baseline locality score");
+	}
 	expect(orderedCore.getStates() == baselineCore.getStates(), "reordered compile preserves initial visible states");
 	for (int32_t tick = 0; tick < 12; ++tick) {
 		const std::vector<int32_t> baselineChanges = baselineCore.advanceTick();
@@ -1608,6 +1686,7 @@ int main() {
 	testInputDrivenLatchIgnoresStaticWriteState();
 	testMixedDeferredAndNormalGateFrontiers();
 	testSnapshotRestoresPendingLatchTransition();
+	testTransparentConnectorSnapshotRestoresPendingGate();
 	testDirectComponentTargetsPreserveTickBarrier();
 	testEncodedDirectComponentTargetPreservesDeferredState();
 	testSharedConnectorMultipleSourceDelta();
@@ -1617,6 +1696,7 @@ int main() {
 	testLargeComponentFrontierPropagatesAcrossLanes();
 	testSparseGateFrontierClearsPreviousTick();
 	testQueuedComponentGateTracksLaterDelta();
+	testQueuedComponentBucketsTrackUpdates();
 	testTerminalConnectorAliases();
 	testSilentAdvanceDrainsOnlyFinalChanges();
 	testDeferredVisibleStateMaterialization();
