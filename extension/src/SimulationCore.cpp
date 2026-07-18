@@ -264,7 +264,9 @@ bool SimulationCore::isKnownKind(int32_t kind) {
 	return kind >= static_cast<int32_t>(ToolKind::Empty) && kind <= static_cast<int32_t>(ToolKind::Led);
 }
 
-SimulationCore::SimulationCore(bool useGraphLocalityOrdering) : useGraphLocalityOrdering_(useGraphLocalityOrdering) {
+SimulationCore::SimulationCore(bool useGraphLocalityOrdering, bool collectGraphLocalityScore) :
+		useGraphLocalityOrdering_(useGraphLocalityOrdering),
+		collectGraphLocalityScore_(collectGraphLocalityScore) {
 }
 
 bool SimulationCore::isTrace(ToolKind kind) {
@@ -503,7 +505,7 @@ void SimulationCore::clear() {
 	changeStamp_ = 1;
 }
 
-bool SimulationCore::compile(const CompileInput &input, CompileError &error) {
+bool SimulationCore::compile(CompileInput input, CompileError &error) {
 	clear();
 	error = CompileError();
 	const auto fail = [&](int32_t cell, const char *reason) {
@@ -531,11 +533,14 @@ bool SimulationCore::compile(const CompileInput &input, CompileError &error) {
 
 	width_ = input.width;
 	height_ = input.height;
-	kinds_ = input.kinds;
-	initialStates_ = input.initialStates;
-	clockHoldTicks_ = input.clockHoldTicks;
-	meshIds_ = input.meshIds;
+	kinds_ = std::move(input.kinds);
+	initialStates_ = std::move(input.initialStates);
+	clockHoldTicks_ = std::move(input.clockHoldTicks);
+	meshIds_ = std::move(input.meshIds);
 
+	uint64_t topologySignature = FnvOffsetBasis;
+	hashInt(topologySignature, width_);
+	hashInt(topologySignature, height_);
 	for (int32_t cell = 0; cell < cellCount; ++cell) {
 		const ToolKind kind = static_cast<ToolKind>(kinds_[cell]);
 		if (!isKnownKind(kinds_[cell])) {
@@ -547,7 +552,12 @@ bool SimulationCore::compile(const CompileInput &input, CompileError &error) {
 		if (kind == ToolKind::Mesh && meshIds_[cell] <= 0) {
 			return fail(cell, "missing_mesh_id");
 		}
+		hashInt(topologySignature, kinds_[cell]);
+		hashInt(topologySignature, initialStates_[cell]);
+		hashInt(topologySignature, clockHoldTicks_[cell]);
+		hashInt(topologySignature, meshIds_[cell]);
 	}
+	topologySignature_ = topologySignature;
 
 	const auto neighborAt = [&](int32_t cell, int32_t dx, int32_t dy) {
 		const int32_t x = cell % width_;
@@ -560,51 +570,51 @@ bool SimulationCore::compile(const CompileInput &input, CompileError &error) {
 		return nextY * width_ + nextX;
 	};
 	const std::array<std::array<int32_t, 2>, 4> directions = {{{-1, 0}, {1, 0}, {0, -1}, {0, 1}}};
-	DisjointSet componentSet(cellCount);
-	for (int32_t cell = 0; cell < cellCount; ++cell) {
-		const ToolKind kind = static_cast<ToolKind>(kinds_[cell]);
-		if (!isDevice(kind)) {
-			continue;
-		}
-		for (const std::array<int32_t, 2> direction : {std::array<int32_t, 2>{1, 0}, std::array<int32_t, 2>{0, 1}}) {
-			const int32_t neighbor = neighborAt(cell, direction[0], direction[1]);
-			if (neighbor < 0 || static_cast<ToolKind>(kinds_[neighbor]) != kind) {
-				continue;
-			}
-			if (kind == ToolKind::Clock && clockHoldTicks_[cell] != clockHoldTicks_[neighbor]) {
-				continue;
-			}
-			if (kind == ToolKind::Latch && (initialStates_[cell] != 0) != (initialStates_[neighbor] != 0)) {
-				continue;
-			}
-			componentSet.unite(cell, neighbor);
-		}
-	}
-
 	cellToComponent_.assign(cellCount, -1);
-	std::unordered_map<int32_t, int32_t> componentByRoot;
-	for (int32_t cell = 0; cell < cellCount; ++cell) {
-		const ToolKind kind = static_cast<ToolKind>(kinds_[cell]);
-		if (!isDevice(kind)) {
-			continue;
+	{
+		DisjointSet componentSet(cellCount);
+		for (int32_t cell = 0; cell < cellCount; ++cell) {
+			const ToolKind kind = static_cast<ToolKind>(kinds_[cell]);
+			if (!isDevice(kind)) {
+				continue;
+			}
+			for (const std::array<int32_t, 2> direction : {std::array<int32_t, 2>{1, 0}, std::array<int32_t, 2>{0, 1}}) {
+				const int32_t neighbor = neighborAt(cell, direction[0], direction[1]);
+				if (neighbor < 0 || static_cast<ToolKind>(kinds_[neighbor]) != kind) {
+					continue;
+				}
+				if (kind == ToolKind::Clock && clockHoldTicks_[cell] != clockHoldTicks_[neighbor]) {
+					continue;
+				}
+				if (kind == ToolKind::Latch && (initialStates_[cell] != 0) != (initialStates_[neighbor] != 0)) {
+					continue;
+				}
+				componentSet.unite(cell, neighbor);
+			}
 		}
-		const int32_t root = componentSet.find(cell);
-		auto found = componentByRoot.find(root);
-		int32_t componentId = -1;
-		if (found == componentByRoot.end()) {
-			componentId = static_cast<int32_t>(components_.size());
-			componentByRoot.emplace(root, componentId);
-			Component component;
-			component.kind = kind;
-			component.clockHoldTicks = kind == ToolKind::Clock ? clockHoldTicks_[cell] : 0;
-			component.latchInitialState = initialStates_[cell] != 0 ? 1 : 0;
-			components_.push_back(std::move(component));
-		} else {
-			componentId = found->second;
+
+		std::unordered_map<int32_t, int32_t> componentByRoot;
+		for (int32_t cell = 0; cell < cellCount; ++cell) {
+			const ToolKind kind = static_cast<ToolKind>(kinds_[cell]);
+			if (!isDevice(kind)) {
+				continue;
+			}
+			const int32_t root = componentSet.find(cell);
+			auto found = componentByRoot.find(root);
+			int32_t componentId = -1;
+			if (found == componentByRoot.end()) {
+				componentId = static_cast<int32_t>(components_.size());
+				componentByRoot.emplace(root, componentId);
+				Component component;
+				component.kind = kind;
+				component.clockHoldTicks = kind == ToolKind::Clock ? clockHoldTicks_[cell] : 0;
+				component.latchInitialState = initialStates_[cell] != 0 ? 1 : 0;
+				components_.push_back(std::move(component));
+			} else {
+				componentId = found->second;
+			}
+			cellToComponent_[cell] = componentId;
 		}
-		Component &component = components_[componentId];
-		component.cells.push_back(cell);
-		cellToComponent_[cell] = componentId;
 	}
 
 	DisjointSet portSet(cellCount);
@@ -743,6 +753,10 @@ bool SimulationCore::compile(const CompileInput &input, CompileError &error) {
 		}
 	}
 	networkStates_.assign(networkByRoot.size(), 0);
+	std::vector<std::array<int32_t, CrossChannelCount>>().swap(crossAnchors);
+	std::vector<std::array<int32_t, SignalColorCount>>().swap(meshAnchorsByCell);
+	std::unordered_map<uint64_t, int32_t>().swap(meshAnchors);
+	std::unordered_map<int32_t, int32_t>().swap(networkByRoot);
 
 	readBindingByCell_.assign(cellCount, -1);
 	writeBindingByCell_.assign(cellCount, -1);
@@ -764,7 +778,9 @@ bool SimulationCore::compile(const CompileInput &input, CompileError &error) {
 			} else {
 				bindingId = found->second;
 			}
-			readBindings_[bindingId].cells.push_back(cell);
+			if (readBindings_[bindingId].firstCell < 0) {
+				readBindings_[bindingId].firstCell = cell;
+			}
 			readBindingByCell_[cell] = bindingId;
 			continue;
 		}
@@ -777,7 +793,9 @@ bool SimulationCore::compile(const CompileInput &input, CompileError &error) {
 		} else {
 			bindingId = found->second;
 		}
-		writeBindings_[bindingId].cells.push_back(cell);
+		if (writeBindings_[bindingId].firstCell < 0) {
+			writeBindings_[bindingId].firstCell = cell;
+		}
 		writeBindingByCell_[cell] = bindingId;
 	}
 
@@ -840,28 +858,28 @@ bool SimulationCore::compile(const CompileInput &input, CompileError &error) {
 	}
 	for (const ReadBinding &binding : readBindings_) {
 		if (binding.sourceComponents.empty() && binding.adjacentWriteBindings.empty()) {
-			return fail(binding.cells.front(), "read_requires_one_source");
+			return fail(binding.firstCell, "read_requires_one_source");
 		}
 		if (binding.outputNetworks.empty() && binding.adjacentWriteBindings.empty()) {
-			return fail(binding.cells.front(), "read_requires_output");
+			return fail(binding.firstCell, "read_requires_output");
 		}
 	}
 	for (const WriteBinding &binding : writeBindings_) {
 		if (binding.inputNetworks.empty() && binding.adjacentReadBindings.empty()) {
-			return fail(binding.cells.front(), "write_requires_one_input");
+			return fail(binding.firstCell, "write_requires_one_input");
 		}
 		if (binding.targetComponents.empty() && binding.adjacentReadBindings.empty()) {
-			return fail(binding.cells.front(), "write_requires_target");
+			return fail(binding.firstCell, "write_requires_target");
 		}
 	}
 	for (int32_t bindingId = 0; bindingId < static_cast<int32_t>(readBindings_.size()); ++bindingId) {
 		if (readHasInput[bindingId] == 0) {
-			return fail(readBindings_[bindingId].cells.front(), "read_requires_one_source");
+			return fail(readBindings_[bindingId].firstCell, "read_requires_one_source");
 		}
 	}
 	for (int32_t bindingId = 0; bindingId < static_cast<int32_t>(writeBindings_.size()); ++bindingId) {
 		if (writeHasInput[bindingId] == 0) {
-			return fail(writeBindings_[bindingId].cells.front(), "write_requires_one_input");
+			return fail(writeBindings_[bindingId].firstCell, "write_requires_one_input");
 		}
 	}
 	for (ReadBinding &binding : readBindings_) {
@@ -874,7 +892,6 @@ bool SimulationCore::compile(const CompileInput &input, CompileError &error) {
 	}
 
 	buildExecutionGraph();
-	topologySignature_ = makeTopologySignature();
 	if (!commitRuntimeBuffers()) {
 		return fail(-1, "runtime_arena_allocation_failed");
 	}
@@ -1048,12 +1065,13 @@ void SimulationCore::buildExecutionGraph() {
 			order = std::move(candidateOrder);
 			graphLocalityOrderingApplied_ = true;
 		}
+		if (collectGraphLocalityScore_) {
+			graphLocalityScore_ = graphLocalityOrderingApplied_ ? candidateScore : identityScore;
+		}
+	} else if (collectGraphLocalityScore_) {
+		graphLocalityScore_ = GraphLocalityOrderer::calculateLocalityScore(
+				originalNodeCount, originalOutgoingOffsets, originalOutgoingTargets, order.oldToNew);
 	}
-	graphLocalityScore_ = GraphLocalityOrderer::calculateLocalityScore(
-			originalNodeCount,
-			originalOutgoingOffsets,
-			originalOutgoingTargets,
-			order.oldToNew);
 
 	std::vector<std::vector<int32_t>> reorderedOutgoing(originalNodeCount);
 	for (int32_t source = 0; source < originalNodeCount; ++source) {
@@ -1827,15 +1845,17 @@ bool SimulationCore::copyVisibleStates(uint8_t *states, size_t capacity) const {
 	if (!compiled_ || states == nullptr || capacity < visibleStates_.size()) {
 		return false;
 	}
-	if (isVisualTrackingDeferred_) {
-		for (int32_t cell = 0; cell < static_cast<int32_t>(visibleStates_.size()); ++cell) {
-			states[cell] = resolveVisibleCellState(cell);
-		}
-		return true;
-	}
 	materializeVisibleStates();
 	std::copy(visibleStates_.begin(), visibleStates_.end(), states);
 	return true;
+}
+
+const uint8_t *SimulationCore::getVisibleStatesData() const {
+	if (!compiled_) {
+		return nullptr;
+	}
+	materializeVisibleStates();
+	return visibleStates_.data();
 }
 
 bool SimulationCore::beginDeferredVisualTracking() {
@@ -1853,16 +1873,9 @@ void SimulationCore::endDeferredVisualTracking() {
 	if (!isVisualTrackingDeferred_) {
 		return;
 	}
-	for (int32_t cell = 0; cell < static_cast<int32_t>(visibleStates_.size()); ++cell) {
-		const uint8_t state = resolveVisibleCellState(cell);
-		visibleStates_[cell] = state;
-		reportedVisibleStates_[cell] = state;
-	}
-	dirtyNodes_.clear();
-	++dirtyNodeStamp_;
-	if (dirtyNodeStamp_ == 0) {
-		std::fill(dirtyNodeStamps_.begin(), dirtyNodeStamps_.end(), 0);
-		dirtyNodeStamp_ = 1;
+	materializeVisibleStates();
+	for (int32_t cell : changedCells_) {
+		reportedVisibleStates_[cell] = visibleStates_[cell];
 	}
 	resetChangeCollector();
 	isVisualTrackingDeferred_ = false;
@@ -1873,12 +1886,6 @@ std::vector<int32_t> SimulationCore::getStates() const {
 		return {};
 	}
 	std::vector<int32_t> states(visibleStates_.size(), 0);
-	if (isVisualTrackingDeferred_) {
-		for (int32_t cell = 0; cell < static_cast<int32_t>(states.size()); ++cell) {
-			states[cell] = resolveVisibleCellState(cell);
-		}
-		return states;
-	}
 	materializeVisibleStates();
 	for (int32_t cell = 0; cell < static_cast<int32_t>(states.size()); ++cell) {
 		states[cell] = visibleStates_[cell];
@@ -1899,7 +1906,6 @@ size_t SimulationCore::drainStateChangesTo(int32_t *changes, size_t capacity) {
 	if (!compiled_) {
 		return 0;
 	}
-	assert(!isVisualTrackingDeferred_);
 	materializeVisibleStates();
 	if (changedCells_.empty()) {
 		return 0;
@@ -2075,19 +2081,6 @@ std::vector<int32_t> SimulationCore::reset() {
 		return {};
 	}
 	return drainStateChanges();
-}
-
-uint64_t SimulationCore::makeTopologySignature() const {
-	uint64_t hash = FnvOffsetBasis;
-	hashInt(hash, width_);
-	hashInt(hash, height_);
-	for (int32_t cell = 0; cell < static_cast<int32_t>(kinds_.size()); ++cell) {
-		hashInt(hash, kinds_[cell]);
-		hashInt(hash, initialStates_[cell]);
-		hashInt(hash, clockHoldTicks_[cell]);
-		hashInt(hash, meshIds_[cell]);
-	}
-	return hash;
 }
 
 std::vector<uint8_t> SimulationCore::captureState() const {

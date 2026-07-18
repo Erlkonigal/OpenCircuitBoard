@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cstring>
 #include <limits>
 #include <new>
 #include <system_error>
@@ -39,11 +40,16 @@ void OcbSimulation::_bind_methods() {
 			&OcbSimulation::advanceTicksForDurationAndDrainStateChanges);
 	ClassDB::bind_method(godot::D_METHOD("drainStateChanges"), &OcbSimulation::drainStateChanges);
 	ClassDB::bind_method(godot::D_METHOD("getStates"), &OcbSimulation::getStates);
+	ClassDB::bind_method(godot::D_METHOD("getStateBytes"), &OcbSimulation::getStateBytes);
 	ClassDB::bind_method(godot::D_METHOD("toggleLatch", "cellIndex"), &OcbSimulation::toggleLatch);
 	ClassDB::bind_method(godot::D_METHOD("reset"), &OcbSimulation::reset);
 	ClassDB::bind_method(godot::D_METHOD("captureState"), &OcbSimulation::captureState);
 	ClassDB::bind_method(godot::D_METHOD("restoreState", "snapshot"), &OcbSimulation::restoreState);
+	ClassDB::bind_method(godot::D_METHOD("restoreStateSilent", "snapshot"), &OcbSimulation::restoreStateSilent);
 	ClassDB::bind_method(godot::D_METHOD("startAsync", "batchTickCount", "publishIntervalUsec"), &OcbSimulation::startAsync);
+	ClassDB::bind_method(
+			godot::D_METHOD("startAsyncWithBudget", "batchTickCount", "publishIntervalUsec", "batchBudgetUsec"),
+			&OcbSimulation::startAsyncWithBudget);
 	ClassDB::bind_method(godot::D_METHOD("pollAsync"), &OcbSimulation::pollAsync);
 	ClassDB::bind_method(godot::D_METHOD("stopAsync"), &OcbSimulation::stopAsync);
 	ClassDB::bind_method(godot::D_METHOD("isAsyncRunning"), &OcbSimulation::isAsyncRunning);
@@ -52,8 +58,9 @@ void OcbSimulation::_bind_methods() {
 godot::PackedInt32Array OcbSimulation::makePackedInt32Array(const int32_t *values, size_t valueCount) {
 	godot::PackedInt32Array result;
 	result.resize(static_cast<int64_t>(valueCount));
-	for (int64_t index = 0; index < static_cast<int64_t>(valueCount); ++index) {
-		result[index] = values[static_cast<size_t>(index)];
+	if (valueCount != 0) {
+		assert(values != nullptr);
+		std::memcpy(result.ptrw(), values, valueCount * sizeof(int32_t));
 	}
 	return result;
 }
@@ -61,8 +68,12 @@ godot::PackedInt32Array OcbSimulation::makePackedInt32Array(const int32_t *value
 godot::PackedInt32Array OcbSimulation::makePackedInt32Array(const uint8_t *values, size_t valueCount) {
 	godot::PackedInt32Array result;
 	result.resize(static_cast<int64_t>(valueCount));
-	for (int64_t index = 0; index < static_cast<int64_t>(valueCount); ++index) {
-		result[index] = values[static_cast<size_t>(index)];
+	if (valueCount != 0) {
+		assert(values != nullptr);
+		int32_t *output = result.ptrw();
+		for (size_t index = 0; index < valueCount; ++index) {
+			output[index] = values[index];
+		}
 	}
 	return result;
 }
@@ -70,16 +81,21 @@ godot::PackedInt32Array OcbSimulation::makePackedInt32Array(const uint8_t *value
 void OcbSimulation::clearRuntimeBuffers() {
 	stateChangeBuffer_.reset();
 	visibleStateBuffer_.reset();
-	asyncFrameStates_.reset();
-	asyncPresentedStates_.reset();
+	asyncFullFrameStates_.reset();
 	runtimeCellCount_ = 0;
 	asyncPublishedFrame_.store(-1, std::memory_order_relaxed);
 	asyncCompletedTickCount_.store(0, std::memory_order_relaxed);
+	asyncAcknowledgedGeneration_.store(0, std::memory_order_relaxed);
+	asyncOutstandingGeneration_ = 0;
+	asyncOutstandingFrame_ = -1;
 	asyncLastPresentedGeneration_ = 0;
 	asyncLastReportedTickCount_ = 0;
 	for (AsyncFrame &frame : asyncFrames_) {
 		frame.readerCount.store(0, std::memory_order_relaxed);
 		frame.generation = 0;
+		frame.changeValueCount = 0;
+		frame.isFullState = false;
+		frame.awaitingAcknowledgement = false;
 	}
 }
 
@@ -115,8 +131,8 @@ godot::Dictionary OcbSimulation::compileGrid(
 	input.height = height;
 	const auto copyArray = [](const godot::PackedInt32Array &source, std::vector<int32_t> &target) {
 		target.resize(static_cast<size_t>(source.size()));
-		for (int64_t index = 0; index < source.size(); ++index) {
-			target[static_cast<size_t>(index)] = source[index];
+		if (!target.empty()) {
+			std::memcpy(target.data(), source.ptr(), target.size() * sizeof(int32_t));
 		}
 	};
 	copyArray(kinds, input.kinds);
@@ -126,7 +142,7 @@ godot::Dictionary OcbSimulation::compileGrid(
 
 	CompileError error;
 	godot::Dictionary result;
-	if (!core_.compile(input, error)) {
+	if (!core_.compile(std::move(input), error)) {
 		result["ok"] = false;
 		result["errorX"] = error.errorX;
 		result["errorY"] = error.errorY;
@@ -176,9 +192,13 @@ godot::Dictionary OcbSimulation::advanceTicksForDuration(
 		const auto deadline = startedAt + std::chrono::microseconds(durationUsec);
 		while (advancedTickCount < maximumTickCount && std::chrono::steady_clock::now() < deadline) {
 			const int32_t remainingTickCount = maximumTickCount - static_cast<int32_t>(advancedTickCount);
-			const int32_t nextBatchTickCount = std::min(batchTickCount, remainingTickCount);
-			core_.advanceTicksSilent(nextBatchTickCount);
-			advancedTickCount += nextBatchTickCount;
+			int32_t batchRemainingTickCount = std::min(batchTickCount, remainingTickCount);
+			while (batchRemainingTickCount > 0 && std::chrono::steady_clock::now() < deadline) {
+				const int32_t nextTickCount = std::min(batchRemainingTickCount, AdvanceCheckTickCount);
+				core_.advanceTicksSilent(nextTickCount);
+				advancedTickCount += nextTickCount;
+				batchRemainingTickCount -= nextTickCount;
+			}
 		}
 	}
 	const int64_t elapsedUsec = std::chrono::duration_cast<std::chrono::microseconds>(
@@ -210,6 +230,19 @@ godot::PackedInt32Array OcbSimulation::getStates() {
 		return {};
 	}
 	return makePackedInt32Array(visibleStateBuffer_.get(), runtimeCellCount_);
+}
+
+godot::PackedByteArray OcbSimulation::getStateBytes() {
+	stopAsyncWorker();
+	if (visibleStateBuffer_ == nullptr || !core_.copyVisibleStates(visibleStateBuffer_.get(), runtimeCellCount_)) {
+		return {};
+	}
+	godot::PackedByteArray result;
+	result.resize(static_cast<int64_t>(runtimeCellCount_));
+	if (runtimeCellCount_ != 0) {
+		std::memcpy(result.ptrw(), visibleStateBuffer_.get(), runtimeCellCount_);
+	}
+	return result;
 }
 
 bool OcbSimulation::enqueueAsyncToggle(int32_t cellIndex) {
@@ -261,8 +294,8 @@ godot::PackedByteArray OcbSimulation::captureState() {
 	const std::vector<uint8_t> snapshot = core_.captureState();
 	godot::PackedByteArray result;
 	result.resize(static_cast<int64_t>(snapshot.size()));
-	for (int64_t index = 0; index < static_cast<int64_t>(snapshot.size()); ++index) {
-		result[index] = snapshot[static_cast<size_t>(index)];
+	if (!snapshot.empty()) {
+		std::memcpy(result.ptrw(), snapshot.data(), snapshot.size());
 	}
 	return result;
 }
@@ -270,8 +303,8 @@ godot::PackedByteArray OcbSimulation::captureState() {
 godot::Dictionary OcbSimulation::restoreState(const godot::PackedByteArray &snapshot) {
 	stopAsyncWorker();
 	std::vector<uint8_t> bytes(static_cast<size_t>(snapshot.size()));
-	for (int64_t index = 0; index < snapshot.size(); ++index) {
-		bytes[static_cast<size_t>(index)] = snapshot[index];
+	if (!bytes.empty()) {
+		std::memcpy(bytes.data(), snapshot.ptr(), bytes.size());
 	}
 	std::string errorReason;
 	godot::Dictionary result;
@@ -295,14 +328,32 @@ godot::Dictionary OcbSimulation::restoreState(const godot::PackedByteArray &snap
 	return result;
 }
 
+godot::Dictionary OcbSimulation::restoreStateSilent(const godot::PackedByteArray &snapshot) {
+	stopAsyncWorker();
+	std::vector<uint8_t> bytes(static_cast<size_t>(snapshot.size()));
+	if (!bytes.empty()) {
+		std::memcpy(bytes.data(), snapshot.ptr(), bytes.size());
+	}
+	std::string errorReason;
+	godot::Dictionary result;
+	if (!core_.restoreState(bytes, errorReason)) {
+		result["ok"] = false;
+		result["errorReason"] = godot::String(errorReason.c_str());
+		return result;
+	}
+	result["ok"] = true;
+	return result;
+}
+
 bool OcbSimulation::publishAsyncFrame() {
-	if (asyncFrameStates_ == nullptr || runtimeCellCount_ == 0) {
+	if (asyncOutstandingGeneration_ != 0 || asyncFullFrameStates_ == nullptr || runtimeCellCount_ == 0 || stateChangeBuffer_ == nullptr) {
 		return false;
 	}
 	const int32_t publishedFrame = asyncPublishedFrame_.load(std::memory_order_acquire);
 	int32_t targetFrame = -1;
 	for (int32_t frameIndex = 0; frameIndex < static_cast<int32_t>(AsyncFrameCount); ++frameIndex) {
-		if (frameIndex == publishedFrame || asyncFrames_[frameIndex].readerCount.load(std::memory_order_acquire) != 0) {
+		if (frameIndex == publishedFrame || asyncFrames_[frameIndex].awaitingAcknowledgement ||
+				asyncFrames_[frameIndex].readerCount.load(std::memory_order_acquire) != 0) {
 			continue;
 		}
 		targetFrame = frameIndex;
@@ -311,20 +362,51 @@ bool OcbSimulation::publishAsyncFrame() {
 	if (targetFrame < 0) {
 		return false;
 	}
-	uint8_t *states = asyncFrameStates_.get() + static_cast<size_t>(targetFrame) * runtimeCellCount_;
-	if (!core_.copyVisibleStates(states, runtimeCellCount_)) {
+	const size_t changeValueCount = drainStateChangesToOutput();
+	assert((changeValueCount & 1U) == 0);
+	if (changeValueCount == 0) {
+		return false;
+	}
+	const uint8_t *visibleStates = core_.getVisibleStatesData();
+	if (visibleStates == nullptr) {
 		return false;
 	}
 	AsyncFrame &frame = asyncFrames_[targetFrame];
+	const size_t fullStateThreshold = std::max<size_t>(1U, (runtimeCellCount_ + AsyncFullStateFallbackDivisor - 1U) /
+			AsyncFullStateFallbackDivisor);
+	frame.changeValueCount = changeValueCount;
+	frame.isFullState = changeValueCount / 2U >= fullStateThreshold;
+	if (frame.isFullState) {
+		uint8_t *states = asyncFullFrameStates_.get() + static_cast<size_t>(targetFrame) * runtimeCellCount_;
+		std::memcpy(states, visibleStates, runtimeCellCount_ * sizeof(uint8_t));
+	}
 	frame.generation = ++asyncNextGeneration_;
+	frame.awaitingAcknowledgement = true;
+	asyncOutstandingGeneration_ = frame.generation;
+	asyncOutstandingFrame_ = targetFrame;
 	asyncPublishedFrame_.store(targetFrame, std::memory_order_release);
 	return true;
+}
+
+void OcbSimulation::processAsyncAcknowledgement() {
+	const uint64_t acknowledgedGeneration = asyncAcknowledgedGeneration_.exchange(0, std::memory_order_acq_rel);
+	if (acknowledgedGeneration == 0 || acknowledgedGeneration != asyncOutstandingGeneration_ || asyncOutstandingFrame_ < 0) {
+		return;
+	}
+	AsyncFrame &frame = asyncFrames_[asyncOutstandingFrame_];
+	if (!frame.awaitingAcknowledgement || frame.generation != acknowledgedGeneration) {
+		return;
+	}
+	frame.awaitingAcknowledgement = false;
+	asyncOutstandingGeneration_ = 0;
+	asyncOutstandingFrame_ = -1;
 }
 
 void OcbSimulation::runAsyncWorker() {
 	const auto publishInterval = std::chrono::microseconds(asyncPublishIntervalUsec_);
 	auto lastPublishAt = std::chrono::steady_clock::now();
 	while (!asyncStopRequested_.load(std::memory_order_acquire)) {
+		processAsyncAcknowledgement();
 		uint32_t readIndex = asyncCommandRead_.load(std::memory_order_relaxed);
 		while (readIndex != asyncCommandWrite_.load(std::memory_order_acquire)) {
 			const AsyncCommand command = asyncCommands_[readIndex % AsyncCommandCapacity];
@@ -335,40 +417,61 @@ void OcbSimulation::runAsyncWorker() {
 				core_.toggleLatch(command.cellIndex, ignoredError);
 			}
 		}
-		core_.advanceTicksSilent(asyncBatchTickCount_);
-		asyncCompletedTickCount_.fetch_add(static_cast<uint64_t>(asyncBatchTickCount_), std::memory_order_relaxed);
+
+		const auto batchStartedAt = std::chrono::steady_clock::now();
+		int32_t remainingTickCount = asyncBatchTickCount_;
+		while (remainingTickCount > 0 && !asyncStopRequested_.load(std::memory_order_acquire)) {
+			const int32_t tickCount = std::min(remainingTickCount, AdvanceCheckTickCount);
+			core_.advanceTicksSilent(tickCount);
+			asyncCompletedTickCount_.fetch_add(static_cast<uint64_t>(tickCount), std::memory_order_relaxed);
+			remainingTickCount -= tickCount;
+			const auto now = std::chrono::steady_clock::now();
+			if (now - batchStartedAt >= std::chrono::microseconds(asyncBatchBudgetUsec_) || now - lastPublishAt >= publishInterval) {
+				break;
+			}
+		}
 		const auto now = std::chrono::steady_clock::now();
 		if (now - lastPublishAt >= publishInterval) {
 			publishAsyncFrame();
 			lastPublishAt = now;
 		}
 	}
-	publishAsyncFrame();
+	processAsyncAcknowledgement();
+	if (asyncOutstandingGeneration_ == 0) {
+		publishAsyncFrame();
+	}
 	core_.endDeferredVisualTracking();
 	asyncRunning_.store(false, std::memory_order_release);
 }
 
 godot::Dictionary OcbSimulation::startAsync(int32_t batchTickCount, int64_t publishIntervalUsec) {
+	return startAsyncInternal(batchTickCount, publishIntervalUsec, AsyncDefaultBatchBudgetUsec);
+}
+
+godot::Dictionary OcbSimulation::startAsyncWithBudget(
+		int32_t batchTickCount, int64_t publishIntervalUsec, int64_t batchBudgetUsec) {
+	return startAsyncInternal(batchTickCount, publishIntervalUsec, batchBudgetUsec);
+}
+
+godot::Dictionary OcbSimulation::startAsyncInternal(
+		int32_t batchTickCount, int64_t publishIntervalUsec, int64_t batchBudgetUsec) {
 	stopAsyncWorker();
 	godot::Dictionary result;
-	if (!core_.isCompiled() || runtimeCellCount_ == 0 || batchTickCount <= 0 || publishIntervalUsec <= 0) {
+	if (!core_.isCompiled() || runtimeCellCount_ == 0 || batchTickCount <= 0 || publishIntervalUsec <= 0 || batchBudgetUsec <= 0) {
 		result["ok"] = false;
 		result["errorReason"] = "simulation_async_configuration_invalid";
 		return result;
 	}
 	try {
-		asyncFrameStates_ = std::make_unique<uint8_t[]>(runtimeCellCount_ * AsyncFrameCount);
-		asyncPresentedStates_ = std::make_unique<uint8_t[]>(runtimeCellCount_);
+		asyncFullFrameStates_ = std::make_unique<uint8_t[]>(runtimeCellCount_ * AsyncFrameCount);
 	} catch (const std::bad_alloc &) {
-		asyncFrameStates_.reset();
-		asyncPresentedStates_.reset();
+		asyncFullFrameStates_.reset();
 		result["ok"] = false;
 		result["errorReason"] = "simulation_async_allocation_failed";
 		return result;
 	}
-	if (!core_.copyVisibleStates(asyncPresentedStates_.get(), runtimeCellCount_) || !core_.beginDeferredVisualTracking()) {
-		asyncFrameStates_.reset();
-		asyncPresentedStates_.reset();
+	if (!core_.beginDeferredVisualTracking()) {
+		asyncFullFrameStates_.reset();
 		result["ok"] = false;
 		result["errorReason"] = "simulation_async_start_failed";
 		return result;
@@ -376,14 +479,21 @@ godot::Dictionary OcbSimulation::startAsync(int32_t batchTickCount, int64_t publ
 	for (AsyncFrame &frame : asyncFrames_) {
 		frame.readerCount.store(0, std::memory_order_relaxed);
 		frame.generation = 0;
+		frame.changeValueCount = 0;
+		frame.isFullState = false;
+		frame.awaitingAcknowledgement = false;
 	}
 	asyncCommandRead_.store(0, std::memory_order_relaxed);
 	asyncCommandWrite_.store(0, std::memory_order_relaxed);
 	asyncPublishedFrame_.store(-1, std::memory_order_relaxed);
 	asyncCompletedTickCount_.store(0, std::memory_order_relaxed);
+	asyncAcknowledgedGeneration_.store(0, std::memory_order_relaxed);
 	asyncBatchTickCount_ = batchTickCount;
+	asyncBatchBudgetUsec_ = batchBudgetUsec;
 	asyncPublishIntervalUsec_ = publishIntervalUsec;
 	asyncNextGeneration_ = 0;
+	asyncOutstandingGeneration_ = 0;
+	asyncOutstandingFrame_ = -1;
 	asyncLastPresentedGeneration_ = 0;
 	asyncLastReportedTickCount_ = 0;
 	asyncStopRequested_.store(false, std::memory_order_release);
@@ -393,8 +503,7 @@ godot::Dictionary OcbSimulation::startAsync(int32_t batchTickCount, int64_t publ
 	} catch (const std::system_error &) {
 		asyncRunning_.store(false, std::memory_order_release);
 		core_.endDeferredVisualTracking();
-		asyncFrameStates_.reset();
-		asyncPresentedStates_.reset();
+		asyncFullFrameStates_.reset();
 		result["ok"] = false;
 		result["errorReason"] = "simulation_async_thread_start_failed";
 		return result;
@@ -412,7 +521,8 @@ godot::Dictionary OcbSimulation::pollAsync() {
 	asyncLastReportedTickCount_ = completedTicks;
 	result["advancedTickCount"] = clampToInt64(advancedTicks);
 	result["running"] = asyncRunning_.load(std::memory_order_acquire);
-	if (asyncFrameStates_ == nullptr || asyncPresentedStates_ == nullptr) {
+	result["isFullState"] = false;
+	if (asyncFullFrameStates_ == nullptr || stateChangeBuffer_ == nullptr) {
 		return result;
 	}
 	int32_t frameIndex = -1;
@@ -429,29 +539,25 @@ godot::Dictionary OcbSimulation::pollAsync() {
 	}
 	AsyncFrame &frame = asyncFrames_[frameIndex];
 	if (frame.generation > asyncLastPresentedGeneration_) {
-		const uint8_t *states = asyncFrameStates_.get() + static_cast<size_t>(frameIndex) * runtimeCellCount_;
-		size_t changeCount = 0;
-		for (size_t cell = 0; cell < runtimeCellCount_; ++cell) {
-			if (states[cell] != asyncPresentedStates_[cell]) {
-				++changeCount;
-			}
-		}
-		if (changeCount != 0) {
+		if (frame.isFullState) {
+			const uint8_t *states = asyncFullFrameStates_.get() + static_cast<size_t>(frameIndex) * runtimeCellCount_;
 			godot::PackedInt32Array changes;
-			changes.resize(static_cast<int64_t>(changeCount * 2U));
-			size_t outputIndex = 0;
+			changes.resize(static_cast<int64_t>(runtimeCellCount_ * 2U));
+			int32_t *output = changes.ptrw();
 			for (size_t cell = 0; cell < runtimeCellCount_; ++cell) {
-				const uint8_t state = states[cell];
-				if (state == asyncPresentedStates_[cell]) {
-					continue;
-				}
-				changes[static_cast<int64_t>(outputIndex++)] = static_cast<int32_t>(cell);
-				changes[static_cast<int64_t>(outputIndex++)] = state;
-				asyncPresentedStates_[cell] = state;
+				output[cell * 2U] = static_cast<int32_t>(cell);
+				output[cell * 2U + 1U] = states[cell];
 			}
 			result["changes"] = changes;
+			result["isFullState"] = true;
+		} else {
+			result["changes"] = makePackedInt32Array(stateChangeBuffer_.get(), frame.changeValueCount);
 		}
 		asyncLastPresentedGeneration_ = frame.generation;
+		const uint64_t acknowledgedGeneration = frame.generation;
+		frame.readerCount.fetch_sub(1, std::memory_order_release);
+		asyncAcknowledgedGeneration_.store(acknowledgedGeneration, std::memory_order_release);
+		return result;
 	}
 	frame.readerCount.fetch_sub(1, std::memory_order_release);
 	return result;

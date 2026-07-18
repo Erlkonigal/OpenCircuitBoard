@@ -7,6 +7,8 @@ GODOT_CPP_ROOT := $(PROJECT_ROOT)/thirdparty/godotcpp
 TARGET_PLATFORM ?= windows
 BUILD_TYPE ?= Release
 CORE_BENCHMARK_ARGS ?=
+BOARD_PATH ?=
+BOARD_BENCHMARK_ARGS ?=
 
 ifeq ($(BUILD_TYPE),Debug)
 BUILD_VARIANT := debug
@@ -43,7 +45,7 @@ GODOT_EXECUTABLE_INPUT := $(DOWNLOADED_GODOT_EXECUTABLE)
 endif
 
 
-.PHONY: help init build build-debug build-release core-test core-benchmark native-test frontend-test test run clean \
+.PHONY: help init build build-debug build-release core-test core-benchmark board-benchmark native-test frontend-test test run clean \
 	check-platform check-backend-tools check-godot-executable download-godot force
 
 EXTENSION_BUILD_INPUTS := $(shell find "$(PROJECT_ROOT)/extension" -type f -print)
@@ -73,6 +75,7 @@ help:
 	@echo "make build-release TARGET_PLATFORM=<linux|windows> Build the optimized export GDExtension variant"
 	@echo "make core-test TARGET_PLATFORM=<linux|windows> Run native SimulationCore tests"
 	@echo "make core-benchmark TARGET_PLATFORM=<linux|windows> Run the 1024x1024 Release mixed-gate SimulationCore throughput benchmark"
+	@echo "make board-benchmark TARGET_PLATFORM=<linux|windows> BOARD_PATH=<project.ocb> [BOARD_BENCHMARK_ARGS=...] Run the board-level simulation capacity probe"
 	@echo "make native-test TARGET_PLATFORM=<linux|windows> Run headless GDExtension smoke tests"
 	@echo "make frontend-test TARGET_PLATFORM=<linux|windows> Run real-renderer frontend tests"
 	@echo "make test TARGET_PLATFORM=<linux|windows> Run core, native, and frontend tests"
@@ -167,6 +170,10 @@ core-test: build-release
 core-benchmark: build-release
 	@cmake --build "$(RELEASE_BACKEND_BUILD_ROOT)" --target ocbsimulation_core_benchmark
 	@cd "$(RELEASE_BACKEND_BUILD_ROOT)" && ./ocbsimulation_core_benchmark$(if $(filter windows,$(TARGET_PLATFORM)),.exe) $(CORE_BENCHMARK_ARGS)
+
+board-benchmark: build-release
+	@test -n "$(BOARD_PATH)" || (echo "BOARD_PATH=<project.ocb> is required for board-benchmark."; exit 1)
+	@"$(GODOT_EXECUTABLE)" --headless --path "$(PROJECT_ROOT)" --script "$(PROJECT_ROOT)/scripts/tests/BoardCapacityProbe.gd" -- --boardPath="$(BOARD_PATH)" $(BOARD_BENCHMARK_ARGS)
 
 native-test: build-debug
 	@"$(GODOT_EXECUTABLE)" --headless --path "$(PROJECT_ROOT)" --script "$(PROJECT_ROOT)/scripts/tests/NativeSimulationTest.gd"

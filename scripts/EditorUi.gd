@@ -44,6 +44,7 @@ const SimulationCapacityRiseSmoothing := 0.12
 const SimulationFrameWorkShare := 0.75
 const SimulationFastLoopCursorRefreshIntervalUsec := 100_000
 const SimulationAsyncPublishIntervalUsec := 100_000
+const SimulationAsyncBatchBudgetUsec := 2_000
 const SimulationBatchTickCountMaximum := 4_096
 const SimulationBatchTargetDurationUsec := 250
 const SimulationFrequencyProbeBatchTickCount := 64
@@ -134,6 +135,11 @@ var IsSimulating := false
 var IsLooping := true
 var SimulationTick := 0
 var SimulationTimeline: Array = []
+var SimulationTimelineStartTick := 0
+var SimulationTimelineBytes := 0
+@export_group("Simulation Timeline")
+@export var SimulationTimelineEntryMaximum := 256
+@export var SimulationTimelineMaximumBytes := 32 * 1024 * 1024
 var SimulationAccumulator := 0.0
 var SimulationStepLength := SimulationStepLengthMinimum
 var LoopFrequency := SimulationFrequencyMinimumTps
@@ -223,8 +229,12 @@ func _process(_delta: float) -> void:
 	var cursorInfo: Dictionary = Board.call("getCursorInfoAt", coordinates) if isValid and Board.has_method("getCursorInfoAt") else {}
 	if not cursorInfo.is_empty():
 		isValid = bool(cursorInfo.get("isValid", isValid))
-	var hoveredInk: Dictionary = Board.call("getInkAt", coordinates) if isValid else {}
-	var hoveredInkTitle := String(cursorInfo.get("hoveredInkTitle", hoveredInk.get("title", "None")))
+	var hoveredInkTitle := "None"
+	if not cursorInfo.is_empty():
+		hoveredInkTitle = String(cursorInfo.get("hoveredInkTitle", "None"))
+	elif isValid:
+		var hoveredInk: Dictionary = Board.call("getInkAt", coordinates)
+		hoveredInkTitle = String(hoveredInk.get("title", "None"))
 	for dock in getActiveDocks():
 		if dock.has_method("updateCursorInfo"):
 			dock.call("updateCursorInfo", coordinates, isValid, hoveredInkTitle)
@@ -949,21 +959,17 @@ func toggleSimulationLatchAt(coordinates: Vector2i) -> bool:
 		applySimulationStateChanges(toggleResult.get("changes", PackedInt32Array()) as PackedInt32Array)
 		refreshSimulationControls()
 		return true
+	if not truncateSimulationTimelineAfter(SimulationTick):
+		failActiveSimulation({"ok": false, "errorReason": "SimulationTimelineInvalid"})
+		return false
 	var snapshotResult := SimulationBridgeInstance.captureState()
 	if not bool(snapshotResult.get("ok", false)):
 		failActiveSimulation(snapshotResult)
 		return false
-	if SimulationTick < SimulationTimeline.size() - 1:
-		SimulationTimeline.resize(SimulationTick + 1)
-	if SimulationTick >= SimulationTimeline.size():
+	if not replaceSimulationSnapshot(SimulationTick, snapshotResult.get("snapshot", PackedByteArray()) as PackedByteArray):
 		failActiveSimulation({"ok": false, "errorReason": "SimulationTimelineInvalid"})
 		return false
-	SimulationTimeline[SimulationTick] = snapshotResult.get("snapshot", PackedByteArray()) as PackedByteArray
-	var statesResult := SimulationBridgeInstance.getCurrentStates()
-	if not bool(statesResult.get("ok", false)):
-		failActiveSimulation(statesResult)
-		return false
-	applySimulationStates(statesResult.get("states", PackedInt32Array()) as PackedInt32Array)
+	applySimulationStateChanges(toggleResult.get("changes", PackedInt32Array()) as PackedInt32Array)
 	SimulationAccumulator = 0.0
 	refreshSimulationControls()
 	return true
@@ -986,7 +992,7 @@ func enterSimulation() -> void:
 	if not bool(statesResult.get("ok", false)):
 		abortSimulationStart(statesResult)
 		return
-	applySimulationStates(statesResult.get("states", PackedInt32Array()) as PackedInt32Array)
+	applySimulationStates(statesResult.get("states", PackedByteArray()))
 	hideInkVariantMenu()
 	hideClockSettingsMenu()
 	hideMeshSettingsMenu()
@@ -996,7 +1002,7 @@ func enterSimulation() -> void:
 	setCircuitEditorInputEnabled(false)
 	IsLooping = true
 	SimulationTick = 0
-	SimulationTimeline.clear()
+	clearSimulationTimeline()
 	SimulationAccumulator = 0.0
 	LastFastLoopCursorUpdateUsec = 0
 	IsAsyncSimulationRunning = false
@@ -1016,7 +1022,12 @@ func probeLoopFrequencyMaximum() -> Dictionary:
 		return advanceResult
 	var advancedTickCount := int(advanceResult.get("advancedTickCount", 0))
 	var elapsedUsec := maxi(1, int(advanceResult.get("elapsedUsec", 0)))
-	var restoreResult := SimulationBridgeInstance.restoreState(snapshotResult.get("snapshot", PackedByteArray()) as PackedByteArray)
+	var snapshot := snapshotResult.get("snapshot", PackedByteArray()) as PackedByteArray
+	var restoreResult: Dictionary
+	if SimulationBridgeInstance.has_method("restoreStateSilent"):
+		restoreResult = SimulationBridgeInstance.restoreStateSilent(snapshot)
+	else:
+		restoreResult = SimulationBridgeInstance.restoreState(snapshot)
 	if not bool(restoreResult.get("ok", false)):
 		return restoreResult
 	return {
@@ -1033,7 +1044,7 @@ func leaveSimulation() -> void:
 	IsSimulating = false
 	IsLooping = true
 	SimulationTick = 0
-	SimulationTimeline.clear()
+	clearSimulationTimeline()
 	SimulationAccumulator = 0.0
 	LastFastLoopCursorUpdateUsec = 0
 	IsAsyncSimulationRunning = false
@@ -1058,7 +1069,7 @@ func toggleLoopStepMode() -> void:
 	else:
 		IsLooping = true
 		SimulationTick = 0
-		SimulationTimeline.clear()
+		clearSimulationTimeline()
 		resetSimulationThroughput()
 	SimulationAccumulator = 0.0
 	refreshSimulationControls()
@@ -1068,14 +1079,15 @@ func initializeStepSimulationTimeline() -> bool:
 	if not bool(snapshotResult.get("ok", false)):
 		failActiveSimulation(snapshotResult)
 		return false
+	clearSimulationTimeline()
 	SimulationTick = 0
-	SimulationTimeline = [snapshotResult.get("snapshot", PackedByteArray()) as PackedByteArray]
+	appendSimulationSnapshot(snapshotResult.get("snapshot", PackedByteArray()) as PackedByteArray)
 	return true
 
 func showPreviousSimulationTick() -> void:
-	if not IsSimulating or IsLooping or SimulationTick <= 0:
+	if not IsSimulating or IsLooping or SimulationTick <= getSimulationTimelineFirstTick():
 		return
-	if showSimulationTick(maxi(0, SimulationTick - SimulationStepLength)):
+	if showSimulationTick(maxi(getSimulationTimelineFirstTick(), SimulationTick - SimulationStepLength)):
 		refreshSimulationControls()
 
 func showNextSimulationTick() -> void:
@@ -1131,7 +1143,8 @@ func startAsyncLoopingSimulation() -> bool:
 		return true
 	var startResult := SimulationBridgeInstance.startAsync(
 		getSimulationBatchTickCount(),
-		SimulationAsyncPublishIntervalUsec
+		SimulationAsyncPublishIntervalUsec,
+		SimulationAsyncBatchBudgetUsec
 	)
 	if not bool(startResult.get("ok", false)):
 		failActiveSimulation(startResult)
@@ -1151,7 +1164,7 @@ func stopAsyncLoopingSimulation(applyCurrentStates: bool) -> Dictionary:
 	var statesResult := SimulationBridgeInstance.getCurrentStates()
 	if not bool(statesResult.get("ok", false)):
 		return statesResult
-	applySimulationStates(statesResult.get("states", PackedInt32Array()) as PackedInt32Array)
+	applySimulationStates(statesResult.get("states", PackedByteArray()))
 	return {"ok": true}
 
 func advanceLoopingSimulation(requestedTickCount: int, delta: float) -> Dictionary:
@@ -1184,19 +1197,21 @@ func getSimulationBatchTickCount() -> int:
 	return clampi(capacityTickCount, 1, SimulationBatchTickCountMaximum)
 
 func showSimulationTick(targetTick: int) -> bool:
-	if IsLooping or targetTick < 0 or SimulationTimeline.is_empty():
+	if IsLooping or targetTick < getSimulationTimelineFirstTick() or SimulationTimeline.is_empty():
 		return false
-	if targetTick < SimulationTimeline.size():
+	if targetTick <= getSimulationTimelineLastTick():
 		return applySimulationSnapshot(targetTick)
 	return buildSimulationTimelineTo(targetTick)
 
 func buildSimulationTimelineTo(targetTick: int) -> bool:
 	if IsLooping:
 		return false
-	var lastTick := SimulationTimeline.size() - 1
+	var lastTick := getSimulationTimelineLastTick()
+	if lastTick < 0:
+		return false
 	if not applySimulationSnapshot(lastTick):
 		return false
-	while SimulationTimeline.size() <= targetTick:
+	while lastTick < targetTick:
 		var advanceResult := SimulationBridgeInstance.advanceTick()
 		if not bool(advanceResult.get("ok", false)):
 			failActiveSimulation(advanceResult)
@@ -1206,15 +1221,17 @@ func buildSimulationTimelineTo(targetTick: int) -> bool:
 		if not bool(snapshotResult.get("ok", false)):
 			failActiveSimulation(snapshotResult)
 			return false
-		SimulationTimeline.append(snapshotResult.get("snapshot", PackedByteArray()) as PackedByteArray)
+		lastTick += 1
+		appendSimulationSnapshot(snapshotResult.get("snapshot", PackedByteArray()) as PackedByteArray)
 	SimulationTick = targetTick
 	return true
 
 func captureSimulationSnapshot() -> Dictionary:
 	return SimulationBridgeInstance.captureState()
 
-func applySimulationSnapshot(snapshotIndex: int) -> bool:
-	if snapshotIndex < 0 or snapshotIndex >= SimulationTimeline.size():
+func applySimulationSnapshot(snapshotTick: int) -> bool:
+	var snapshotIndex := getSimulationTimelineIndex(snapshotTick)
+	if snapshotIndex < 0:
 		return false
 	var snapshotVariant: Variant = SimulationTimeline[snapshotIndex]
 	if not (snapshotVariant is PackedByteArray):
@@ -1225,11 +1242,62 @@ func applySimulationSnapshot(snapshotIndex: int) -> bool:
 		failActiveSimulation(restoreResult)
 		return false
 	applySimulationStateChanges(restoreResult.get("changes", PackedInt32Array()) as PackedInt32Array)
-	SimulationTick = snapshotIndex
+	SimulationTick = snapshotTick
 	return true
 
-func applySimulationStates(states: PackedInt32Array) -> void:
-	if states.is_empty() or not Board.has_method("applyRuntimeTileStatesFromGrid"):
+func clearSimulationTimeline() -> void:
+	SimulationTimeline.clear()
+	SimulationTimelineStartTick = 0
+	SimulationTimelineBytes = 0
+
+func appendSimulationSnapshot(snapshot: PackedByteArray) -> void:
+	SimulationTimeline.append(snapshot)
+	SimulationTimelineBytes += snapshot.size()
+	enforceSimulationTimelineBudget()
+
+func replaceSimulationSnapshot(snapshotTick: int, snapshot: PackedByteArray) -> bool:
+	var snapshotIndex := getSimulationTimelineIndex(snapshotTick)
+	if snapshotIndex < 0:
+		return false
+	SimulationTimelineBytes = maxi(0, SimulationTimelineBytes - getSimulationSnapshotByteCount(SimulationTimeline[snapshotIndex]))
+	SimulationTimeline[snapshotIndex] = snapshot
+	SimulationTimelineBytes += snapshot.size()
+	enforceSimulationTimelineBudget()
+	return true
+
+func truncateSimulationTimelineAfter(snapshotTick: int) -> bool:
+	var snapshotIndex := getSimulationTimelineIndex(snapshotTick)
+	if snapshotIndex < 0:
+		return false
+	while SimulationTimeline.size() > snapshotIndex + 1:
+		SimulationTimelineBytes = maxi(0, SimulationTimelineBytes - getSimulationSnapshotByteCount(SimulationTimeline.pop_back()))
+	return true
+
+func enforceSimulationTimelineBudget() -> void:
+	var entryMaximum := maxi(1, SimulationTimelineEntryMaximum)
+	var byteMaximum := maxi(0, SimulationTimelineMaximumBytes)
+	while SimulationTimeline.size() > entryMaximum or (SimulationTimelineBytes > byteMaximum and SimulationTimeline.size() > 1):
+		SimulationTimelineBytes = maxi(0, SimulationTimelineBytes - getSimulationSnapshotByteCount(SimulationTimeline.pop_front()))
+		SimulationTimelineStartTick += 1
+
+func getSimulationTimelineFirstTick() -> int:
+	return SimulationTimelineStartTick
+
+func getSimulationTimelineLastTick() -> int:
+	if SimulationTimeline.is_empty():
+		return -1
+	return SimulationTimelineStartTick + SimulationTimeline.size() - 1
+
+func getSimulationTimelineIndex(snapshotTick: int) -> int:
+	if snapshotTick < SimulationTimelineStartTick or snapshotTick > getSimulationTimelineLastTick():
+		return -1
+	return snapshotTick - SimulationTimelineStartTick
+
+func getSimulationSnapshotByteCount(snapshotVariant: Variant) -> int:
+	return (snapshotVariant as PackedByteArray).size() if snapshotVariant is PackedByteArray else 0
+
+func applySimulationStates(states: Variant) -> void:
+	if not (states is PackedInt32Array or states is PackedByteArray) or states.is_empty() or not Board.has_method("applyRuntimeTileStatesFromGrid"):
 		return
 	Board.call("applyRuntimeTileStatesFromGrid", states, SimulationBridgeInstance.GridWidth, SimulationBridgeInstance.GridOrigin)
 
@@ -1434,7 +1502,7 @@ func refreshSimulationControls() -> void:
 	SimulationModeButton.text = "Edit" if IsSimulating else "Simulate"
 	SimulationModeButton.tooltip_text = "Exit simulation" if IsSimulating else "Enter simulation"
 	configureSimulationModeButton()
-	PreviousTickButton.disabled = not IsSimulating or IsLooping or SimulationTick <= 0
+	PreviousTickButton.disabled = not IsSimulating or IsLooping or SimulationTick <= getSimulationTimelineFirstTick()
 	LoopStepButton.disabled = not IsSimulating
 	NextTickButton.disabled = not IsSimulating or IsLooping
 	StepLengthControl.disabled = not canEditStepLength

@@ -101,6 +101,47 @@ func run(context) -> void:
 	assert(board.call("removeTile", notCoordinates))
 	assert(board.call("removeTile", clockCoordinates))
 
+	await context.resetMain()
+	await context.waitFrames(1)
+	main = context.MainSceneRoot as Control
+	board = context.CircuitBoard as Node2D
+	var boundedPreviousTickButton := (context.TopBarContent as Control).get_node("PreviousTickButton") as Button
+	main.set("SimulationTimelineEntryMaximum", 3)
+	main.set("SimulationTimelineMaximumBytes", 32 * 1024 * 1024)
+	clockCoordinates = Vector2i.ZERO
+	assert(board.call("placeTile", clockCoordinates, "clock"))
+	main.call("enterSimulation")
+	main.call("toggleLoopStepMode")
+	for _index in 5:
+		main.call("showNextSimulationTick")
+	assert(int(main.get("SimulationTick")) == 5)
+	assert((main.get("SimulationTimeline") as Array).size() == 3)
+	assert(int(main.call("getSimulationTimelineFirstTick")) == 3)
+	assert(int(main.call("getSimulationTimelineLastTick")) == 5)
+	var stateAtTickFive := bool(board.call("getRuntimeTileState", clockCoordinates))
+	main.call("showPreviousSimulationTick")
+	assert(int(main.get("SimulationTick")) == 4)
+	main.call("showNextSimulationTick")
+	assert(int(main.get("SimulationTick")) == 5)
+	assert(bool(board.call("getRuntimeTileState", clockCoordinates)) == stateAtTickFive)
+	main.call("showPreviousSimulationTick")
+	main.call("showPreviousSimulationTick")
+	assert(int(main.get("SimulationTick")) == 3)
+	assert(boundedPreviousTickButton.disabled)
+	assert(not bool(main.call("showSimulationTick", 2)))
+	main.call("showNextSimulationTick")
+	main.call("showNextSimulationTick")
+	assert(int(main.get("SimulationTick")) == 5)
+	main.set("SimulationTimelineMaximumBytes", 1)
+	main.call("enforceSimulationTimelineBudget")
+	main.call("refreshSimulationControls")
+	assert((main.get("SimulationTimeline") as Array).size() == 1)
+	assert(int(main.call("getSimulationTimelineFirstTick")) == 5)
+	assert(int(main.get("SimulationTimelineBytes")) > 1)
+	assert(boundedPreviousTickButton.disabled)
+	main.call("leaveSimulation")
+	assert(board.call("removeTile", clockCoordinates))
+
 func assertLoopStatus(status: Label) -> void:
 	assert(not status.text.is_empty())
 	assert(status.text.contains("TPS"))

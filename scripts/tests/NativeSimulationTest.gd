@@ -94,6 +94,17 @@ func runNativeSimulationTest() -> void:
 		push_error("OcbSimulationRestoreChangesMissing")
 		quit(1)
 		return
+	simulation.call("advanceTicksSilent", 2)
+	var silentRestoreResult: Variant = simulation.call("restoreStateSilent", snapshot)
+	if not (silentRestoreResult is Dictionary) or not bool((silentRestoreResult as Dictionary).get("ok", false)):
+		push_error("OcbSimulationSilentRestoreFailed")
+		quit(1)
+		return
+	var invalidBudgetStart: Variant = simulation.call("startAsyncWithBudget", 64, 1_000, 0)
+	if not (invalidBudgetStart is Dictionary) or bool((invalidBudgetStart as Dictionary).get("ok", true)):
+		push_error("OcbSimulationAsyncInvalidBudgetAccepted")
+		quit(1)
+		return
 	var asyncStart: Variant = simulation.call("startAsync", 64, 1_000)
 	if not (asyncStart is Dictionary) or not bool((asyncStart as Dictionary).get("ok", false)):
 		push_error("OcbSimulationAsyncStartInvalid")
@@ -101,6 +112,8 @@ func runNativeSimulationTest() -> void:
 		return
 	var asyncPollResult: Dictionary = {}
 	var receivedAsyncTick := false
+	var receivedAsyncChanges := false
+	var receivedAsyncFullState := false
 	for _attempt in 20:
 		await create_timer(0.01).timeout
 		var asyncPoll: Variant = simulation.call("pollAsync")
@@ -112,9 +125,20 @@ func runNativeSimulationTest() -> void:
 		if int(asyncPollResult.get("advancedTickCount", 0)) <= 0 or not (asyncPollResult.get("changes", null) is PackedInt32Array):
 			continue
 		receivedAsyncTick = true
-		break
+		if not (asyncPollResult.get("changes", PackedInt32Array()) as PackedInt32Array).is_empty():
+			receivedAsyncChanges = true
+			receivedAsyncFullState = bool(asyncPollResult.get("isFullState", false))
+			break
 	if not receivedAsyncTick:
 		push_error("OcbSimulationAsyncPollValuesInvalid")
+		quit(1)
+		return
+	if not receivedAsyncChanges:
+		push_error("OcbSimulationAsyncDeltaMissing")
+		quit(1)
+		return
+	if not receivedAsyncFullState:
+		push_error("OcbSimulationAsyncFullStateFallbackMissing")
 		quit(1)
 		return
 	var asyncStop: Variant = simulation.call("stopAsync")
@@ -125,6 +149,27 @@ func runNativeSimulationTest() -> void:
 	var statesAfterAsync: Variant = simulation.call("getStates")
 	if not (statesAfterAsync is PackedInt32Array) or (statesAfterAsync as PackedInt32Array).size() != kinds.size():
 		push_error("OcbSimulationAsyncStatesInvalid")
+		quit(1)
+		return
+	var stateBytesAfterAsync: Variant = simulation.call("getStateBytes")
+	if not (stateBytesAfterAsync is PackedByteArray) or (stateBytesAfterAsync as PackedByteArray).size() != kinds.size():
+		push_error("OcbSimulationAsyncStateBytesInvalid")
+		quit(1)
+		return
+	for stateIndex in (statesAfterAsync as PackedInt32Array).size():
+		if int((statesAfterAsync as PackedInt32Array)[stateIndex]) != int((stateBytesAfterAsync as PackedByteArray)[stateIndex]):
+			push_error("OcbSimulationAsyncStateBytesMismatch")
+			quit(1)
+			return
+	var budgetedAsyncStart: Variant = simulation.call("startAsyncWithBudget", 64, 1_000, 200)
+	if not (budgetedAsyncStart is Dictionary) or not bool((budgetedAsyncStart as Dictionary).get("ok", false)):
+		push_error("OcbSimulationAsyncBudgetStartInvalid")
+		quit(1)
+		return
+	await create_timer(0.01).timeout
+	var budgetedAsyncStop: Variant = simulation.call("stopAsync")
+	if not (budgetedAsyncStop is Dictionary) or not bool((budgetedAsyncStop as Dictionary).get("ok", false)):
+		push_error("OcbSimulationAsyncBudgetStopInvalid")
 		quit(1)
 		return
 	quit(OK)

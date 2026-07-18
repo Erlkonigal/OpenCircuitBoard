@@ -1,10 +1,22 @@
 extends RefCounted
 
+const SimulationBridge := preload("res://scripts/SimulationBridge.gd")
+
 func run(context) -> void:
 	await context.resetMain()
 	await context.waitFrames(1)
 	var board := context.CircuitBoard as Node2D
 	var data := context.TestData as Dictionary
+	var emptySimulation := SimulationBridge.new()
+	var emptyCompileResult := emptySimulation.compile(board)
+	assert(bool(emptyCompileResult.get("ok", false)))
+	assert(emptySimulation.GridWidth == 1)
+	assert(emptySimulation.GridHeight == 1)
+	assert(emptySimulation.GridOrigin == board.call("getSimulationGridOrigin"))
+	var emptyStatesResult := emptySimulation.getCurrentStates()
+	assert(bool(emptyStatesResult.get("ok", false)))
+	assert((emptyStatesResult.get("states", PackedByteArray()) as PackedByteArray).size() == 1)
+	emptySimulation.release()
 	var stateOnCoordinates := Vector2i(-13, -14)
 	var stateOffCoordinates := Vector2i(-11, -14)
 	data["stateOnCoordinates"] = stateOnCoordinates
@@ -25,6 +37,20 @@ func run(context) -> void:
 	])
 	assert(bool(board.call("getTileState", stateOnCoordinates)))
 	assert(bool(board.call("getTileState", stateOffCoordinates)))
+	var compactSimulation := SimulationBridge.new()
+	var compactCompileResult := compactSimulation.compile(board)
+	assert(bool(compactCompileResult.get("ok", false)))
+	assert(compactSimulation.GridOrigin == stateOnCoordinates)
+	assert(compactSimulation.GridWidth == 3)
+	assert(compactSimulation.GridHeight == 1)
+	var compactStatesResult := compactSimulation.getCurrentStates()
+	assert(bool(compactStatesResult.get("ok", false)))
+	assert((compactStatesResult.get("states", PackedByteArray()) as PackedByteArray).size() == 3)
+	board.call("applyRuntimeTileStatesFromGrid", PackedByteArray([0, 0, 1]), compactSimulation.GridWidth, compactSimulation.GridOrigin)
+	assert(not bool(board.call("getRuntimeTileState", stateOnCoordinates)))
+	assert(bool(board.call("getRuntimeTileState", stateOffCoordinates)))
+	board.call("clearRuntimeTileStates")
+	compactSimulation.release()
 	board.call("applyRuntimeTileStates", [
 		{"coordinates": stateOnCoordinates, "isOn": false},
 	])

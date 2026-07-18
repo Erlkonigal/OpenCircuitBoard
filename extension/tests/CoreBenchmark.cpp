@@ -47,6 +47,7 @@ struct BenchmarkConfig {
 	int32_t warmupTicks = 512;
 	int32_t measurementTicks = 1024;
 	int32_t sampleCount = 5;
+	int32_t minimumTicksPerSecond = 0;
 	BenchmarkWorkload workload = BenchmarkWorkload::Mixed;
 	bool compareOrdering = false;
 };
@@ -79,7 +80,7 @@ enum class ParseResult {
 };
 
 void printUsage() {
-	std::cout << "Usage: ocbsimulation_core_benchmark [--quick] [--compare-ordering]"
+	std::cout << "Usage: ocbsimulation_core_benchmark [--quick] [--compare-ordering] [--minimum-tps value]"
 			  << " [--workload mixed|unary-buffer|compact-latch]"
 			  << " [--width value] [--height value] [--pipelines value]"
 			  << " [--warmup value] [--ticks value] [--samples value]\n";
@@ -173,6 +174,8 @@ ParseResult parseConfig(int argc, char **argv, BenchmarkConfig &config) {
 			target = &config.measurementTicks;
 		} else if (argument == "--samples") {
 			target = &config.sampleCount;
+		} else if (argument == "--minimum-tps") {
+			target = &config.minimumTicksPerSecond;
 		} else {
 			std::cerr << "Unknown benchmark argument: " << argument << '\n';
 			return ParseResult::Error;
@@ -186,7 +189,7 @@ ParseResult parseConfig(int argc, char **argv, BenchmarkConfig &config) {
 }
 
 bool validateConfig(const BenchmarkConfig &config, std::string &error) {
-	if (config.warmupTicks < 0 || config.measurementTicks <= 0 || config.sampleCount <= 0) {
+	if (config.warmupTicks < 0 || config.measurementTicks <= 0 || config.sampleCount <= 0 || config.minimumTicksPerSecond < 0) {
 		error = "benchmark dimensions and tick counts must be positive";
 		return false;
 	}
@@ -477,13 +480,13 @@ int main(int argc, char **argv) {
 	const CompileInput input = makeBenchmarkInput(config);
 	const char *baselineLabel = "baseline";
 	const char *comparisonLabel = "candidate";
-	SimulationCore baselineCore(false);
+	SimulationCore baselineCore(false, true);
 	double baselineCompileSeconds = 0.0;
 	if (!compileBenchmarkCore(baselineCore, input, baselineLabel, baselineCompileSeconds)) {
 		return 1;
 	}
 
-	SimulationCore comparisonCore(true);
+	SimulationCore comparisonCore(true, true);
 	double comparisonCompileSeconds = 0.0;
 	if (config.compareOrdering && !compileBenchmarkCore(comparisonCore, input, comparisonLabel, comparisonCompileSeconds)) {
 		return 1;
@@ -535,6 +538,11 @@ int main(int argc, char **argv) {
 	}
 	printResult(baselineLabel, baselineResult, baselineCompileSeconds);
 	std::cout << "SimulationCore execution graph locality (baseline): " << baselineCore.getGraphLocalityScore() << '\n';
+	if (config.minimumTicksPerSecond > 0 && baselineResult.ticksPerSecond < config.minimumTicksPerSecond) {
+		std::cerr << "coreBenchmark baseline did not meet minimum TPS: expected=" << config.minimumTicksPerSecond
+				  << ", actual=" << baselineResult.ticksPerSecond << '\n';
+		return 2;
+	}
 
 	if (!config.compareOrdering) {
 		return 0;

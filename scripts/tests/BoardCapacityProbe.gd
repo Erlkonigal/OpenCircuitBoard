@@ -55,11 +55,15 @@ func runProbe() -> void:
 		quit(OK)
 		return
 	var simulation := SimulationBridge.new()
+	var compileStartedUsec := Time.get_ticks_usec()
 	var compileResult := simulation.compile(board)
+	var compileUsec := Time.get_ticks_usec() - compileStartedUsec
 	if not bool(compileResult.get("ok", false)):
 		fail("BoardCapacityProbe could not compile the project: %s" % String(compileResult.get("errorReason", "SimulationCompileFailed")))
 		return
+	var snapshotStartedUsec := Time.get_ticks_usec()
 	var snapshotResult := simulation.captureState()
+	var snapshotUsec := Time.get_ticks_usec() - snapshotStartedUsec
 	if not bool(snapshotResult.get("ok", false)):
 		fail("BoardCapacityProbe could not capture the initial state.")
 		return
@@ -70,7 +74,9 @@ func runProbe() -> void:
 	if not bool(warmupResult.get("ok", false)):
 		fail("BoardCapacityProbe could not warm up the simulation backend.")
 		return
+	var restoreStartedUsec := Time.get_ticks_usec()
 	var restoreResult := simulation.restoreState(snapshotResult.get("snapshot", PackedByteArray()) as PackedByteArray)
+	var restoreUsec := Time.get_ticks_usec() - restoreStartedUsec
 	if not bool(restoreResult.get("ok", false)):
 		fail("BoardCapacityProbe could not restore the initial state.")
 		return
@@ -90,13 +96,16 @@ func runProbe() -> void:
 	ticksPerSecondSamples.sort()
 	var medianTicksPerSecond := ticksPerSecondSamples[ticksPerSecondSamples.size() / 2]
 	print(
-		"Board capacity probe: medianTicksPerSecond=%.2f minTicksPerSecond=%.2f maxTicksPerSecond=%.2f durationUsec=%d samples=%d batchTicks=%d" % [
+		"Board capacity probe: medianTicksPerSecond=%.2f minTicksPerSecond=%.2f maxTicksPerSecond=%.2f durationUsec=%d samples=%d batchTicks=%d compileUsec=%d snapshotUsec=%d restoreUsec=%d" % [
 			medianTicksPerSecond,
 			ticksPerSecondSamples.front(),
 			ticksPerSecondSamples.back(),
 			probeDurationUsec,
 			probeSampleCount,
 			probeBatchTickCount,
+			compileUsec,
+			snapshotUsec,
+			restoreUsec,
 		]
 	)
 	main.queue_free()

@@ -14,6 +14,7 @@ Initialize the third-party submodule, then select the target platform:
 make init
 make build-release TARGET_PLATFORM=linux
 make core-benchmark TARGET_PLATFORM=linux
+make board-benchmark TARGET_PLATFORM=linux BOARD_PATH=/absolute/path/to/project.ocb
 ```
 
 Build the editor-facing debug variant when running the project from Godot:
@@ -31,4 +32,6 @@ make core-benchmark TARGET_PLATFORM=windows
 
 `make build TARGET_PLATFORM=<linux|windows> BUILD_TYPE=<Debug|Release>` builds one GDExtension variant. The `build-debug` and `build-release` shortcuts write separate artifacts that match the debug and release entries in `OcbSimulation.gdextension`. `make clean` removes generated build output.
 
-`core-benchmark` defaults to a 1024x1024 board with 256 continuously toggling pipelines and reports median TPS against the 100K target. Use `CORE_BENCHMARK_ARGS="--quick --compare-ordering"` for the legacy-sized graph-ordering comparison.
+`core-benchmark` defaults to a 1024x1024 board with 256 continuously toggling pipelines and reports median TPS against the 100K target. Use `CORE_BENCHMARK_ARGS="--quick --compare-ordering"` for the legacy-sized graph-ordering comparison, or `CORE_BENCHMARK_ARGS="--quick --minimum-tps 50000"` to make a chosen threshold fail the command.
+
+`board-benchmark` runs the same bridge used by a real `.ocb` project and reports compile, snapshot, restore, and simulation capacity timings. Pass additional probe arguments through `BOARD_BENCHMARK_ARGS`, for example `--editorProbe`.

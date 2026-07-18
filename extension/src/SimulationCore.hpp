@@ -66,15 +66,16 @@ struct CompileError {
 
 class SimulationCore {
 public:
-	explicit SimulationCore(bool useGraphLocalityOrdering = false);
+	explicit SimulationCore(bool useGraphLocalityOrdering = false, bool collectGraphLocalityScore = false);
 
-	bool compile(const CompileInput &input, CompileError &error);
+	bool compile(CompileInput input, CompileError &error);
 	std::vector<int32_t> advanceTick();
 	std::vector<int32_t> advanceTicks(int32_t tickCount);
 	void advanceTicksSilent(int32_t tickCount);
 	// These views write into caller-owned POD storage so presentation does not allocate in the runtime loop.
 	size_t drainStateChangesTo(int32_t *changes, size_t capacity);
 	bool copyVisibleStates(uint8_t *states, size_t capacity) const;
+	const uint8_t *getVisibleStatesData() const;
 	int32_t getVisibleCellCount() const;
 	bool beginDeferredVisualTracking();
 	void endDeferredVisualTracking();
@@ -111,7 +112,6 @@ private:
 
 	struct Component {
 		ToolKind kind = ToolKind::Empty;
-		std::vector<int32_t> cells;
 		int32_t clockHoldTicks = 0;
 		uint8_t latchInitialState = 0;
 	};
@@ -184,7 +184,7 @@ private:
 	static_assert(std::is_standard_layout_v<ConnectorRuntimeState> && std::is_trivially_copyable_v<ConnectorRuntimeState>);
 
 	struct ReadBinding {
-		std::vector<int32_t> cells;
+		int32_t firstCell = -1;
 		std::vector<int32_t> sourceComponents;
 		int32_t signalNetwork = -1;
 		std::vector<int32_t> outputNetworks;
@@ -192,7 +192,7 @@ private:
 	};
 
 	struct WriteBinding {
-		std::vector<int32_t> cells;
+		int32_t firstCell = -1;
 		std::vector<int32_t> inputNetworks;
 		int32_t signalNetwork = -1;
 		std::vector<int32_t> targetComponents;
@@ -389,7 +389,7 @@ private:
 	void markVisibleNodeDirty(int32_t node, uint8_t initialState, bool forceMaterialization = false);
 	void setChangedNodeState(int32_t node, uint8_t state) {
 		const uint8_t previousState = nodeStates_[node];
-		if (!isVisualTrackingDeferred_ && nodeHasVisibleCells_[node] != 0) {
+		if (nodeHasVisibleCells_[node] != 0) {
 			markVisibleNodeDirty(node, previousState);
 		}
 		nodeStates_[node] = state;
@@ -402,7 +402,6 @@ private:
 	void resetChangeCollector();
 	void advanceState();
 	void resetInternal();
-	uint64_t makeTopologySignature() const;
 	bool planRuntimeBuffers();
 	bool commitRuntimeBuffers();
 	void resetRuntimeBuffers();
@@ -416,6 +415,7 @@ private:
 	uint64_t tickCount_ = 0;
 	int64_t graphLocalityScore_ = 0;
 	bool useGraphLocalityOrdering_ = false;
+	bool collectGraphLocalityScore_ = false;
 	bool isVisualTrackingDeferred_ = false;
 	std::vector<int32_t> kinds_;
 	std::vector<int32_t> initialStates_;

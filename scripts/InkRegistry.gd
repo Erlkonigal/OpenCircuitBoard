@@ -32,11 +32,66 @@ const IconByComponentId := {
 
 const LatchOffIcon := preload("res://assets/inks/LatchOff.svg")
 
+static var CacheInitialized := false
+static var PaletteInkCache: Array[Dictionary] = []
+static var ComponentInkCache: Array[Dictionary] = []
+static var InkByComponentId: Dictionary = {}
+static var InkVariantsByPaletteToolId: Dictionary = {}
+static var BoardToolRegistryCache: Dictionary = {}
+static var DefaultIsOnByComponentId: Dictionary = {}
+
 static func getInks() -> Array[Dictionary]:
 	return getPaletteInks()
 
 static func getPaletteInks() -> Array[Dictionary]:
-	return [
+	ensureCache()
+	return copyInks(PaletteInkCache)
+
+static func getComponentInks() -> Array[Dictionary]:
+	ensureCache()
+	return copyInks(ComponentInkCache)
+
+static func getInkVariants(paletteToolId: String) -> Array[Dictionary]:
+	ensureCache()
+	var variantsVariant: Variant = InkVariantsByPaletteToolId.get(paletteToolId, null)
+	if not (variantsVariant is Array):
+		return []
+	var variants: Array[Dictionary] = []
+	for inkVariant in variantsVariant as Array:
+		if inkVariant is Dictionary:
+			variants.append((inkVariant as Dictionary).duplicate(true))
+	return variants
+
+static func getBoardToolRegistry() -> Dictionary:
+	ensureCache()
+	return BoardToolRegistryCache.duplicate(true)
+
+static func getInk(toolId: String) -> Dictionary:
+	ensureCache()
+	var inkVariant: Variant = InkByComponentId.get(toolId, null)
+	if inkVariant is Dictionary:
+		return (inkVariant as Dictionary).duplicate(true)
+	return {}
+
+static func getComponentId(ink: Dictionary) -> String:
+	return String(ink.get("componentId", ink.get("toolId", "")))
+
+static func getPaletteToolId(ink: Dictionary) -> String:
+	return String(ink.get("paletteToolId", getComponentId(ink)))
+
+static func getInkIcon(componentId: String, isOn := true) -> Texture2D:
+	if componentId == "latch" and not isOn:
+		return LatchOffIcon
+	return IconByComponentId[componentId] as Texture2D
+
+static func getDefaultIsOn(componentId: String) -> bool:
+	ensureCache()
+	return bool(DefaultIsOnByComponentId.get(componentId, true))
+
+static func ensureCache() -> void:
+	if CacheInitialized:
+		return
+	PaletteInkCache = [
 		makeInk("cross", "Cross", "Space Optimization", Color("8da8cf")),
 		makeInk("mesh", "Mesh", "Space Optimization", Color("91a66c"), "", false, true, true),
 		makeInk("bus", "Bus", "Space Optimization", Color("2378f4"), "bus", true),
@@ -55,10 +110,8 @@ static func getPaletteInks() -> Array[Dictionary]:
 		makeInk("clock", "Clock", "General Components", Color("f05b70"), "", false, true, true),
 		makeInk("led", "Led", "General Components", Color("e6edf8")),
 	]
-
-static func getComponentInks() -> Array[Dictionary]:
-	var componentInks := getPaletteInks()
-	componentInks.append_array([
+	ComponentInkCache = copyInks(PaletteInkCache)
+	ComponentInkCache.append_array([
 		makeInk("traceRed", "Trace Red", "Trace", Color("ff4d4d"), "trace"),
 		makeInk("traceGreen", "Trace Green", "Trace", Color("71f06b"), "trace"),
 		makeInk("traceBlue", "Trace Blue", "Trace", Color("2378f4"), "trace"),
@@ -70,48 +123,32 @@ static func getComponentInks() -> Array[Dictionary]:
 		makeInk("busCyan", "Bus Cyan", "Space Optimization", Color("55dfeb"), "bus"),
 		makeInk("busMagenta", "Bus Magenta", "Space Optimization", Color("c66af6"), "bus"),
 	])
-	return componentInks
-
-static func getInkVariants(paletteToolId: String) -> Array[Dictionary]:
-	var variants: Array[Dictionary] = []
-	for ink in getComponentInks():
-		if getPaletteToolId(ink) == paletteToolId:
-			variants.append(ink)
-	return variants
-
-static func getBoardToolRegistry() -> Dictionary:
-	var toolRegistry := {}
-	for ink in getComponentInks():
+	InkByComponentId.clear()
+	InkVariantsByPaletteToolId.clear()
+	BoardToolRegistryCache.clear()
+	DefaultIsOnByComponentId.clear()
+	for ink in ComponentInkCache:
 		var componentId := getComponentId(ink)
-		toolRegistry[componentId] = {
+		var paletteToolId := getPaletteToolId(ink)
+		InkByComponentId[componentId] = ink
+		DefaultIsOnByComponentId[componentId] = bool(ink.get("defaultIsOn", true))
+		if not InkVariantsByPaletteToolId.has(paletteToolId):
+			InkVariantsByPaletteToolId[paletteToolId] = []
+		(InkVariantsByPaletteToolId[paletteToolId] as Array).append(ink)
+		BoardToolRegistryCache[componentId] = {
 			"componentId": componentId,
-			"paletteToolId": getPaletteToolId(ink),
-			"color": ink.color,
-			"icon": ink.icon,
+			"paletteToolId": paletteToolId,
+			"color": ink.get("color", Color.WHITE),
+			"icon": ink.get("icon"),
 			"defaultIsOn": bool(ink.get("defaultIsOn", true)),
 		}
-	return toolRegistry
+	CacheInitialized = true
 
-static func getInk(toolId: String) -> Dictionary:
-	for ink in getComponentInks():
-		if getComponentId(ink) == toolId:
-			return ink
-	return {}
-
-static func getComponentId(ink: Dictionary) -> String:
-	return String(ink.get("componentId", ink.get("toolId", "")))
-
-static func getPaletteToolId(ink: Dictionary) -> String:
-	return String(ink.get("paletteToolId", getComponentId(ink)))
-
-static func getInkIcon(componentId: String, isOn := true) -> Texture2D:
-	if componentId == "latch" and not isOn:
-		return LatchOffIcon
-	return IconByComponentId[componentId] as Texture2D
-
-static func getDefaultIsOn(componentId: String) -> bool:
-	var ink := getInk(componentId)
-	return bool(ink.get("defaultIsOn", true))
+static func copyInks(inks: Array[Dictionary]) -> Array[Dictionary]:
+	var copiedInks: Array[Dictionary] = []
+	for ink in inks:
+		copiedInks.append(ink.duplicate(true))
+	return copiedInks
 
 static func makeInk(
 	toolId: String,

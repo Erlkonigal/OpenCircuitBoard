@@ -34,6 +34,19 @@ func run(context) -> void:
 	assert(bool(InkRegistry.getInk("latch").get("isConfigurable", false)))
 	assert(InkRegistry.getInkVariants("trace").size() == 6)
 	assert(InkRegistry.getInkVariants("bus").size() == 6)
+	var mutableInk := InkRegistry.getInk("or")
+	mutableInk["title"] = "Mutated"
+	assert(String(InkRegistry.getInk("or").get("title", "")) == "Or")
+	var mutablePaletteInks := InkRegistry.getPaletteInks()
+	mutablePaletteInks[0]["title"] = "Mutated"
+	assert(String(InkRegistry.getPaletteInks()[0].get("title", "")) == "Cross")
+	var mutableVariants := InkRegistry.getInkVariants("trace")
+	mutableVariants[0]["title"] = "Mutated"
+	assert(String(InkRegistry.getInkVariants("trace")[0].get("title", "")) == "Trace")
+	var mutableRegistry := InkRegistry.getBoardToolRegistry()
+	(mutableRegistry.get("or") as Dictionary)["defaultIsOn"] = false
+	assert(bool(InkRegistry.getBoardToolRegistry().get("or", {}).get("defaultIsOn", false)))
+	assert(InkRegistry.getDefaultIsOn("latch"))
 	context.assertInkButton(inkButtons.get("or") as Button, InkRegistry.getInk("or"), true)
 	context.assertInkButton(inkButtons.get("bus") as Button, InkRegistry.getInk("bus"), false)
 	context.assertInkButton(inkButtons.get("trace") as Button, InkRegistry.getInk("trace"), false)

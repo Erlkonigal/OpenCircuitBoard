@@ -468,7 +468,7 @@ func getClockHoldTicks() -> int:
 	return ClockHoldTicks
 
 func getTileClockHoldTicks(coordinates: Vector2i) -> int:
-	var tileValue := getTileValueAt(coordinates)
+	var tileValue := getCanonicalTileValueAt(coordinates)
 	if String(tileValue.get("toolId", "")) != "clock":
 		return ClockHoldTicksMinimum
 	return int(tileValue.get("clockHoldTicks", ClockHoldTicksMinimum))
@@ -496,7 +496,7 @@ func getMeshId() -> int:
 	return MeshId
 
 func getTileMeshId(coordinates: Vector2i) -> int:
-	var tileValue := getTileValueAt(coordinates)
+	var tileValue := getCanonicalTileValueAt(coordinates)
 	if String(tileValue.get("toolId", "")) != "mesh":
 		return MeshIdMinimum
 	return int(tileValue.get("meshId", MeshIdMinimum))
@@ -586,7 +586,7 @@ func getCursorInfoAt(coordinates: Vector2i) -> Dictionary:
 	}
 
 func getTileState(coordinates: Vector2i) -> bool:
-	return bool(getTileValueAt(coordinates).get("isOn", false))
+	return bool(getCanonicalTileValueAt(coordinates).get("isOn", false))
 
 func setTileState(coordinates: Vector2i, isOn: bool) -> bool:
 	var tileValue := getTileValueAt(coordinates)
@@ -613,11 +613,23 @@ func applyRuntimeTileStates(updates: Array) -> void:
 		if rawCoordinates is Vector2i and update.has("isOn"):
 			setRuntimeTileState(rawCoordinates as Vector2i, bool(update["isOn"]))
 
-func applyRuntimeTileStatesFromGrid(states: PackedInt32Array, gridWidth: int, gridOrigin: Vector2i) -> void:
-	if gridWidth <= 0:
+func applyRuntimeTileStatesFromGrid(states: Variant, gridWidth: int, gridOrigin: Vector2i) -> void:
+	if gridWidth <= 0 or not (states is PackedInt32Array or states is PackedByteArray):
 		return
-	for cellIndex in states.size():
-		setRuntimeTileState(getSimulationCellCoordinates(cellIndex, gridWidth, gridOrigin), states[cellIndex] != 0)
+	if states is PackedInt32Array:
+		var intStates := states as PackedInt32Array
+		for coordinatesVariant in TileValues:
+			var coordinates := coordinatesVariant as Vector2i
+			var cellIndex := getSimulationCellIndex(coordinates, gridWidth, gridOrigin)
+			if cellIndex >= 0 and cellIndex < intStates.size():
+				setRuntimeTileState(coordinates, intStates[cellIndex] != 0)
+		return
+	var byteStates := states as PackedByteArray
+	for coordinatesVariant in TileValues:
+		var coordinates := coordinatesVariant as Vector2i
+		var cellIndex := getSimulationCellIndex(coordinates, gridWidth, gridOrigin)
+		if cellIndex >= 0 and cellIndex < byteStates.size():
+			setRuntimeTileState(coordinates, byteStates[cellIndex] != 0)
 
 func applyRuntimeTileStateChanges(changes: PackedInt32Array, gridWidth: int, gridOrigin: Vector2i) -> void:
 	if gridWidth <= 0:
@@ -635,11 +647,20 @@ func getSimulationCellCoordinates(cellIndex: int, gridWidth: int, gridOrigin: Ve
 	var localY := floori(float(cellIndex - localX) / float(gridWidth))
 	return gridOrigin + Vector2i(localX, localY)
 
+func getSimulationCellIndex(coordinates: Vector2i, gridWidth: int, gridOrigin: Vector2i) -> int:
+	if gridWidth <= 0:
+		return -1
+	var localCoordinates := coordinates - gridOrigin
+	if localCoordinates.x < 0 or localCoordinates.y < 0 or localCoordinates.x >= gridWidth:
+		return -1
+	return localCoordinates.y * gridWidth + localCoordinates.x
+
 func setRuntimeTileState(coordinates: Vector2i, isOn: bool) -> bool:
-	if not TileValues.has(coordinates):
+	var tileValue := getCanonicalTileValueAt(coordinates)
+	if tileValue.is_empty():
 		return false
-	var designIsOn := getTileState(coordinates)
-	var renderedIsOn := getRuntimeTileState(coordinates)
+	var designIsOn := bool(tileValue.get("isOn", false))
+	var renderedIsOn := bool(RuntimeTileStates.get(coordinates, designIsOn))
 	if isOn == designIsOn:
 		RuntimeTileStates.erase(coordinates)
 	else:
@@ -650,7 +671,9 @@ func setRuntimeTileState(coordinates: Vector2i, isOn: bool) -> bool:
 	return true
 
 func getRuntimeTileState(coordinates: Vector2i) -> bool:
-	return bool(RuntimeTileStates.get(coordinates, getTileState(coordinates)))
+	if RuntimeTileStates.has(coordinates):
+		return bool(RuntimeTileStates[coordinates])
+	return bool(getCanonicalTileValueAt(coordinates).get("isOn", false))
 
 func hasRuntimeTileState(coordinates: Vector2i) -> bool:
 	return RuntimeTileStates.has(coordinates)
@@ -658,7 +681,7 @@ func hasRuntimeTileState(coordinates: Vector2i) -> bool:
 func clearRuntimeTileStates() -> void:
 	for coordinatesVariant in RuntimeTileStates.keys():
 		var coordinates := coordinatesVariant as Vector2i
-		updateTileVisualState(coordinates, getTileState(coordinates))
+		updateTileVisualState(coordinates, bool(getCanonicalTileValueAt(coordinates).get("isOn", false)))
 	RuntimeTileStates.clear()
 
 func getTileIcon(toolId: String, isOn: bool) -> Texture2D:
@@ -668,7 +691,7 @@ func updateTileVisualState(coordinates: Vector2i, isOn: bool) -> void:
 	var tile := Occupancy.get(coordinates) as Node2D
 	if tile == null:
 		return
-	var toolId := getToolIdAt(coordinates)
+	var toolId := String(getCanonicalTileValueAt(coordinates).get("toolId", ""))
 	if toolId == "latch":
 		tile.call("setIcon", getTileIcon(toolId, isOn))
 	tile.call("setInkState", isOn)
@@ -676,7 +699,7 @@ func updateTileVisualState(coordinates: Vector2i, isOn: bool) -> void:
 func getSimulationTiles() -> Array[Dictionary]:
 	var tiles: Array[Dictionary] = []
 	for coordinates in getSortedCoordinates(TileValues.keys()):
-		var tileValue := getTileValueAt(coordinates)
+		var tileValue := getCanonicalTileValueAt(coordinates)
 		var simulationTile := {
 			"coordinates": coordinates,
 			"toolId": String(tileValue.get("toolId", "")),
@@ -686,6 +709,12 @@ func getSimulationTiles() -> Array[Dictionary]:
 		}
 		tiles.append(simulationTile)
 	return tiles
+
+func getSimulationCompileData() -> Dictionary:
+	return {
+		"tileValues": TileValues,
+		"gridBounds": GridBounds,
+	}
 
 func getSimulationGrid() -> Dictionary:
 	return {
@@ -701,7 +730,7 @@ func getSimulationGridOrigin() -> Vector2i:
 func exportProjectData() -> Dictionary:
 	var tiles: Array[Dictionary] = []
 	for coordinates in getSortedCoordinates(TileValues.keys()):
-		var tileValue := getTileValueAt(coordinates)
+		var tileValue := getCanonicalTileValueAt(coordinates)
 		var projectTile := {
 			"x": coordinates.x,
 			"y": coordinates.y,
@@ -1474,7 +1503,12 @@ func normalizeTileValue(rawValue: Variant) -> Dictionary:
 	return {}
 
 func getTileValueAt(coordinates: Vector2i) -> Dictionary:
-	return normalizeTileValue(TileValues.get(coordinates, {}))
+	var tileValue := getCanonicalTileValueAt(coordinates)
+	return tileValue.duplicate(true) if not tileValue.is_empty() else {}
+
+func getCanonicalTileValueAt(coordinates: Vector2i) -> Dictionary:
+	var tileValue: Variant = TileValues.get(coordinates, null)
+	return tileValue as Dictionary if tileValue is Dictionary else {}
 
 func setTileTool(coordinates: Vector2i, toolId: String) -> bool:
 	return setTileValue(coordinates, makeTileValue(toolId))
@@ -1550,7 +1584,7 @@ func isOptionalPositiveInteger(rawValue: Variant) -> bool:
 	return false
 
 func getToolIdAt(coordinates: Vector2i) -> String:
-	return String(getTileValueAt(coordinates).get("toolId", ""))
+	return String(getCanonicalTileValueAt(coordinates).get("toolId", ""))
 
 func isCoordinateValid(coordinates: Vector2i) -> bool:
 	return GridBounds.has_point(coordinates)

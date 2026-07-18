@@ -2,6 +2,7 @@ extends RefCounted
 class_name SimulationBridge
 
 const NativeExtensionPath := "res://OcbSimulation.gdextension"
+const SimulationMaximumCellCount := 1_048_576
 const KindEmpty := 0
 const KindTrace := 1
 const KindTraceRed := 2
@@ -101,6 +102,13 @@ func compile(board: Node) -> Dictionary:
 func getCurrentStates() -> Dictionary:
 	if not hasNativeSimulation():
 		return makeFailure(-1, -1, "BackendUnavailable")
+	if NativeSimulation.has_method("getStateBytes"):
+		var byteStatesVariant: Variant = NativeSimulation.call("getStateBytes")
+		if byteStatesVariant is PackedByteArray:
+			return {
+				"ok": true,
+				"states": byteStatesVariant as PackedByteArray,
+			}
 	var statesVariant: Variant = NativeSimulation.call("getStates")
 	if not (statesVariant is PackedInt32Array):
 		return makeFailure(-1, -1, "OcbSimulationStatesInvalid")
@@ -227,10 +235,14 @@ func drainStateChanges() -> Dictionary:
 		"changes": changesVariant as PackedInt32Array,
 	}
 
-func startAsync(batchTickCount: int, publishIntervalUsec: int) -> Dictionary:
+func startAsync(batchTickCount: int, publishIntervalUsec: int, batchBudgetUsec := 0) -> Dictionary:
 	if not hasNativeSimulation():
 		return makeFailure(-1, -1, "BackendUnavailable")
-	var resultVariant: Variant = NativeSimulation.call("startAsync", batchTickCount, publishIntervalUsec)
+	var resultVariant: Variant
+	if batchBudgetUsec > 0 and NativeSimulation.has_method("startAsyncWithBudget"):
+		resultVariant = NativeSimulation.call("startAsyncWithBudget", batchTickCount, publishIntervalUsec, batchBudgetUsec)
+	else:
+		resultVariant = NativeSimulation.call("startAsync", batchTickCount, publishIntervalUsec)
 	if not (resultVariant is Dictionary):
 		return makeFailure(-1, -1, "OcbSimulationAsyncStartResultInvalid")
 	var result := resultVariant as Dictionary
@@ -312,6 +324,19 @@ func restoreState(snapshot: PackedByteArray) -> Dictionary:
 		"changes": changesVariant as PackedInt32Array,
 	}
 
+func restoreStateSilent(snapshot: PackedByteArray) -> Dictionary:
+	if not hasNativeSimulation():
+		return makeFailure(-1, -1, "BackendUnavailable")
+	if not NativeSimulation.has_method("restoreStateSilent"):
+		return restoreState(snapshot)
+	var resultVariant: Variant = NativeSimulation.call("restoreStateSilent", snapshot)
+	if not (resultVariant is Dictionary):
+		return makeFailure(-1, -1, "OcbSimulationRestoreSilentResultInvalid")
+	var result := resultVariant as Dictionary
+	if not bool(result.get("ok", false)):
+		return makeFailure(-1, -1, String(result.get("errorReason", "OcbSimulationRestoreSilentFailed")))
+	return {"ok": true}
+
 func release() -> void:
 	if hasNativeSimulation():
 		NativeSimulation.call("stopAsync")
@@ -332,37 +357,76 @@ func loadNativeExtension() -> bool:
 	return NativeExtension != null
 
 func buildGrid(board: Node) -> Dictionary:
-	if board == null or not board.has_method("getSimulationTiles"):
+	if board == null or not board.has_method("getSimulationCompileData"):
 		return makeFailure(-1, -1, "SimulationBoardUnavailable")
-	GridWidth = int(board.get("GridWidthCount"))
-	GridHeight = int(board.get("GridHeightCount"))
+	var compileDataVariant: Variant = board.call("getSimulationCompileData")
+	if not (compileDataVariant is Dictionary):
+		return failAndRelease(-1, -1, "SimulationCompileDataInvalid")
+	var compileData := compileDataVariant as Dictionary
+	var tileValuesVariant: Variant = compileData.get("tileValues", null)
+	if not (tileValuesVariant is Dictionary):
+		return failAndRelease(-1, -1, "SimulationTileValuesInvalid")
+	var tileValues := tileValuesVariant as Dictionary
+	var gridBoundsVariant: Variant = compileData.get("gridBounds", null)
+	var gridBounds := gridBoundsVariant as Rect2i if gridBoundsVariant is Rect2i else Rect2i()
+	var hasGridBounds := gridBounds.size.x > 0 and gridBounds.size.y > 0
+	if tileValues.size() > SimulationMaximumCellCount:
+		return failAndRelease(-1, -1, "SimulationGridTooLarge")
+	var hasTiles := false
+	var minimumCoordinates := Vector2i.ZERO
+	var maximumCoordinates := Vector2i.ZERO
+	for coordinatesVariant in tileValues:
+		if not (coordinatesVariant is Vector2i):
+			return failAndRelease(-1, -1, "SimulationTileCoordinatesInvalid")
+		var coordinates := coordinatesVariant as Vector2i
+		if hasGridBounds and not gridBounds.has_point(coordinates):
+			return failAndRelease(coordinates.x, coordinates.y, "SimulationTileOutsideGrid", false, true)
+		if not hasGridBounds and board.has_method("isCoordinateValid") and not bool(board.call("isCoordinateValid", coordinates)):
+			return failAndRelease(coordinates.x, coordinates.y, "SimulationTileOutsideGrid", false, true)
+		if not hasTiles:
+			minimumCoordinates = coordinates
+			maximumCoordinates = coordinates
+			hasTiles = true
+			continue
+		minimumCoordinates = Vector2i(mini(minimumCoordinates.x, coordinates.x), mini(minimumCoordinates.y, coordinates.y))
+		maximumCoordinates = Vector2i(maxi(maximumCoordinates.x, coordinates.x), maxi(maximumCoordinates.y, coordinates.y))
+	if hasTiles:
+		GridOrigin = minimumCoordinates
+		GridWidth = maximumCoordinates.x - minimumCoordinates.x + 1
+		GridHeight = maximumCoordinates.y - minimumCoordinates.y + 1
+	else:
+		GridOrigin = gridBounds.position if hasGridBounds else getBoardGridOrigin(board)
+		GridWidth = 1
+		GridHeight = 1
 	if GridWidth <= 0 or GridHeight <= 0:
 		return failAndRelease(-1, -1, "SimulationGridInvalid")
-	GridOrigin = getBoardGridOrigin(board)
+	if GridWidth > SimulationMaximumCellCount or GridHeight > SimulationMaximumCellCount or GridWidth > SimulationMaximumCellCount / GridHeight:
+		return failAndRelease(-1, -1, "SimulationGridTooLarge")
 	var cellCount := GridWidth * GridHeight
 	var kinds := PackedInt32Array()
 	var initialStates := PackedInt32Array()
 	var clockHoldTicks := PackedInt32Array()
 	var meshIds := PackedInt32Array()
-	kinds.resize(cellCount)
-	initialStates.resize(cellCount)
-	clockHoldTicks.resize(cellCount)
-	meshIds.resize(cellCount)
+	if kinds.resize(cellCount) != OK:
+		return failAndRelease(-1, -1, "SimulationGridAllocationFailed")
+	if initialStates.resize(cellCount) != OK:
+		return failAndRelease(-1, -1, "SimulationGridAllocationFailed")
+	if clockHoldTicks.resize(cellCount) != OK:
+		return failAndRelease(-1, -1, "SimulationGridAllocationFailed")
+	if meshIds.resize(cellCount) != OK:
+		return failAndRelease(-1, -1, "SimulationGridAllocationFailed")
 	kinds.fill(KindEmpty)
 	initialStates.fill(0)
 	clockHoldTicks.fill(1)
 	meshIds.fill(1)
-	var tilesVariant: Variant = board.call("getSimulationTiles")
-	if not (tilesVariant is Array):
-		return failAndRelease(-1, -1, "SimulationTilesInvalid")
-	for tileVariant in tilesVariant as Array:
-		if not (tileVariant is Dictionary):
-			return failAndRelease(-1, -1, "SimulationTileInvalid")
-		var tile := tileVariant as Dictionary
-		var coordinatesVariant: Variant = tile.get("coordinates", null)
+	for coordinatesVariant in tileValues:
 		if not (coordinatesVariant is Vector2i):
 			return failAndRelease(-1, -1, "SimulationTileCoordinatesInvalid")
 		var coordinates := coordinatesVariant as Vector2i
+		var tileVariant: Variant = tileValues[coordinates]
+		if not (tileVariant is Dictionary):
+			return failAndRelease(-1, -1, "SimulationTileInvalid")
+		var tile := tileVariant as Dictionary
 		var cellIndex := getCellIndex(coordinates)
 		if cellIndex < 0:
 			return failAndRelease(coordinates.x, coordinates.y, "SimulationTileOutsideGrid", false, true)

@@ -862,8 +862,8 @@ void testGraphOrderingPreservesExternalStatesAndDeltas() {
 		setKind(input, 2, y, ToolKind::Write);
 		setKind(input, 3, y, ToolKind::Buffer);
 	}
-	SimulationCore baselineCore(false);
-	SimulationCore orderedCore(true);
+	SimulationCore baselineCore(false, true);
+	SimulationCore orderedCore(true, true);
 	CompileError error;
 	expect(baselineCore.compile(input, error), "unreordered reference circuit compiles");
 	expect(orderedCore.compile(input, error), "reordered reference circuit compiles");
