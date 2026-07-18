@@ -42,10 +42,14 @@ const SimulationStepLengthMaximum := 16
 const SimulationFrequencyMinimumTps := 1.0
 const SimulationCapacityRiseSmoothing := 0.12
 const SimulationFrameWorkShare := 0.75
-const SimulationBatchTickCount := 256
+const SimulationFastLoopCursorRefreshIntervalUsec := 100_000
+const SimulationAsyncPublishIntervalUsec := 100_000
+const SimulationBatchTickCountMaximum := 4_096
+const SimulationBatchTargetDurationUsec := 250
 const SimulationFrequencyProbeBatchTickCount := 64
 const SimulationFrequencyProbeDurationUsec := 4_000
 const SimulationThroughputSampleIntervalUsec := 250_000
+const SimulationAccumulatorMaximumSeconds := 0.25
 const SimulationDragPixelsPerStep := 8.0
 const DockMenuButtonSize := 28
 const DockMenuSeparation := 5
@@ -139,6 +143,8 @@ var IsEditingLoopFrequency := false
 var SimulationTicksPerSecond := 0.0
 var SimulationThroughputSampleStartUsec := 0
 var SimulationThroughputSampleTicks := 0
+var LastFastLoopCursorUpdateUsec := 0
+var IsAsyncSimulationRunning := false
 var IsDraggingStepLength := false
 var StepLengthDragRemainder := 0.0
 var SimulationBridgeInstance := SimulationBridge.new()
@@ -204,6 +210,11 @@ func _ready() -> void:
 
 func _process(_delta: float) -> void:
 	updateSimulation(_delta)
+	if IsSimulating and IsLooping and IsLoopFrequencyFullSpeed:
+		var nowUsec := Time.get_ticks_usec()
+		if nowUsec - LastFastLoopCursorUpdateUsec < SimulationFastLoopCursorRefreshIntervalUsec:
+			return
+		LastFastLoopCursorUpdateUsec = nowUsec
 	if not isPointerOverCanvas():
 		return
 	var mousePosition := Board.get_global_mouse_position()
@@ -935,7 +946,7 @@ func toggleSimulationLatchAt(coordinates: Vector2i) -> bool:
 		failActiveSimulation(toggleResult)
 		return false
 	if IsLooping:
-		applySimulationUpdates(toggleResult.get("updates", []) as Array)
+		applySimulationStateChanges(toggleResult.get("changes", PackedInt32Array()) as PackedInt32Array)
 		refreshSimulationControls()
 		return true
 	var snapshotResult := SimulationBridgeInstance.captureState()
@@ -948,11 +959,11 @@ func toggleSimulationLatchAt(coordinates: Vector2i) -> bool:
 		failActiveSimulation({"ok": false, "errorReason": "SimulationTimelineInvalid"})
 		return false
 	SimulationTimeline[SimulationTick] = snapshotResult.get("snapshot", PackedByteArray()) as PackedByteArray
-	var statesResult := SimulationBridgeInstance.getCurrentUpdates()
+	var statesResult := SimulationBridgeInstance.getCurrentStates()
 	if not bool(statesResult.get("ok", false)):
 		failActiveSimulation(statesResult)
 		return false
-	applySimulationUpdates(statesResult.get("updates", []) as Array)
+	applySimulationStates(statesResult.get("states", PackedInt32Array()) as PackedInt32Array)
 	SimulationAccumulator = 0.0
 	refreshSimulationControls()
 	return true
@@ -966,16 +977,16 @@ func enterSimulation() -> void:
 	if not bool(compileResult.get("ok", false)):
 		abortSimulationStart(compileResult)
 		return
-	var statesResult := SimulationBridgeInstance.getCurrentUpdates()
-	if not bool(statesResult.get("ok", false)):
-		abortSimulationStart(statesResult)
-		return
-	applySimulationUpdates(statesResult.get("updates", []) as Array)
 	var capacityProbeResult := probeLoopFrequencyMaximum()
 	if not bool(capacityProbeResult.get("ok", false)):
 		abortSimulationStart(capacityProbeResult)
 		return
 	updateLoopFrequencyMaximum(float(capacityProbeResult.get("ticksPerSecond", SimulationFrequencyMinimumTps)))
+	var statesResult := SimulationBridgeInstance.getCurrentStates()
+	if not bool(statesResult.get("ok", false)):
+		abortSimulationStart(statesResult)
+		return
+	applySimulationStates(statesResult.get("states", PackedInt32Array()) as PackedInt32Array)
 	hideInkVariantMenu()
 	hideClockSettingsMenu()
 	hideMeshSettingsMenu()
@@ -987,6 +998,8 @@ func enterSimulation() -> void:
 	SimulationTick = 0
 	SimulationTimeline.clear()
 	SimulationAccumulator = 0.0
+	LastFastLoopCursorUpdateUsec = 0
+	IsAsyncSimulationRunning = false
 	resetSimulationThroughput()
 	refreshSimulationControls()
 
@@ -994,17 +1007,18 @@ func probeLoopFrequencyMaximum() -> Dictionary:
 	var snapshotResult := SimulationBridgeInstance.captureState()
 	if not bool(snapshotResult.get("ok", false)):
 		return snapshotResult
-	var startedUsec := Time.get_ticks_usec()
-	var advancedTickCount := 0
-	while Time.get_ticks_usec() - startedUsec < SimulationFrequencyProbeDurationUsec:
-		if not SimulationBridgeInstance.advanceTicksSilent(SimulationFrequencyProbeBatchTickCount):
-			return {"ok": false, "errorReason": "BackendUnavailable"}
-		advancedTickCount += SimulationFrequencyProbeBatchTickCount
-	var elapsedUsec := maxi(1, Time.get_ticks_usec() - startedUsec)
+	var advanceResult := SimulationBridgeInstance.advanceTicksForDuration(
+		SimulationFrequencyProbeDurationUsec,
+		2147483647,
+		SimulationFrequencyProbeBatchTickCount
+	)
+	if not bool(advanceResult.get("ok", false)):
+		return advanceResult
+	var advancedTickCount := int(advanceResult.get("advancedTickCount", 0))
+	var elapsedUsec := maxi(1, int(advanceResult.get("elapsedUsec", 0)))
 	var restoreResult := SimulationBridgeInstance.restoreState(snapshotResult.get("snapshot", PackedByteArray()) as PackedByteArray)
 	if not bool(restoreResult.get("ok", false)):
 		return restoreResult
-	applySimulationUpdates(restoreResult.get("updates", []) as Array)
 	return {
 		"ok": true,
 		"ticksPerSecond": float(advancedTickCount) * 1_000_000.0 / float(elapsedUsec),
@@ -1013,11 +1027,16 @@ func probeLoopFrequencyMaximum() -> Dictionary:
 func leaveSimulation() -> void:
 	if not IsSimulating:
 		return
+	var stopResult := stopAsyncLoopingSimulation(false)
+	if not bool(stopResult.get("ok", false)):
+		recordEvent(getSimulationFailureText(stopResult))
 	IsSimulating = false
 	IsLooping = true
 	SimulationTick = 0
 	SimulationTimeline.clear()
 	SimulationAccumulator = 0.0
+	LastFastLoopCursorUpdateUsec = 0
+	IsAsyncSimulationRunning = false
 	resetSimulationThroughput()
 	clearSimulationRuntimeStates()
 	SimulationBridgeInstance.release()
@@ -1029,6 +1048,10 @@ func toggleLoopStepMode() -> void:
 	if not IsSimulating:
 		return
 	if IsLooping:
+		var stopResult := stopAsyncLoopingSimulation(true)
+		if not bool(stopResult.get("ok", false)):
+			failActiveSimulation(stopResult)
+			return
 		if not initializeStepSimulationTimeline():
 			return
 		IsLooping = false
@@ -1064,38 +1087,87 @@ func showNextSimulationTick() -> void:
 func updateSimulation(delta: float) -> void:
 	if not IsSimulating or not IsLooping:
 		return
+	if IsLoopFrequencyFullSpeed:
+		if not startAsyncLoopingSimulation():
+			return
+		SimulationAccumulator = 0.0
+		var fullSpeedResult := SimulationBridgeInstance.pollAsync()
+		if not bool(fullSpeedResult.get("ok", false)):
+			failActiveSimulation(fullSpeedResult)
+			return
+		if not bool(fullSpeedResult.get("running", false)):
+			IsAsyncSimulationRunning = false
+			failActiveSimulation({"ok": false, "errorReason": "SimulationAsyncStopped"})
+			return
+		applySimulationStateChanges(fullSpeedResult.get("changes", PackedInt32Array()) as PackedInt32Array)
+		var fullSpeedAdvancedTickCount := int(fullSpeedResult.get("advancedTickCount", 0))
+		if fullSpeedAdvancedTickCount > 0 and recordSimulationThroughput(fullSpeedAdvancedTickCount):
+			updateLoopFrequencyMaximum(SimulationTicksPerSecond)
+			refreshSimulationStatus()
+		return
+	if IsAsyncSimulationRunning:
+		var stopResult := stopAsyncLoopingSimulation(true)
+		if not bool(stopResult.get("ok", false)):
+			failActiveSimulation(stopResult)
+			return
 	SimulationAccumulator += delta
 	var requestedTickCount := floori(SimulationAccumulator * LoopFrequency)
 	if requestedTickCount <= 0:
 		return
-	SimulationAccumulator -= float(requestedTickCount) / LoopFrequency
 	var advanceResult := advanceLoopingSimulation(requestedTickCount, delta)
 	if not bool(advanceResult.get("ok", false)):
 		return
 	var advancedTickCount := int(advanceResult.get("advancedTickCount", 0))
 	if advancedTickCount > 0:
-		if IsLoopFrequencyFullSpeed or LoopFrequency >= LoopFrequencyMaximumTps * 0.8:
-			updateLoopFrequencyMaximum(float(advanceResult.get("ticksPerSecond", LoopFrequencyMaximumTps)))
-		recordSimulationThroughput(advancedTickCount)
-		refreshSimulationStatus()
+		SimulationAccumulator = maxf(0.0, SimulationAccumulator - float(advancedTickCount) / LoopFrequency)
+		SimulationAccumulator = minf(SimulationAccumulator, SimulationAccumulatorMaximumSeconds)
+		if recordSimulationThroughput(advancedTickCount):
+			if LoopFrequency >= LoopFrequencyMaximumTps * 0.8:
+				updateLoopFrequencyMaximum(SimulationTicksPerSecond)
+			refreshSimulationStatus()
+
+func startAsyncLoopingSimulation() -> bool:
+	if IsAsyncSimulationRunning:
+		return true
+	var startResult := SimulationBridgeInstance.startAsync(
+		getSimulationBatchTickCount(),
+		SimulationAsyncPublishIntervalUsec
+	)
+	if not bool(startResult.get("ok", false)):
+		failActiveSimulation(startResult)
+		return false
+	IsAsyncSimulationRunning = true
+	return true
+
+func stopAsyncLoopingSimulation(applyCurrentStates: bool) -> Dictionary:
+	if not IsAsyncSimulationRunning:
+		return {"ok": true}
+	var stopResult := SimulationBridgeInstance.stopAsync()
+	IsAsyncSimulationRunning = false
+	if not bool(stopResult.get("ok", false)):
+		return stopResult
+	if not applyCurrentStates:
+		return {"ok": true}
+	var statesResult := SimulationBridgeInstance.getCurrentStates()
+	if not bool(statesResult.get("ok", false)):
+		return statesResult
+	applySimulationStates(statesResult.get("states", PackedInt32Array()) as PackedInt32Array)
+	return {"ok": true}
 
 func advanceLoopingSimulation(requestedTickCount: int, delta: float) -> Dictionary:
 	var startedUsec := Time.get_ticks_usec()
-	var frameDeadlineUsec := startedUsec + getSimulationWorkBudgetUsec(delta)
-	var advancedTickCount := 0
-	while advancedTickCount < requestedTickCount and Time.get_ticks_usec() < frameDeadlineUsec:
-		var batchTickCount := mini(SimulationBatchTickCount, requestedTickCount - advancedTickCount)
-		if not SimulationBridgeInstance.advanceTicksSilent(batchTickCount):
-			failActiveSimulation({"ok": false, "errorReason": "BackendUnavailable"})
-			return {"ok": false}
-		advancedTickCount += batchTickCount
+	var advanceResult := SimulationBridgeInstance.advanceTicksForDurationAndDrainStateChanges(
+		getSimulationWorkBudgetUsec(delta),
+		requestedTickCount,
+		getSimulationBatchTickCount()
+	)
+	if not bool(advanceResult.get("ok", false)):
+		failActiveSimulation(advanceResult)
+		return {"ok": false}
+	var advancedTickCount := int(advanceResult.get("advancedTickCount", 0))
+	applySimulationStateChanges(advanceResult.get("changes", PackedInt32Array()) as PackedInt32Array)
 	if advancedTickCount <= 0:
 		return {"ok": true, "advancedTickCount": 0, "ticksPerSecond": 0.0}
-	var drainResult := SimulationBridgeInstance.drainStateChanges()
-	if not bool(drainResult.get("ok", false)):
-		failActiveSimulation(drainResult)
-		return {"ok": false}
-	applySimulationUpdates(drainResult.get("updates", []) as Array)
 	var elapsedUsec := maxi(1, Time.get_ticks_usec() - startedUsec)
 	return {
 		"ok": true,
@@ -1106,6 +1178,10 @@ func advanceLoopingSimulation(requestedTickCount: int, delta: float) -> Dictiona
 func getSimulationWorkBudgetUsec(delta: float) -> int:
 	var frameDuration := maxf(delta, 0.001)
 	return maxi(1, floori(frameDuration * 1_000_000.0 * SimulationFrameWorkShare))
+
+func getSimulationBatchTickCount() -> int:
+	var capacityTickCount := floori(LoopFrequencyMaximumTps * float(SimulationBatchTargetDurationUsec) / 1_000_000.0)
+	return clampi(capacityTickCount, 1, SimulationBatchTickCountMaximum)
 
 func showSimulationTick(targetTick: int) -> bool:
 	if IsLooping or targetTick < 0 or SimulationTimeline.is_empty():
@@ -1125,7 +1201,7 @@ func buildSimulationTimelineTo(targetTick: int) -> bool:
 		if not bool(advanceResult.get("ok", false)):
 			failActiveSimulation(advanceResult)
 			return false
-		applySimulationUpdates(advanceResult.get("updates", []) as Array)
+		applySimulationStateChanges(advanceResult.get("changes", PackedInt32Array()) as PackedInt32Array)
 		var snapshotResult := SimulationBridgeInstance.captureState()
 		if not bool(snapshotResult.get("ok", false)):
 			failActiveSimulation(snapshotResult)
@@ -1148,13 +1224,19 @@ func applySimulationSnapshot(snapshotIndex: int) -> bool:
 	if not bool(restoreResult.get("ok", false)):
 		failActiveSimulation(restoreResult)
 		return false
-	applySimulationUpdates(restoreResult.get("updates", []) as Array)
+	applySimulationStateChanges(restoreResult.get("changes", PackedInt32Array()) as PackedInt32Array)
 	SimulationTick = snapshotIndex
 	return true
 
-func applySimulationUpdates(updates: Array) -> void:
-	if Board.has_method("applyRuntimeTileStates"):
-		Board.call("applyRuntimeTileStates", updates)
+func applySimulationStates(states: PackedInt32Array) -> void:
+	if states.is_empty() or not Board.has_method("applyRuntimeTileStatesFromGrid"):
+		return
+	Board.call("applyRuntimeTileStatesFromGrid", states, SimulationBridgeInstance.GridWidth, SimulationBridgeInstance.GridOrigin)
+
+func applySimulationStateChanges(changes: PackedInt32Array) -> void:
+	if changes.is_empty() or not Board.has_method("applyRuntimeTileStateChanges"):
+		return
+	Board.call("applyRuntimeTileStateChanges", changes, SimulationBridgeInstance.GridWidth, SimulationBridgeInstance.GridOrigin)
 
 func clearSimulationRuntimeStates() -> void:
 	if Board.has_method("clearRuntimeTileStates"):
@@ -1293,21 +1375,22 @@ func resetSimulationThroughput() -> void:
 	SimulationThroughputSampleStartUsec = Time.get_ticks_usec()
 	SimulationThroughputSampleTicks = 0
 
-func recordSimulationThroughput(advancedTickCount: int) -> void:
+func recordSimulationThroughput(advancedTickCount: int) -> bool:
 	if advancedTickCount <= 0:
-		return
+		return false
 	var nowUsec := Time.get_ticks_usec()
 	if SimulationThroughputSampleStartUsec <= 0:
 		SimulationThroughputSampleStartUsec = nowUsec
 	SimulationThroughputSampleTicks += advancedTickCount
 	var elapsedUsec := nowUsec - SimulationThroughputSampleStartUsec
 	if elapsedUsec <= 0:
-		return
-	if IsLoopFrequencyFullSpeed or elapsedUsec >= SimulationThroughputSampleIntervalUsec:
-		SimulationTicksPerSecond = float(SimulationThroughputSampleTicks) * 1_000_000.0 / float(elapsedUsec)
-	if elapsedUsec >= SimulationThroughputSampleIntervalUsec:
-		SimulationThroughputSampleStartUsec = nowUsec
-		SimulationThroughputSampleTicks = 0
+		return false
+	if elapsedUsec < SimulationThroughputSampleIntervalUsec:
+		return false
+	SimulationTicksPerSecond = float(SimulationThroughputSampleTicks) * 1_000_000.0 / float(elapsedUsec)
+	SimulationThroughputSampleStartUsec = nowUsec
+	SimulationThroughputSampleTicks = 0
+	return true
 
 func getSimulationThroughputText() -> String:
 	var ticksPerSecond := maxf(0.0, SimulationTicksPerSecond)

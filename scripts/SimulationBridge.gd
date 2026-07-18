@@ -66,7 +66,6 @@ var NativeSimulation: Object
 var GridWidth := 0
 var GridHeight := 0
 var GridOrigin := Vector2i.ZERO
-var CoordinatesByCellIndex: Dictionary[int, Vector2i] = {}
 
 func compile(board: Node) -> Dictionary:
 	release()
@@ -99,7 +98,7 @@ func compile(board: Node) -> Dictionary:
 		true
 	)
 
-func getCurrentUpdates() -> Dictionary:
+func getCurrentStates() -> Dictionary:
 	if not hasNativeSimulation():
 		return makeFailure(-1, -1, "BackendUnavailable")
 	var statesVariant: Variant = NativeSimulation.call("getStates")
@@ -107,7 +106,7 @@ func getCurrentUpdates() -> Dictionary:
 		return makeFailure(-1, -1, "OcbSimulationStatesInvalid")
 	return {
 		"ok": true,
-		"updates": makeFullStateUpdates(statesVariant as PackedInt32Array),
+		"states": statesVariant as PackedInt32Array,
 	}
 
 func toggleLatchAt(coordinates: Vector2i) -> Dictionary:
@@ -133,7 +132,7 @@ func toggleLatchAt(coordinates: Vector2i) -> Dictionary:
 		return makeFailure(coordinates.x, coordinates.y, "OcbSimulationLatchToggleChangesInvalid", false, true)
 	return {
 		"ok": true,
-		"updates": makeDeltaUpdates(changesVariant as PackedInt32Array),
+		"changes": changesVariant as PackedInt32Array,
 	}
 
 func advanceTick() -> Dictionary:
@@ -144,7 +143,7 @@ func advanceTick() -> Dictionary:
 		return makeFailure(-1, -1, "OcbSimulationAdvanceResultInvalid")
 	return {
 		"ok": true,
-		"updates": makeDeltaUpdates(changesVariant as PackedInt32Array),
+		"changes": changesVariant as PackedInt32Array,
 	}
 
 func advanceTicks(tickCount: int) -> Dictionary:
@@ -153,14 +152,14 @@ func advanceTicks(tickCount: int) -> Dictionary:
 	if tickCount <= 0:
 		return {
 			"ok": true,
-			"updates": [],
+			"changes": PackedInt32Array(),
 		}
 	var changesVariant: Variant = NativeSimulation.call("advanceTicks", tickCount)
 	if not (changesVariant is PackedInt32Array):
 		return makeFailure(-1, -1, "OcbSimulationBatchAdvanceResultInvalid")
 	return {
 		"ok": true,
-		"updates": makeDeltaUpdates(changesVariant as PackedInt32Array),
+		"changes": changesVariant as PackedInt32Array,
 	}
 
 func advanceTicksSilent(tickCount: int) -> bool:
@@ -171,6 +170,52 @@ func advanceTicksSilent(tickCount: int) -> bool:
 	NativeSimulation.call("advanceTicksSilent", tickCount)
 	return true
 
+func advanceTicksForDuration(durationUsec: int, maximumTickCount: int, batchTickCount: int) -> Dictionary:
+	if not hasNativeSimulation():
+		return makeFailure(-1, -1, "BackendUnavailable")
+	var resultVariant: Variant = NativeSimulation.call(
+		"advanceTicksForDuration",
+		durationUsec,
+		maximumTickCount,
+		batchTickCount
+	)
+	if not (resultVariant is Dictionary):
+		return makeFailure(-1, -1, "OcbSimulationTimedAdvanceResultInvalid")
+	var result := resultVariant as Dictionary
+	var advancedTickCountVariant: Variant = result.get("advancedTickCount", null)
+	var elapsedUsecVariant: Variant = result.get("elapsedUsec", null)
+	if not (advancedTickCountVariant is int) or not (elapsedUsecVariant is int):
+		return makeFailure(-1, -1, "OcbSimulationTimedAdvanceValuesInvalid")
+	return {
+		"ok": true,
+		"advancedTickCount": maxi(0, int(advancedTickCountVariant)),
+		"elapsedUsec": maxi(0, int(elapsedUsecVariant)),
+	}
+
+func advanceTicksForDurationAndDrainStateChanges(durationUsec: int, maximumTickCount: int, batchTickCount: int) -> Dictionary:
+	if not hasNativeSimulation():
+		return makeFailure(-1, -1, "BackendUnavailable")
+	var resultVariant: Variant = NativeSimulation.call(
+		"advanceTicksForDurationAndDrainStateChanges",
+		durationUsec,
+		maximumTickCount,
+		batchTickCount
+	)
+	if not (resultVariant is Dictionary):
+		return makeFailure(-1, -1, "OcbSimulationTimedAdvanceAndDrainResultInvalid")
+	var result := resultVariant as Dictionary
+	var advancedTickCountVariant: Variant = result.get("advancedTickCount", null)
+	var elapsedUsecVariant: Variant = result.get("elapsedUsec", null)
+	var changesVariant: Variant = result.get("changes", null)
+	if not (advancedTickCountVariant is int) or not (elapsedUsecVariant is int) or not (changesVariant is PackedInt32Array):
+		return makeFailure(-1, -1, "OcbSimulationTimedAdvanceAndDrainValuesInvalid")
+	return {
+		"ok": true,
+		"advancedTickCount": maxi(0, int(advancedTickCountVariant)),
+		"elapsedUsec": maxi(0, int(elapsedUsecVariant)),
+		"changes": changesVariant as PackedInt32Array,
+	}
+
 func drainStateChanges() -> Dictionary:
 	if not hasNativeSimulation():
 		return makeFailure(-1, -1, "BackendUnavailable")
@@ -179,7 +224,53 @@ func drainStateChanges() -> Dictionary:
 		return makeFailure(-1, -1, "OcbSimulationDrainChangesResultInvalid")
 	return {
 		"ok": true,
-		"updates": makeDeltaUpdates(changesVariant as PackedInt32Array),
+		"changes": changesVariant as PackedInt32Array,
+	}
+
+func startAsync(batchTickCount: int, publishIntervalUsec: int) -> Dictionary:
+	if not hasNativeSimulation():
+		return makeFailure(-1, -1, "BackendUnavailable")
+	var resultVariant: Variant = NativeSimulation.call("startAsync", batchTickCount, publishIntervalUsec)
+	if not (resultVariant is Dictionary):
+		return makeFailure(-1, -1, "OcbSimulationAsyncStartResultInvalid")
+	var result := resultVariant as Dictionary
+	if not bool(result.get("ok", false)):
+		return makeFailure(-1, -1, String(result.get("errorReason", "OcbSimulationAsyncStartFailed")))
+	return {"ok": true}
+
+func pollAsync() -> Dictionary:
+	if not hasNativeSimulation():
+		return makeFailure(-1, -1, "BackendUnavailable")
+	var resultVariant: Variant = NativeSimulation.call("pollAsync")
+	if not (resultVariant is Dictionary):
+		return makeFailure(-1, -1, "OcbSimulationAsyncPollResultInvalid")
+	var result := resultVariant as Dictionary
+	if not bool(result.get("ok", false)):
+		return makeFailure(-1, -1, String(result.get("errorReason", "OcbSimulationAsyncPollFailed")))
+	var advancedTickCountVariant: Variant = result.get("advancedTickCount", null)
+	var runningVariant: Variant = result.get("running", null)
+	var changesVariant: Variant = result.get("changes", null)
+	if not (advancedTickCountVariant is int) or not (runningVariant is bool) or not (changesVariant is PackedInt32Array):
+		return makeFailure(-1, -1, "OcbSimulationAsyncPollValuesInvalid")
+	return {
+		"ok": true,
+		"advancedTickCount": maxi(0, int(advancedTickCountVariant)),
+		"running": bool(runningVariant),
+		"changes": changesVariant as PackedInt32Array,
+	}
+
+func stopAsync() -> Dictionary:
+	if not hasNativeSimulation():
+		return makeFailure(-1, -1, "BackendUnavailable")
+	var resultVariant: Variant = NativeSimulation.call("stopAsync")
+	if not (resultVariant is Dictionary):
+		return makeFailure(-1, -1, "OcbSimulationAsyncStopResultInvalid")
+	var result := resultVariant as Dictionary
+	if not bool(result.get("ok", false)):
+		return makeFailure(-1, -1, String(result.get("errorReason", "OcbSimulationAsyncStopFailed")))
+	return {
+		"ok": true,
+		"advancedTickCount": maxi(0, int(result.get("advancedTickCount", 0))),
 	}
 
 func reset() -> Dictionary:
@@ -190,7 +281,7 @@ func reset() -> Dictionary:
 		return makeFailure(-1, -1, "OcbSimulationResetResultInvalid")
 	return {
 		"ok": true,
-		"updates": makeDeltaUpdates(changesVariant as PackedInt32Array),
+		"changes": changesVariant as PackedInt32Array,
 	}
 
 func captureState() -> Dictionary:
@@ -218,15 +309,16 @@ func restoreState(snapshot: PackedByteArray) -> Dictionary:
 		return makeFailure(-1, -1, "OcbSimulationRestoreChangesInvalid")
 	return {
 		"ok": true,
-		"updates": makeDeltaUpdates(changesVariant as PackedInt32Array),
+		"changes": changesVariant as PackedInt32Array,
 	}
 
 func release() -> void:
+	if hasNativeSimulation():
+		NativeSimulation.call("stopAsync")
 	NativeSimulation = null
 	GridWidth = 0
 	GridHeight = 0
 	GridOrigin = Vector2i.ZERO
-	CoordinatesByCellIndex.clear()
 
 func hasNativeSimulation() -> bool:
 	return NativeSimulation != null and is_instance_valid(NativeSimulation)
@@ -260,7 +352,6 @@ func buildGrid(board: Node) -> Dictionary:
 	initialStates.fill(0)
 	clockHoldTicks.fill(1)
 	meshIds.fill(1)
-	CoordinatesByCellIndex.clear()
 	var tilesVariant: Variant = board.call("getSimulationTiles")
 	if not (tilesVariant is Array):
 		return failAndRelease(-1, -1, "SimulationTilesInvalid")
@@ -275,12 +366,11 @@ func buildGrid(board: Node) -> Dictionary:
 		var cellIndex := getCellIndex(coordinates)
 		if cellIndex < 0:
 			return failAndRelease(coordinates.x, coordinates.y, "SimulationTileOutsideGrid", false, true)
-		if CoordinatesByCellIndex.has(cellIndex):
+		if kinds[cellIndex] != KindEmpty:
 			return failAndRelease(coordinates.x, coordinates.y, "SimulationTileDuplicate", false, true)
 		var toolId := String(tile.get("toolId", ""))
 		if not KindByToolId.has(toolId):
 			return failAndRelease(coordinates.x, coordinates.y, "SimulationToolUnsupported:%s" % toolId, false, true)
-		CoordinatesByCellIndex[cellIndex] = coordinates
 		kinds[cellIndex] = int(KindByToolId[toolId])
 		initialStates[cellIndex] = 1 if bool(tile.get("isOn", false)) else 0
 		clockHoldTicks[cellIndex] = maxi(1, int(tile.get("clockHoldTicks", 1)))
@@ -313,32 +403,6 @@ func getCellIndex(coordinates: Vector2i) -> int:
 	if localCoordinates.x < 0 or localCoordinates.y < 0 or localCoordinates.x >= GridWidth or localCoordinates.y >= GridHeight:
 		return -1
 	return localCoordinates.y * GridWidth + localCoordinates.x
-
-func makeFullStateUpdates(states: PackedInt32Array) -> Array[Dictionary]:
-	var updates: Array[Dictionary] = []
-	for cellIndexVariant in CoordinatesByCellIndex:
-		var cellIndex := int(cellIndexVariant)
-		if cellIndex < 0 or cellIndex >= states.size():
-			continue
-		updates.append({
-			"coordinates": CoordinatesByCellIndex[cellIndex],
-			"isOn": states[cellIndex] != 0,
-		})
-	return updates
-
-func makeDeltaUpdates(changes: PackedInt32Array) -> Array[Dictionary]:
-	var updates: Array[Dictionary] = []
-	var pairCount := changes.size() / 2
-	for pairIndex in pairCount:
-		var offset := pairIndex * 2
-		var cellIndex := changes[offset]
-		if not CoordinatesByCellIndex.has(cellIndex):
-			continue
-		updates.append({
-			"coordinates": CoordinatesByCellIndex[cellIndex],
-			"isOn": changes[offset + 1] != 0,
-		})
-	return updates
 
 func failAndRelease(errorX: int, errorY: int, errorReason: String, coordinatesAreNative := false, hasCoordinates := false) -> Dictionary:
 	var result := makeFailure(errorX, errorY, errorReason, coordinatesAreNative, hasCoordinates)

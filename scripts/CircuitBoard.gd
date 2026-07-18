@@ -613,6 +613,28 @@ func applyRuntimeTileStates(updates: Array) -> void:
 		if rawCoordinates is Vector2i and update.has("isOn"):
 			setRuntimeTileState(rawCoordinates as Vector2i, bool(update["isOn"]))
 
+func applyRuntimeTileStatesFromGrid(states: PackedInt32Array, gridWidth: int, gridOrigin: Vector2i) -> void:
+	if gridWidth <= 0:
+		return
+	for cellIndex in states.size():
+		setRuntimeTileState(getSimulationCellCoordinates(cellIndex, gridWidth, gridOrigin), states[cellIndex] != 0)
+
+func applyRuntimeTileStateChanges(changes: PackedInt32Array, gridWidth: int, gridOrigin: Vector2i) -> void:
+	if gridWidth <= 0:
+		return
+	var pairCount := changes.size() / 2
+	for pairIndex in pairCount:
+		var offset := pairIndex * 2
+		var cellIndex := changes[offset]
+		if cellIndex < 0:
+			continue
+		setRuntimeTileState(getSimulationCellCoordinates(cellIndex, gridWidth, gridOrigin), changes[offset + 1] != 0)
+
+func getSimulationCellCoordinates(cellIndex: int, gridWidth: int, gridOrigin: Vector2i) -> Vector2i:
+	var localX := cellIndex % gridWidth
+	var localY := floori(float(cellIndex - localX) / float(gridWidth))
+	return gridOrigin + Vector2i(localX, localY)
+
 func setRuntimeTileState(coordinates: Vector2i, isOn: bool) -> bool:
 	if not TileValues.has(coordinates):
 		return false

@@ -13,6 +13,7 @@ if(OCBOUTPUTDIR STREQUAL "")
 endif()
 
 add_subdirectory("${GODOTCPPDIR}" "${CMAKE_BINARY_DIR}/godot-cpp")
+find_package(Threads REQUIRED)
 
 set(OCB_SIMULATION_CORE_SOURCES
 	src/SimulationCore.cpp
@@ -29,7 +30,7 @@ add_library(ocbsimulation SHARED
 
 target_compile_features(ocbsimulation PRIVATE cxx_std_17)
 target_include_directories(ocbsimulation PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src")
-target_link_libraries(ocbsimulation PRIVATE godot::cpp)
+target_link_libraries(ocbsimulation PRIVATE godot::cpp Threads::Threads)
 
 set_target_properties(ocbsimulation PROPERTIES
 	PREFIX ""

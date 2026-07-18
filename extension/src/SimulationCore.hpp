@@ -6,6 +6,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <string>
+#include <type_traits>
 #include <vector>
 
 #if defined(_MSC_VER)
@@ -68,9 +69,17 @@ public:
 	std::vector<int32_t> advanceTick();
 	std::vector<int32_t> advanceTicks(int32_t tickCount);
 	void advanceTicksSilent(int32_t tickCount);
+	// These views write into caller-owned POD storage so presentation does not allocate in the runtime loop.
+	size_t drainStateChangesTo(int32_t *changes, size_t capacity);
+	bool copyVisibleStates(uint8_t *states, size_t capacity) const;
+	int32_t getVisibleCellCount() const;
+	bool beginDeferredVisualTracking();
+	void endDeferredVisualTracking();
 	std::vector<int32_t> drainStateChanges();
 	std::vector<int32_t> getStates() const;
+	bool toggleLatch(int32_t cellIndex, std::string &errorReason);
 	bool toggleLatch(int32_t cellIndex, std::vector<int32_t> &changes, std::string &errorReason);
+	void resetSilent();
 	std::vector<int32_t> reset();
 	std::vector<uint8_t> captureState() const;
 	bool restoreState(const std::vector<uint8_t> &snapshot, std::string &errorReason);
@@ -106,8 +115,11 @@ private:
 			size_ = 0;
 		}
 
-		void reserve(size_t capacity) {
-			storage_.reserve(capacity);
+		void prepare(size_t capacity) {
+			if (storage_.size() < capacity) {
+				storage_.resize(capacity);
+			}
+			size_ = 0;
 		}
 
 		size_t size() const {
@@ -119,12 +131,8 @@ private:
 		}
 
 		void push_back(int32_t event) {
-			if (size_ < storage_.size()) {
-				storage_[size_] = event;
-			} else {
-				storage_.push_back(event);
-			}
-			++size_;
+			assert(size_ < storage_.size());
+			storage_[size_++] = event;
 		}
 
 	private:
@@ -132,6 +140,23 @@ private:
 		std::vector<int32_t> storage_;
 		size_t size_ = 0;
 	};
+
+	struct ComponentRuntimeState {
+		int32_t inputHighCount;
+		int32_t inputDelta;
+		int32_t risingCount;
+		int32_t nextPending;
+		uint32_t inputStamp;
+	};
+
+	struct ConnectorRuntimeState {
+		int32_t inputHighCount;
+		int32_t delta;
+		uint32_t stamp;
+	};
+
+	static_assert(std::is_standard_layout_v<ComponentRuntimeState> && std::is_trivially_copyable_v<ComponentRuntimeState>);
+	static_assert(std::is_standard_layout_v<ConnectorRuntimeState> && std::is_trivially_copyable_v<ConnectorRuntimeState>);
 
 	struct ReadBinding {
 		std::vector<int32_t> cells;
@@ -172,7 +197,6 @@ private:
 		return static_cast<int32_t>(__builtin_ctzll(value));
 #endif
 	}
-
 	uint8_t evaluateComponent(int32_t node) const;
 	uint8_t evaluateComponent(int32_t node, int32_t highInputCount) const;
 	uint8_t evaluateComponent(int32_t node, int32_t highInputCount, uint8_t evaluationPolicy) const;
@@ -185,6 +209,7 @@ private:
 	void flushQueuedComponentInputDeltas();
 	void flushUnqueuedComponentInputDeltas();
 	void clearNextGateFrontier();
+	void drainConnectorWorkWord(size_t workWordIndex);
 	void initializeConnectorWorkWordHierarchy(size_t workWordCount);
 	bool hasActiveConnectorWorkWords() const {
 		return !connectorActiveWordLevelOffsets_.empty() &&
@@ -237,29 +262,37 @@ private:
 		return (nextGateWords_[gateIndex / 64U] & (uint64_t{1} << (gateIndex % 64U))) != 0;
 	}
 	void accumulateComponentInputDelta(int32_t componentNode, int32_t stateDelta) {
-		if (componentInputStamps_[componentNode] != propagationStamp_) {
-			componentInputStamps_[componentNode] = propagationStamp_;
-			pendingComponentInputDeltas_[componentNode] = stateDelta;
+		ComponentRuntimeState &pending = componentRuntimeStates_[static_cast<size_t>(componentNode)];
+		if (pending.inputStamp != propagationStamp_) {
+			pending.inputStamp = propagationStamp_;
+			pending.inputDelta = stateDelta;
 			const EvaluationMode mode = static_cast<EvaluationMode>(nodeEvaluationPolicies_[componentNode]);
-			pendingComponentRisingCounts_[componentNode] =
+			pending.risingCount =
 					!suppressLatchInputEdges_ && mode == EvaluationMode::LatchToggle && stateDelta > 0 ? 1 : 0;
-			pendingComponentInputsByMode_[static_cast<size_t>(mode)].push_back(componentNode);
+			const size_t modeIndex = static_cast<size_t>(mode);
+			pending.nextPending = -1;
+			if (pendingComponentTails_[modeIndex] >= 0) {
+				componentRuntimeStates_[static_cast<size_t>(pendingComponentTails_[modeIndex])].nextPending = componentNode;
+			} else {
+				pendingComponentHeads_[modeIndex] = componentNode;
+			}
+			pendingComponentTails_[modeIndex] = componentNode;
 			return;
 		}
-		pendingComponentInputDeltas_[componentNode] += stateDelta;
+		pending.inputDelta += stateDelta;
 		if (!suppressLatchInputEdges_ &&
 				static_cast<EvaluationMode>(nodeEvaluationPolicies_[componentNode]) == EvaluationMode::LatchToggle && stateDelta > 0) {
-			++pendingComponentRisingCounts_[componentNode];
+			++pending.risingCount;
 		}
 	}
-	void accumulateConnectorDelta(int32_t connectorNode, int32_t stateDelta) {
-		if (connectorDeltaStamps_[connectorNode] == propagationStamp_) {
-			pendingConnectorDeltas_[connectorNode] += stateDelta;
+	void accumulateConnectorDelta(int32_t connectorRank, int32_t stateDelta) {
+		ConnectorRuntimeState &pending = connectorRuntimeStates_[static_cast<size_t>(connectorRank)];
+		if (pending.stamp == propagationStamp_) {
+			pending.delta += stateDelta;
 			return;
 		}
-		connectorDeltaStamps_[connectorNode] = propagationStamp_;
-		pendingConnectorDeltas_[connectorNode] = stateDelta;
-		const int32_t connectorRank = connectorTopologicalRanks_[connectorNode];
+		pending.stamp = propagationStamp_;
+		pending.delta = stateDelta;
 		const size_t workWordIndex = static_cast<size_t>(connectorRank) / 64U;
 		uint64_t &workWord = connectorWorkWords_[workWordIndex];
 		if (connectorWorkWordStamps_[workWordIndex] != propagationStamp_) {
@@ -302,7 +335,8 @@ private:
 		const size_t summaryWordIndex = wordIndex / 64U;
 		uint64_t &summaryWord = nextGateSummaryWords_[summaryWordIndex];
 		if (summaryWord == 0) {
-			++nextGateActiveSummaryWordCount_;
+			assert(nextGateActiveSummaryWordIndices_.size() < nextGateActiveSummaryWordIndices_.capacity());
+			nextGateActiveSummaryWordIndices_.push_back(static_cast<uint32_t>(summaryWordIndex));
 		}
 		summaryWord |= uint64_t{1} << (wordIndex % 64U);
 	}
@@ -322,14 +356,15 @@ private:
 		const size_t summaryWordIndex = wordIndex / 64U;
 		uint64_t &summaryWord = nextGateSummaryWords_[summaryWordIndex];
 		if (summaryWord == 0) {
-			++nextGateActiveSummaryWordCount_;
+			assert(nextGateActiveSummaryWordIndices_.size() < nextGateActiveSummaryWordIndices_.capacity());
+			nextGateActiveSummaryWordIndices_.push_back(static_cast<uint32_t>(summaryWordIndex));
 		}
 		summaryWord |= uint64_t{1} << (wordIndex % 64U);
 	}
 	void markVisibleNodeDirty(int32_t node, uint8_t initialState, bool forceMaterialization = false);
 	void setChangedNodeState(int32_t node, uint8_t state) {
 		const uint8_t previousState = nodeStates_[node];
-		if (nodeHasVisibleCells_[node] != 0) {
+		if (!isVisualTrackingDeferred_ && nodeHasVisibleCells_[node] != 0) {
 			markVisibleNodeDirty(node, previousState);
 		}
 		nodeStates_[node] = state;
@@ -337,6 +372,7 @@ private:
 	void setNodeState(int32_t node, uint8_t state);
 	void markAllVisibleNodesDirty();
 	void materializeVisibleStates() const;
+	uint8_t resolveVisibleCellState(int32_t cell) const;
 	void updateVisibleCell(int32_t cell) const;
 	void resetChangeCollector();
 	void advanceState();
@@ -352,6 +388,7 @@ private:
 	uint64_t tickCount_ = 0;
 	int64_t graphLocalityScore_ = 0;
 	bool useGraphLocalityOrdering_ = false;
+	bool isVisualTrackingDeferred_ = false;
 	std::vector<int32_t> kinds_;
 	std::vector<int32_t> initialStates_;
 	std::vector<int32_t> clockHoldTicks_;
@@ -373,8 +410,7 @@ private:
 	std::vector<int32_t> nodeClockHoldTicks_;
 	std::vector<uint8_t> nodeLatchInitialStates_;
 	std::vector<uint8_t> nodeEvaluationPolicies_;
-	std::vector<int32_t> nodeInputCounts_;
-	std::vector<int32_t> nodeInputHighCounts_;
+	std::vector<int32_t> componentInputCounts_;
 	std::vector<int32_t> outgoingOffsets_;
 	std::vector<int32_t> outgoingComponentEnds_;
 	std::vector<int32_t> outgoingTargets_;
@@ -382,7 +418,6 @@ private:
 	std::vector<int32_t> incomingSources_;
 	std::vector<int32_t> componentNodes_;
 	std::vector<int32_t> connectorNodes_;
-	std::vector<int32_t> connectorTopologicalRanks_;
 	std::vector<int32_t> snapshotComponentNodes_;
 	std::vector<int32_t> snapshotConnectorNodes_;
 	std::vector<int32_t> clockNodes_;
@@ -390,17 +425,15 @@ private:
 	std::vector<uint64_t> nextGateSummaryWords_;
 	std::vector<uint64_t> currentGateWords_;
 	std::vector<uint64_t> currentGateSummaryWords_;
-	size_t nextGateActiveSummaryWordCount_ = 0;
-	size_t currentGateActiveSummaryWordCount_ = 0;
+	std::vector<uint32_t> nextGateActiveSummaryWordIndices_;
+	std::vector<uint32_t> currentGateActiveSummaryWordIndices_;
 	std::vector<uint8_t> nextGateStates_;
 	std::vector<uint8_t> currentGateStates_;
 	ConnectorEventQueue connectorQueueEvents_;
-	std::vector<int32_t> pendingComponentInputDeltas_;
-	std::vector<int32_t> pendingComponentRisingCounts_;
-	std::vector<uint32_t> componentInputStamps_;
-	std::array<std::vector<int32_t>, EvaluationModeCount> pendingComponentInputsByMode_;
-	std::vector<int32_t> pendingConnectorDeltas_;
-	std::vector<uint32_t> connectorDeltaStamps_;
+	std::vector<ComponentRuntimeState> componentRuntimeStates_;
+	std::vector<ConnectorRuntimeState> connectorRuntimeStates_;
+	std::array<int32_t, EvaluationModeCount> pendingComponentHeads_;
+	std::array<int32_t, EvaluationModeCount> pendingComponentTails_;
 	std::vector<uint64_t> connectorWorkWords_;
 	std::vector<uint32_t> connectorWorkWordStamps_;
 	std::vector<uint64_t> connectorActiveWordHierarchy_;

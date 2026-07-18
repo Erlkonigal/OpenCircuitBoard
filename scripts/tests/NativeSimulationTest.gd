@@ -50,6 +50,30 @@ func runNativeSimulationTest() -> void:
 		quit(1)
 		return
 	simulation.call("advanceTicksSilent", 3)
+	var timedAdvance: Variant = simulation.call("advanceTicksForDuration", 1_000, 1_000, 64)
+	if not (timedAdvance is Dictionary):
+		push_error("OcbSimulationTimedAdvanceInvalid")
+		quit(1)
+		return
+	var timedAdvanceResult := timedAdvance as Dictionary
+	if int(timedAdvanceResult.get("advancedTickCount", 0)) <= 0 or int(timedAdvanceResult.get("advancedTickCount", 0)) > 1_000:
+		push_error("OcbSimulationTimedAdvanceCountInvalid")
+		quit(1)
+		return
+	if int(timedAdvanceResult.get("elapsedUsec", -1)) < 0:
+		push_error("OcbSimulationTimedAdvanceElapsedInvalid")
+		quit(1)
+		return
+	var timedAdvanceAndDrain: Variant = simulation.call("advanceTicksForDurationAndDrainStateChanges", 1_000, 1_000, 64)
+	if not (timedAdvanceAndDrain is Dictionary):
+		push_error("OcbSimulationTimedAdvanceAndDrainInvalid")
+		quit(1)
+		return
+	var timedAdvanceAndDrainResult := timedAdvanceAndDrain as Dictionary
+	if not (timedAdvanceAndDrainResult.get("changes", null) is PackedInt32Array):
+		push_error("OcbSimulationTimedAdvanceAndDrainChangesInvalid")
+		quit(1)
+		return
 	var drainedChanges: Variant = simulation.call("drainStateChanges")
 	if not (drainedChanges is PackedInt32Array):
 		push_error("OcbSimulationDrainStateChangesInvalid")
@@ -68,6 +92,39 @@ func runNativeSimulationTest() -> void:
 	var restoredChanges: Variant = restoreResult.get("changes", PackedInt32Array())
 	if not (restoredChanges is PackedInt32Array) or (restoredChanges as PackedInt32Array).is_empty():
 		push_error("OcbSimulationRestoreChangesMissing")
+		quit(1)
+		return
+	var asyncStart: Variant = simulation.call("startAsync", 64, 1_000)
+	if not (asyncStart is Dictionary) or not bool((asyncStart as Dictionary).get("ok", false)):
+		push_error("OcbSimulationAsyncStartInvalid")
+		quit(1)
+		return
+	var asyncPollResult: Dictionary = {}
+	var receivedAsyncTick := false
+	for _attempt in 20:
+		await create_timer(0.01).timeout
+		var asyncPoll: Variant = simulation.call("pollAsync")
+		if not (asyncPoll is Dictionary):
+			continue
+		asyncPollResult = asyncPoll as Dictionary
+		if not bool(asyncPollResult.get("ok", false)) or not bool(asyncPollResult.get("running", false)):
+			continue
+		if int(asyncPollResult.get("advancedTickCount", 0)) <= 0 or not (asyncPollResult.get("changes", null) is PackedInt32Array):
+			continue
+		receivedAsyncTick = true
+		break
+	if not receivedAsyncTick:
+		push_error("OcbSimulationAsyncPollValuesInvalid")
+		quit(1)
+		return
+	var asyncStop: Variant = simulation.call("stopAsync")
+	if not (asyncStop is Dictionary) or not bool((asyncStop as Dictionary).get("ok", false)):
+		push_error("OcbSimulationAsyncStopInvalid")
+		quit(1)
+		return
+	var statesAfterAsync: Variant = simulation.call("getStates")
+	if not (statesAfterAsync is PackedInt32Array) or (statesAfterAsync as PackedInt32Array).size() != kinds.size():
+		push_error("OcbSimulationAsyncStatesInvalid")
 		quit(1)
 		return
 	quit(OK)

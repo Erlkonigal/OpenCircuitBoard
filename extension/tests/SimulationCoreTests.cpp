@@ -560,6 +560,47 @@ void testSparseGateFrontierClearsPreviousTick() {
 	expectState(core, input, 4, 0, 1, "sparse frontier schedules a new high gate after clearing");
 }
 
+void testSparseGateFrontierHandlesNonMonotonicSummaryIndices() {
+	constexpr int32_t SpacerGateCount = 4096;
+	constexpr int32_t BottomPipelineRow = SpacerGateCount + 1;
+	CompileInput input = makeInput(5, BottomPipelineRow + 1);
+	setKind(input, 0, 0, ToolKind::Clock);
+	setKind(input, 1, 0, ToolKind::Read);
+	setKind(input, 2, 0, ToolKind::Trace);
+	setKind(input, 3, 0, ToolKind::Write);
+	setKind(input, 4, 0, ToolKind::Latch);
+	for (int32_t row = 1; row <= SpacerGateCount; ++row) {
+		setKind(input, 4, row, ToolKind::Buffer);
+	}
+	setKind(input, 0, BottomPipelineRow, ToolKind::Clock);
+	setKind(input, 1, BottomPipelineRow, ToolKind::Read);
+	setKind(input, 2, BottomPipelineRow, ToolKind::Trace);
+	setKind(input, 3, BottomPipelineRow, ToolKind::Write);
+	setKind(input, 4, BottomPipelineRow, ToolKind::Buffer);
+	SimulationCore core;
+	CompileError error;
+	expect(core.compile(input, error), "non-monotonic sparse frontier circuit compiles");
+	core.advanceTick();
+	const std::vector<uint8_t> snapshot = core.captureState();
+	expect(!snapshot.empty(), "non-monotonic sparse frontier captures pending gates");
+	core.advanceTick();
+	expectState(core, input, 4, 0, 1, "low-index Latch commits after a higher summary index was queued first");
+	expectState(
+			core,
+			input,
+			4,
+			BottomPipelineRow,
+			1,
+			"high-index Buffer commits after a lower summary index was queued later");
+	core.advanceTick();
+	expectState(core, input, 4, BottomPipelineRow, 0, "non-monotonic sparse frontier clears the prior Buffer gate");
+	std::string restoreError;
+	expect(core.restoreState(snapshot, restoreError), "non-monotonic sparse frontier snapshot restores");
+	core.advanceTick();
+	expectState(core, input, 4, 0, 1, "restored Latch pending gate commits");
+	expectState(core, input, 4, BottomPipelineRow, 1, "restored Buffer pending gate commits");
+}
+
 void testQueuedComponentGateTracksLaterDelta() {
 	CompileInput input = makeInput(5, 1);
 	setKind(input, 0, 0, ToolKind::Latch);
@@ -1695,6 +1736,7 @@ int main() {
 	testConnectorQueueSpansTopologicalRankWords();
 	testLargeComponentFrontierPropagatesAcrossLanes();
 	testSparseGateFrontierClearsPreviousTick();
+	testSparseGateFrontierHandlesNonMonotonicSummaryIndices();
 	testQueuedComponentGateTracksLaterDelta();
 	testQueuedComponentBucketsTrackUpdates();
 	testTerminalConnectorAliases();

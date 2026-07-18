@@ -26,6 +26,7 @@ constexpr int32_t TargetTicksPerSecond = 100000;
 enum class BenchmarkWorkload {
 	Mixed,
 	UnaryBuffer,
+	CompactLatch,
 };
 
 constexpr ToolKind MixedGateKinds[] = {
@@ -79,7 +80,7 @@ enum class ParseResult {
 
 void printUsage() {
 	std::cout << "Usage: ocbsimulation_core_benchmark [--quick] [--compare-ordering]"
-			  << " [--workload mixed|unary-buffer]"
+			  << " [--workload mixed|unary-buffer|compact-latch]"
 			  << " [--width value] [--height value] [--pipelines value]"
 			  << " [--warmup value] [--ticks value] [--samples value]\n";
 }
@@ -90,6 +91,8 @@ const char *workloadName(BenchmarkWorkload workload) {
 			return "mixed";
 		case BenchmarkWorkload::UnaryBuffer:
 			return "unary-buffer";
+		case BenchmarkWorkload::CompactLatch:
+			return "compact-latch";
 	}
 	return "unknown";
 }
@@ -101,6 +104,10 @@ bool parseWorkload(const std::string &text, BenchmarkWorkload &workload) {
 	}
 	if (text == "unary-buffer") {
 		workload = BenchmarkWorkload::UnaryBuffer;
+		return true;
+	}
+	if (text == "compact-latch") {
+		workload = BenchmarkWorkload::CompactLatch;
 		return true;
 	}
 	return false;
@@ -179,8 +186,14 @@ ParseResult parseConfig(int argc, char **argv, BenchmarkConfig &config) {
 }
 
 bool validateConfig(const BenchmarkConfig &config, std::string &error) {
-	if (config.boardWidth < 8 || config.boardHeight <= 0 || config.pipelineCount <= 0 ||
-			config.warmupTicks < 0 || config.measurementTicks <= 0 || config.sampleCount <= 0) {
+	if (config.warmupTicks < 0 || config.measurementTicks <= 0 || config.sampleCount <= 0) {
+		error = "benchmark dimensions and tick counts must be positive";
+		return false;
+	}
+	if (config.workload == BenchmarkWorkload::CompactLatch) {
+		return true;
+	}
+	if (config.boardWidth < 8 || config.boardHeight <= 0 || config.pipelineCount <= 0) {
 		error = "benchmark dimensions and tick counts must be positive";
 		return false;
 	}
@@ -220,11 +233,57 @@ void setClockHoldTicks(CompileInput &input, int32_t x, int32_t y, int32_t holdTi
 	input.clockHoldTicks[y * input.width + x] = holdTicks;
 }
 
+void setInitialState(CompileInput &input, int32_t x, int32_t y, int32_t state) {
+	input.initialStates[y * input.width + x] = state;
+}
+
 bool isMultiInputMixedGate(ToolKind kind) {
 	return kind != ToolKind::Not && kind != ToolKind::Buffer;
 }
 
 CompileInput makeBenchmarkInput(const BenchmarkConfig &config) {
+	if (config.workload == BenchmarkWorkload::CompactLatch) {
+		CompileInput input;
+		input.width = 46;
+		input.height = 31;
+		const int32_t cellCount = input.width * input.height;
+		input.kinds.assign(cellCount, static_cast<int32_t>(ToolKind::Empty));
+		input.initialStates.assign(cellCount, 0);
+		input.clockHoldTicks.assign(cellCount, 1);
+		input.meshIds.assign(cellCount, 1);
+		const auto setTile = [&input](int32_t x, int32_t y, ToolKind kind) {
+			setKind(input, x, y, kind);
+			setInitialState(input, x, y, 1);
+		};
+		for (int32_t y = 2; y <= 4; ++y) {
+			for (int32_t x = 32; x <= 34; ++x) {
+				setTile(x, y, ToolKind::Clock);
+			}
+		}
+		setTile(24, 3, ToolKind::Write);
+		for (int32_t x = 25; x <= 30; ++x) {
+			setTile(x, 3, ToolKind::Trace);
+		}
+		setTile(31, 3, ToolKind::Read);
+		setTile(22, 4, ToolKind::Trace);
+		setTile(23, 4, ToolKind::Read);
+		setTile(24, 4, ToolKind::And);
+		setTile(27, 4, ToolKind::Write);
+		setTile(22, 5, ToolKind::Trace);
+		setTile(24, 5, ToolKind::Write);
+		setTile(25, 5, ToolKind::Trace);
+		setTile(26, 5, ToolKind::Read);
+		setTile(27, 5, ToolKind::Not);
+		setTile(22, 6, ToolKind::Trace);
+		setTile(22, 7, ToolKind::Write);
+		for (int32_t y = 8; y <= 10; ++y) {
+			for (int32_t x = 21; x <= 23; ++x) {
+				setTile(x, y, ToolKind::Latch);
+			}
+		}
+		return input;
+	}
+
 	CompileInput input;
 	input.width = config.boardWidth;
 	input.height = config.boardHeight;

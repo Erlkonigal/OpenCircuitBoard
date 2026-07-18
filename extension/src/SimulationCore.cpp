@@ -316,6 +316,7 @@ void SimulationCore::clear() {
 	topologySignature_ = 0;
 	tickCount_ = 0;
 	graphLocalityScore_ = 0;
+	isVisualTrackingDeferred_ = false;
 	kinds_.clear();
 	initialStates_.clear();
 	clockHoldTicks_.clear();
@@ -337,8 +338,7 @@ void SimulationCore::clear() {
 	nodeClockHoldTicks_.clear();
 	nodeLatchInitialStates_.clear();
 	nodeEvaluationPolicies_.clear();
-	nodeInputCounts_.clear();
-	nodeInputHighCounts_.clear();
+	componentInputCounts_.clear();
 	outgoingOffsets_.clear();
 	outgoingComponentEnds_.clear();
 	outgoingTargets_.clear();
@@ -346,7 +346,6 @@ void SimulationCore::clear() {
 	incomingSources_.clear();
 	componentNodes_.clear();
 	connectorNodes_.clear();
-	connectorTopologicalRanks_.clear();
 	snapshotComponentNodes_.clear();
 	snapshotConnectorNodes_.clear();
 	clockNodes_.clear();
@@ -354,19 +353,15 @@ void SimulationCore::clear() {
 	nextGateSummaryWords_.clear();
 	currentGateWords_.clear();
 	currentGateSummaryWords_.clear();
-	nextGateActiveSummaryWordCount_ = 0;
-	currentGateActiveSummaryWordCount_ = 0;
+	nextGateActiveSummaryWordIndices_.clear();
+	currentGateActiveSummaryWordIndices_.clear();
 	nextGateStates_.clear();
 	currentGateStates_.clear();
 	connectorQueueEvents_.clear();
-	pendingComponentInputDeltas_.clear();
-	pendingComponentRisingCounts_.clear();
-	componentInputStamps_.clear();
-	for (std::vector<int32_t> &pendingInputs : pendingComponentInputsByMode_) {
-		pendingInputs.clear();
-	}
-	pendingConnectorDeltas_.clear();
-	connectorDeltaStamps_.clear();
+	componentRuntimeStates_.clear();
+	connectorRuntimeStates_.clear();
+	pendingComponentHeads_.fill(-1);
+	pendingComponentTails_.fill(-1);
 	connectorWorkWords_.clear();
 	connectorWorkWordStamps_.clear();
 	connectorActiveWordHierarchy_.clear();
@@ -995,7 +990,7 @@ void SimulationCore::buildExecutionGraph() {
 		}
 	}
 	// Connector SCCs are condensed above, so their remaining zero-delay edges form a DAG.
-	connectorTopologicalRanks_.assign(originalNodeCount, -1);
+	std::vector<int32_t> connectorTopologicalRanks(originalNodeCount, -1);
 	std::vector<int32_t> connectorIncomingCounts(originalNodeCount, 0);
 	for (int32_t source : connectorNodes_) {
 		for (int32_t edge = outgoingComponentEnds_[source]; edge < outgoingOffsets_[source + 1]; ++edge) {
@@ -1011,7 +1006,7 @@ void SimulationCore::buildExecutionGraph() {
 	}
 	for (size_t cursor = 0; cursor < connectorTopologicalQueue.size(); ++cursor) {
 		const int32_t source = connectorTopologicalQueue[cursor];
-		connectorTopologicalRanks_[source] = static_cast<int32_t>(cursor);
+		connectorTopologicalRanks[source] = static_cast<int32_t>(cursor);
 		for (int32_t edge = outgoingComponentEnds_[source]; edge < outgoingOffsets_[source + 1]; ++edge) {
 			const int32_t target = outgoingTargets_[edge];
 			if (--connectorIncomingCounts[target] == 0) {
@@ -1025,7 +1020,7 @@ void SimulationCore::buildExecutionGraph() {
 	for (int32_t source : connectorNodes_) {
 		for (int32_t edge = outgoingComponentEnds_[source]; edge < outgoingOffsets_[source + 1]; ++edge) {
 			const int32_t target = outgoingTargets_[edge];
-			assert(connectorTopologicalRanks_[source] < connectorTopologicalRanks_[target]);
+			assert(connectorTopologicalRanks[source] < connectorTopologicalRanks[target]);
 		}
 	}
 #endif
@@ -1037,6 +1032,16 @@ void SimulationCore::buildExecutionGraph() {
 		const int32_t edgeEnd = outgoingOffsets_[source + 1];
 		if (componentEdgeEnd == edgeBegin + 1 && edgeEnd == componentEdgeEnd) {
 			outgoingComponentEnds_[source] = -outgoingTargets_[edgeBegin] - 1;
+		}
+	}
+	// Connector targets are only consumed by runtime propagation. Store their topological ranks directly.
+	for (int32_t source = 0; source < originalNodeCount; ++source) {
+		const int32_t componentEdgeEnd = outgoingComponentEnds_[source];
+		if (componentEdgeEnd < 0) {
+			continue;
+		}
+		for (int32_t edge = componentEdgeEnd; edge < outgoingOffsets_[source + 1]; ++edge) {
+			outgoingTargets_[edge] = connectorTopologicalRanks[outgoingTargets_[edge]];
 		}
 	}
 	for (int32_t &component : cellToComponent_) {
@@ -1081,15 +1086,15 @@ void SimulationCore::buildExecutionGraph() {
 		binding.signalNetwork = remapConnector(binding.signalNetwork);
 	}
 
-	nodeInputCounts_.assign(originalNodeCount, 0);
-	nodeInputHighCounts_.assign(originalNodeCount, 0);
+	componentInputCounts_.assign(componentNodes_.size(), 0);
 	for (int32_t componentIndex = 0; componentIndex < static_cast<int32_t>(componentNodes_.size()); ++componentIndex) {
 		const int32_t node = componentNodes_[componentIndex];
-		nodeInputCounts_[node] = incomingOffsets_[node + 1] - incomingOffsets_[node];
+		assert(node == componentIndex);
+		componentInputCounts_[node] = incomingOffsets_[node + 1] - incomingOffsets_[node];
 	}
 	nodeEvaluationPolicies_.assign(originalComponentCount, static_cast<uint8_t>(EvaluationMode::State));
 	for (int32_t node : componentNodes_) {
-		const int32_t inputCount = nodeInputCounts_[node];
+		const int32_t inputCount = componentInputCounts_[node];
 		EvaluationMode mode = EvaluationMode::State;
 		switch (nodeKinds_[node]) {
 			case ToolKind::Buffer:
@@ -1127,20 +1132,17 @@ void SimulationCore::buildExecutionGraph() {
 	nextGateSummaryWords_.assign(gateSummaryWordCount, 0);
 	currentGateWords_.assign(gateWordCount, 0);
 	currentGateSummaryWords_.assign(gateSummaryWordCount, 0);
-	nextGateActiveSummaryWordCount_ = 0;
-	currentGateActiveSummaryWordCount_ = 0;
+	nextGateActiveSummaryWordIndices_.clear();
+	nextGateActiveSummaryWordIndices_.reserve(gateSummaryWordCount);
+	currentGateActiveSummaryWordIndices_.clear();
+	currentGateActiveSummaryWordIndices_.reserve(gateSummaryWordCount);
 	nextGateStates_.assign(originalComponentCount, 0);
 	currentGateStates_.assign(originalComponentCount, 0);
-	connectorQueueEvents_.clear();
-	connectorQueueEvents_.reserve(originalNodeCount);
-	pendingComponentInputDeltas_.assign(originalNodeCount, 0);
-	pendingComponentRisingCounts_.assign(originalNodeCount, 0);
-	componentInputStamps_.assign(originalNodeCount, 0);
-	for (std::vector<int32_t> &pendingInputs : pendingComponentInputsByMode_) {
-		pendingInputs.clear();
-	}
-	pendingConnectorDeltas_.assign(originalNodeCount, 0);
-	connectorDeltaStamps_.assign(originalNodeCount, 0);
+	connectorQueueEvents_.prepare(static_cast<size_t>(originalNodeCount));
+	componentRuntimeStates_.assign(componentNodes_.size(), ComponentRuntimeState{});
+	connectorRuntimeStates_.assign(connectorNodes_.size(), ConnectorRuntimeState{});
+	pendingComponentHeads_.fill(-1);
+	pendingComponentTails_.fill(-1);
 	const size_t connectorWorkWordCount = (connectorNodes_.size() + 63U) / 64U;
 	connectorWorkWords_.assign(connectorWorkWordCount, 0);
 	connectorWorkWordStamps_.assign(connectorWorkWordCount, 0);
@@ -1219,10 +1221,24 @@ void SimulationCore::buildExecutionGraph() {
 	reportedVisibleStates_.assign(kinds_.size(), 0);
 	changedCellStamps_.assign(kinds_.size(), 0);
 	changedCells_.clear();
+	changedCells_.reserve(kinds_.size());
 	changeStamp_ = 1;
-	networkStates_.clear();
-	components_.clear();
-	components_.shrink_to_fit();
+	const auto releaseCompileVector = [](auto &values) {
+		values.clear();
+		values.shrink_to_fit();
+	};
+	releaseCompileVector(networkStates_);
+	releaseCompileVector(components_);
+	releaseCompileVector(readBindings_);
+	releaseCompileVector(writeBindings_);
+	releaseCompileVector(cellNetwork_);
+	releaseCompileVector(meshNetworksByCell_);
+	releaseCompileVector(crossNetworksByCell_);
+	releaseCompileVector(readBindingByCell_);
+	releaseCompileVector(writeBindingByCell_);
+	releaseCompileVector(incomingOffsets_);
+	releaseCompileVector(incomingSources_);
+	releaseCompileVector(nodeIsComponent_);
 }
 
 void SimulationCore::initializeConnectorWorkWordHierarchy(size_t workWordCount) {
@@ -1241,7 +1257,7 @@ void SimulationCore::initializeConnectorWorkWordHierarchy(size_t workWordCount) 
 }
 
 uint8_t SimulationCore::evaluateComponent(int32_t node) const {
-	return evaluateComponent(node, nodeInputHighCounts_[node]);
+	return evaluateComponent(node, componentRuntimeStates_[node].inputHighCount);
 }
 
 uint8_t SimulationCore::evaluateComponent(int32_t node, int32_t highInputCount) const {
@@ -1258,9 +1274,9 @@ uint8_t SimulationCore::evaluateComponent(int32_t node, int32_t highInputCount, 
 	}
 	switch (mode) {
 		case EvaluationMode::AllHigh:
-			return highInputCount != 0 && highInputCount == nodeInputCounts_[node] ? 1 : 0;
+			return highInputCount != 0 && highInputCount == componentInputCounts_[node] ? 1 : 0;
 		case EvaluationMode::NotAllHigh:
-			return highInputCount == 0 || highInputCount != nodeInputCounts_[node] ? 1 : 0;
+			return highInputCount == 0 || highInputCount != componentInputCounts_[node] ? 1 : 0;
 		case EvaluationMode::OddParity:
 			return (highInputCount & 1) != 0 ? 1 : 0;
 		case EvaluationMode::EvenParity:
@@ -1270,10 +1286,8 @@ uint8_t SimulationCore::evaluateComponent(int32_t node, int32_t highInputCount, 
 	}
 }
 
-void SimulationCore::updateVisibleCell(int32_t cell) const {
-	if (cell < 0 || cell >= static_cast<int32_t>(visibleStates_.size())) {
-		return;
-	}
+uint8_t SimulationCore::resolveVisibleCellState(int32_t cell) const {
+	assert(cell >= 0 && cell < static_cast<int32_t>(cellVisibleNodeOffsets_.size()) - 1);
 	uint8_t state = 0;
 	for (size_t offset = cellVisibleNodeOffsets_[cell]; offset < cellVisibleNodeOffsets_[static_cast<size_t>(cell) + 1U]; ++offset) {
 		if (nodeStates_[cellVisibleNodes_[offset]] != 0) {
@@ -1281,12 +1295,21 @@ void SimulationCore::updateVisibleCell(int32_t cell) const {
 			break;
 		}
 	}
+	return state;
+}
+
+void SimulationCore::updateVisibleCell(int32_t cell) const {
+	if (cell < 0 || cell >= static_cast<int32_t>(visibleStates_.size())) {
+		return;
+	}
+	const uint8_t state = resolveVisibleCellState(cell);
 	if (visibleStates_[cell] == state) {
 		return;
 	}
 	visibleStates_[cell] = state;
 	if (changedCellStamps_[cell] != changeStamp_) {
 		changedCellStamps_[cell] = changeStamp_;
+		assert(changedCells_.size() < changedCells_.capacity());
 		changedCells_.push_back(cell);
 	}
 }
@@ -1295,6 +1318,7 @@ void SimulationCore::markVisibleNodeDirty(int32_t node, uint8_t initialState, bo
 	if (dirtyNodeStamps_[node] != dirtyNodeStamp_) {
 		dirtyNodeStamps_[node] = dirtyNodeStamp_;
 		dirtyNodeInitialStates_[node] = forceMaterialization ? ForcedVisibleNodeInitialState : initialState;
+		assert(dirtyNodes_.size() < dirtyNodes_.capacity());
 		dirtyNodes_.push_back(node);
 		return;
 	}
@@ -1359,32 +1383,36 @@ void SimulationCore::propagateStateChange(int32_t sourceNode, uint8_t oldState, 
 }
 
 void SimulationCore::beginPropagationBatch(bool nextGateFrontierIsEmpty) {
-	for (std::vector<int32_t> &pendingInputs : pendingComponentInputsByMode_) {
-		pendingInputs.clear();
-	}
+	pendingComponentHeads_.fill(-1);
+	pendingComponentTails_.fill(-1);
 	assert(!hasActiveConnectorWorkWords());
 	if (nextGateFrontierIsEmpty) {
-		assert(nextGateActiveSummaryWordCount_ == 0);
+		assert(nextGateActiveSummaryWordIndices_.empty());
 	}
 	++propagationStamp_;
 	if (propagationStamp_ != 0) {
 		return;
 	}
-	std::fill(componentInputStamps_.begin(), componentInputStamps_.end(), 0);
-	std::fill(connectorDeltaStamps_.begin(), connectorDeltaStamps_.end(), 0);
+	for (ComponentRuntimeState &pending : componentRuntimeStates_) {
+		pending.inputStamp = 0;
+	}
+	for (ConnectorRuntimeState &pending : connectorRuntimeStates_) {
+		pending.stamp = 0;
+	}
 	std::fill(connectorWorkWordStamps_.begin(), connectorWorkWordStamps_.end(), 0);
 	propagationStamp_ = 1;
 }
 
 void SimulationCore::flushQueuedComponentInputDeltas() {
-	const auto flushZeroThresholdInputs = [this](const std::vector<int32_t> &pendingInputs, bool invertOutput) {
-		for (int32_t node : pendingInputs) {
-			const int32_t inputDelta = pendingComponentInputDeltas_[node];
+	const auto flushZeroThresholdInputs = [this](EvaluationMode mode, bool invertOutput) {
+		for (int32_t node = pendingComponentHeads_[static_cast<size_t>(mode)]; node >= 0;
+				node = componentRuntimeStates_[static_cast<size_t>(node)].nextPending) {
+			const int32_t inputDelta = componentRuntimeStates_[static_cast<size_t>(node)].inputDelta;
 			const bool gateAlreadyQueued = isComponentGateQueued(node);
 			if (inputDelta == 0 && !gateAlreadyQueued) {
 				continue;
 			}
-			int32_t &highInputCount = nodeInputHighCounts_[node];
+			int32_t &highInputCount = componentRuntimeStates_[node].inputHighCount;
 			highInputCount += inputDelta;
 			const uint8_t nextState = static_cast<uint8_t>((highInputCount != 0) ^ invertOutput);
 			if (gateAlreadyQueued || nextState != nodeStates_[node]) {
@@ -1392,30 +1420,32 @@ void SimulationCore::flushQueuedComponentInputDeltas() {
 			}
 		}
 	};
-	const auto flushAllHighInputs = [this](const std::vector<int32_t> &pendingInputs, bool invertOutput) {
-		for (int32_t node : pendingInputs) {
-			const int32_t inputDelta = pendingComponentInputDeltas_[node];
+	const auto flushAllHighInputs = [this](EvaluationMode mode, bool invertOutput) {
+		for (int32_t node = pendingComponentHeads_[static_cast<size_t>(mode)]; node >= 0;
+				node = componentRuntimeStates_[static_cast<size_t>(node)].nextPending) {
+			const int32_t inputDelta = componentRuntimeStates_[static_cast<size_t>(node)].inputDelta;
 			const bool gateAlreadyQueued = isComponentGateQueued(node);
 			if (inputDelta == 0 && !gateAlreadyQueued) {
 				continue;
 			}
-			int32_t &highInputCount = nodeInputHighCounts_[node];
+			int32_t &highInputCount = componentRuntimeStates_[node].inputHighCount;
 			highInputCount += inputDelta;
 			const uint8_t nextState = static_cast<uint8_t>(
-					(highInputCount != 0 && highInputCount == nodeInputCounts_[node]) ^ invertOutput);
+					(highInputCount != 0 && highInputCount == componentInputCounts_[node]) ^ invertOutput);
 			if (gateAlreadyQueued || nextState != nodeStates_[node]) {
 				enqueueComponentGate(node, nextState);
 			}
 		}
 	};
-	const auto flushParityInputs = [this](const std::vector<int32_t> &pendingInputs, bool invertOutput) {
-		for (int32_t node : pendingInputs) {
-			const int32_t inputDelta = pendingComponentInputDeltas_[node];
+	const auto flushParityInputs = [this](EvaluationMode mode, bool invertOutput) {
+		for (int32_t node = pendingComponentHeads_[static_cast<size_t>(mode)]; node >= 0;
+				node = componentRuntimeStates_[static_cast<size_t>(node)].nextPending) {
+			const int32_t inputDelta = componentRuntimeStates_[static_cast<size_t>(node)].inputDelta;
 			const bool gateAlreadyQueued = isComponentGateQueued(node);
 			if (inputDelta == 0 && !gateAlreadyQueued) {
 				continue;
 			}
-			int32_t &highInputCount = nodeInputHighCounts_[node];
+			int32_t &highInputCount = componentRuntimeStates_[node].inputHighCount;
 			highInputCount += inputDelta;
 			const uint8_t nextState = static_cast<uint8_t>(((highInputCount & 1) != 0) ^ invertOutput);
 			if (gateAlreadyQueued || nextState != nodeStates_[node]) {
@@ -1423,28 +1453,30 @@ void SimulationCore::flushQueuedComponentInputDeltas() {
 			}
 		}
 	};
-	for (int32_t node : pendingComponentInputsByMode_[static_cast<size_t>(EvaluationMode::State)]) {
-		const int32_t inputDelta = pendingComponentInputDeltas_[node];
+	for (int32_t node = pendingComponentHeads_[static_cast<size_t>(EvaluationMode::State)]; node >= 0;
+			node = componentRuntimeStates_[static_cast<size_t>(node)].nextPending) {
+		const int32_t inputDelta = componentRuntimeStates_[static_cast<size_t>(node)].inputDelta;
 		const bool gateAlreadyQueued = isComponentGateQueued(node);
 		if (inputDelta == 0 && !gateAlreadyQueued) {
 			continue;
 		}
-		nodeInputHighCounts_[node] += inputDelta;
+		componentRuntimeStates_[node].inputHighCount += inputDelta;
 		if (gateAlreadyQueued) {
 			enqueueComponentGate(node, nodeStates_[node]);
 		}
 	}
-	flushZeroThresholdInputs(pendingComponentInputsByMode_[static_cast<size_t>(EvaluationMode::High)], false);
-	flushZeroThresholdInputs(pendingComponentInputsByMode_[static_cast<size_t>(EvaluationMode::Low)], true);
-	flushAllHighInputs(pendingComponentInputsByMode_[static_cast<size_t>(EvaluationMode::AllHigh)], false);
-	flushAllHighInputs(pendingComponentInputsByMode_[static_cast<size_t>(EvaluationMode::NotAllHigh)], true);
-	flushParityInputs(pendingComponentInputsByMode_[static_cast<size_t>(EvaluationMode::OddParity)], false);
-	flushParityInputs(pendingComponentInputsByMode_[static_cast<size_t>(EvaluationMode::EvenParity)], true);
-	for (int32_t node : pendingComponentInputsByMode_[static_cast<size_t>(EvaluationMode::LatchToggle)]) {
-		const int32_t inputDelta = pendingComponentInputDeltas_[node];
+	flushZeroThresholdInputs(EvaluationMode::High, false);
+	flushZeroThresholdInputs(EvaluationMode::Low, true);
+	flushAllHighInputs(EvaluationMode::AllHigh, false);
+	flushAllHighInputs(EvaluationMode::NotAllHigh, true);
+	flushParityInputs(EvaluationMode::OddParity, false);
+	flushParityInputs(EvaluationMode::EvenParity, true);
+	for (int32_t node = pendingComponentHeads_[static_cast<size_t>(EvaluationMode::LatchToggle)]; node >= 0;
+			node = componentRuntimeStates_[static_cast<size_t>(node)].nextPending) {
+		const ComponentRuntimeState &pending = componentRuntimeStates_[static_cast<size_t>(node)];
 		const bool gateAlreadyQueued = isComponentGateQueued(node);
-		nodeInputHighCounts_[node] += inputDelta;
-		if ((pendingComponentRisingCounts_[node] & 1) == 0) {
+		componentRuntimeStates_[node].inputHighCount += pending.inputDelta;
+		if ((pending.risingCount & 1) == 0) {
 			continue;
 		}
 		const uint8_t baseState = gateAlreadyQueued ? nextGateStates_[node] : nodeStates_[node];
@@ -1453,14 +1485,15 @@ void SimulationCore::flushQueuedComponentInputDeltas() {
 }
 
 void SimulationCore::flushUnqueuedComponentInputDeltas() {
-	assert(nextGateActiveSummaryWordCount_ == 0);
-	const auto flushZeroThresholdInputs = [this](const std::vector<int32_t> &pendingInputs, bool invertOutput) {
-		for (int32_t node : pendingInputs) {
-			const int32_t inputDelta = pendingComponentInputDeltas_[node];
+	assert(nextGateActiveSummaryWordIndices_.empty());
+	const auto flushZeroThresholdInputs = [this](EvaluationMode mode, bool invertOutput) {
+		for (int32_t node = pendingComponentHeads_[static_cast<size_t>(mode)]; node >= 0;
+				node = componentRuntimeStates_[static_cast<size_t>(node)].nextPending) {
+			const int32_t inputDelta = componentRuntimeStates_[static_cast<size_t>(node)].inputDelta;
 			if (inputDelta == 0) {
 				continue;
 			}
-			int32_t &highInputCount = nodeInputHighCounts_[node];
+			int32_t &highInputCount = componentRuntimeStates_[node].inputHighCount;
 			const bool previousActive = highInputCount != 0;
 			highInputCount += inputDelta;
 			const bool nextActive = highInputCount != 0;
@@ -1471,14 +1504,15 @@ void SimulationCore::flushUnqueuedComponentInputDeltas() {
 			enqueueNewComponentGate(node, static_cast<uint8_t>(nextActive ^ invertOutput));
 		}
 	};
-	const auto flushAllHighInputs = [this](const std::vector<int32_t> &pendingInputs, bool invertOutput) {
-		for (int32_t node : pendingInputs) {
-			const int32_t inputDelta = pendingComponentInputDeltas_[node];
+	const auto flushAllHighInputs = [this](EvaluationMode mode, bool invertOutput) {
+		for (int32_t node = pendingComponentHeads_[static_cast<size_t>(mode)]; node >= 0;
+				node = componentRuntimeStates_[static_cast<size_t>(node)].nextPending) {
+			const int32_t inputDelta = componentRuntimeStates_[static_cast<size_t>(node)].inputDelta;
 			if (inputDelta == 0) {
 				continue;
 			}
-			int32_t &highInputCount = nodeInputHighCounts_[node];
-			const int32_t inputCount = nodeInputCounts_[node];
+			int32_t &highInputCount = componentRuntimeStates_[node].inputHighCount;
+			const int32_t inputCount = componentInputCounts_[node];
 			const bool previousActive = highInputCount != 0 && highInputCount == inputCount;
 			highInputCount += inputDelta;
 			const bool nextActive = highInputCount != 0 && highInputCount == inputCount;
@@ -1489,13 +1523,14 @@ void SimulationCore::flushUnqueuedComponentInputDeltas() {
 			enqueueNewComponentGate(node, static_cast<uint8_t>(nextActive ^ invertOutput));
 		}
 	};
-	const auto flushParityInputs = [this](const std::vector<int32_t> &pendingInputs, bool invertOutput) {
-		for (int32_t node : pendingInputs) {
-			const int32_t inputDelta = pendingComponentInputDeltas_[node];
+	const auto flushParityInputs = [this](EvaluationMode mode, bool invertOutput) {
+		for (int32_t node = pendingComponentHeads_[static_cast<size_t>(mode)]; node >= 0;
+				node = componentRuntimeStates_[static_cast<size_t>(node)].nextPending) {
+			const int32_t inputDelta = componentRuntimeStates_[static_cast<size_t>(node)].inputDelta;
 			if (inputDelta == 0) {
 				continue;
 			}
-			int32_t &highInputCount = nodeInputHighCounts_[node];
+			int32_t &highInputCount = componentRuntimeStates_[node].inputHighCount;
 			const bool previousActive = (highInputCount & 1) != 0;
 			highInputCount += inputDelta;
 			if (inputDelta % 2 == 0) {
@@ -1505,49 +1540,54 @@ void SimulationCore::flushUnqueuedComponentInputDeltas() {
 			enqueueNewComponentGate(node, static_cast<uint8_t>(((highInputCount & 1) != 0) ^ invertOutput));
 		}
 	};
-	for (int32_t node : pendingComponentInputsByMode_[static_cast<size_t>(EvaluationMode::State)]) {
-		nodeInputHighCounts_[node] += pendingComponentInputDeltas_[node];
+	for (int32_t node = pendingComponentHeads_[static_cast<size_t>(EvaluationMode::State)]; node >= 0;
+			node = componentRuntimeStates_[static_cast<size_t>(node)].nextPending) {
+		componentRuntimeStates_[node].inputHighCount += componentRuntimeStates_[static_cast<size_t>(node)].inputDelta;
 	}
-	flushZeroThresholdInputs(pendingComponentInputsByMode_[static_cast<size_t>(EvaluationMode::High)], false);
-	flushZeroThresholdInputs(pendingComponentInputsByMode_[static_cast<size_t>(EvaluationMode::Low)], true);
-	flushAllHighInputs(pendingComponentInputsByMode_[static_cast<size_t>(EvaluationMode::AllHigh)], false);
-	flushAllHighInputs(pendingComponentInputsByMode_[static_cast<size_t>(EvaluationMode::NotAllHigh)], true);
-	flushParityInputs(pendingComponentInputsByMode_[static_cast<size_t>(EvaluationMode::OddParity)], false);
-	flushParityInputs(pendingComponentInputsByMode_[static_cast<size_t>(EvaluationMode::EvenParity)], true);
-	for (int32_t node : pendingComponentInputsByMode_[static_cast<size_t>(EvaluationMode::LatchToggle)]) {
-		nodeInputHighCounts_[node] += pendingComponentInputDeltas_[node];
-		if ((pendingComponentRisingCounts_[node] & 1) != 0) {
+	flushZeroThresholdInputs(EvaluationMode::High, false);
+	flushZeroThresholdInputs(EvaluationMode::Low, true);
+	flushAllHighInputs(EvaluationMode::AllHigh, false);
+	flushAllHighInputs(EvaluationMode::NotAllHigh, true);
+	flushParityInputs(EvaluationMode::OddParity, false);
+	flushParityInputs(EvaluationMode::EvenParity, true);
+	for (int32_t node = pendingComponentHeads_[static_cast<size_t>(EvaluationMode::LatchToggle)]; node >= 0;
+			node = componentRuntimeStates_[static_cast<size_t>(node)].nextPending) {
+		const ComponentRuntimeState &pending = componentRuntimeStates_[static_cast<size_t>(node)];
+		componentRuntimeStates_[node].inputHighCount += pending.inputDelta;
+		if ((pending.risingCount & 1) != 0) {
 			enqueueNewComponentGate(node, nodeStates_[node] == 0 ? 1 : 0);
 		}
+	}
+}
+
+void SimulationCore::drainConnectorWorkWord(size_t workWordIndex) {
+	uint64_t &workWord = connectorWorkWords_[workWordIndex];
+	while (workWord != 0) {
+		const int32_t rankOffset = countTrailingZeros(workWord);
+		workWord &= workWord - 1U;
+		const size_t connectorRank = workWordIndex * 64U + static_cast<size_t>(rankOffset);
+		const int32_t source = connectorNodes_[connectorRank];
+		const int32_t stateDelta = connectorRuntimeStates_[connectorRank].delta;
+		if (stateDelta == 0) {
+			continue;
+		}
+		int32_t &highInputCount = connectorRuntimeStates_[connectorRank].inputHighCount;
+		const int32_t previousHighInputCount = highInputCount;
+		highInputCount += stateDelta;
+		const uint8_t previousState = previousHighInputCount != 0 ? 1 : 0;
+		const uint8_t nextState = highInputCount != 0 ? 1 : 0;
+		if (previousState == nextState) {
+			continue;
+		}
+		setChangedNodeState(source, nextState);
+		seedSourceDelta(source, nextState != 0 ? 1 : -1);
 	}
 }
 
 void SimulationCore::finishPropagationBatch(bool nextGateFrontierIsEmpty) {
 	while (hasActiveConnectorWorkWords()) {
 		const size_t workWordIndex = firstActiveConnectorWorkWord();
-		uint64_t &workWord = connectorWorkWords_[workWordIndex];
-		assert(workWord != 0);
-		while (workWord != 0) {
-			const int32_t rankOffset = countTrailingZeros(workWord);
-			workWord &= workWord - 1U;
-			const size_t connectorRank = workWordIndex * 64U + static_cast<size_t>(rankOffset);
-			const int32_t source = connectorNodes_[connectorRank];
-			const int32_t stateDelta = pendingConnectorDeltas_[source];
-			if (stateDelta == 0) {
-				continue;
-			}
-			int32_t &highInputCount = nodeInputHighCounts_[source];
-			const int32_t previousHighInputCount = highInputCount;
-			highInputCount += stateDelta;
-			const uint8_t previousState = previousHighInputCount != 0 ? 1 : 0;
-			const uint8_t nextState = highInputCount != 0 ? 1 : 0;
-			if (previousState == nextState) {
-				continue;
-			}
-			setChangedNodeState(source, nextState);
-			const int32_t outputStateDelta = nextState != 0 ? 1 : -1;
-			seedSourceDelta(source, outputStateDelta);
-		}
+		drainConnectorWorkWord(workWordIndex);
 		deactivateConnectorWorkWord(workWordIndex);
 	}
 	if (nextGateFrontierIsEmpty) {
@@ -1573,13 +1613,18 @@ void SimulationCore::drainConnectorQueue() {
 
 void SimulationCore::rebuildDerivedState(const std::vector<uint8_t> &componentStates) {
 	nodeStates_.assign(nodeStates_.size(), 0);
-	nodeInputHighCounts_.assign(nodeInputHighCounts_.size(), 0);
+	for (ComponentRuntimeState &state : componentRuntimeStates_) {
+		state.inputHighCount = 0;
+	}
+	for (ConnectorRuntimeState &state : connectorRuntimeStates_) {
+		state.inputHighCount = 0;
+	}
 	std::fill(nextGateWords_.begin(), nextGateWords_.end(), 0);
 	std::fill(nextGateSummaryWords_.begin(), nextGateSummaryWords_.end(), 0);
 	std::fill(currentGateWords_.begin(), currentGateWords_.end(), 0);
 	std::fill(currentGateSummaryWords_.begin(), currentGateSummaryWords_.end(), 0);
-	nextGateActiveSummaryWordCount_ = 0;
-	currentGateActiveSummaryWordCount_ = 0;
+	nextGateActiveSummaryWordIndices_.clear();
+	currentGateActiveSummaryWordIndices_.clear();
 	std::fill(nextGateStates_.begin(), nextGateStates_.end(), 0);
 	std::fill(currentGateStates_.begin(), currentGateStates_.end(), 0);
 	connectorQueueEvents_.clear();
@@ -1600,16 +1645,23 @@ void SimulationCore::rebuildDerivedState(const std::vector<uint8_t> &componentSt
 void SimulationCore::resetInternal() {
 	tickCount_ = 0;
 	std::fill(clockPhases_.begin(), clockPhases_.end(), 0);
-	std::fill(nodeInputHighCounts_.begin(), nodeInputHighCounts_.end(), 0);
+	for (ComponentRuntimeState &state : componentRuntimeStates_) {
+		state.inputHighCount = 0;
+	}
+	for (ConnectorRuntimeState &state : connectorRuntimeStates_) {
+		state.inputHighCount = 0;
+	}
 	std::fill(nextGateWords_.begin(), nextGateWords_.end(), 0);
 	std::fill(nextGateSummaryWords_.begin(), nextGateSummaryWords_.end(), 0);
 	std::fill(currentGateWords_.begin(), currentGateWords_.end(), 0);
 	std::fill(currentGateSummaryWords_.begin(), currentGateSummaryWords_.end(), 0);
-	nextGateActiveSummaryWordCount_ = 0;
-	currentGateActiveSummaryWordCount_ = 0;
+	nextGateActiveSummaryWordIndices_.clear();
+	currentGateActiveSummaryWordIndices_.clear();
 	std::fill(nextGateStates_.begin(), nextGateStates_.end(), 0);
 	std::fill(currentGateStates_.begin(), currentGateStates_.end(), 0);
-	std::fill(pendingComponentRisingCounts_.begin(), pendingComponentRisingCounts_.end(), 0);
+	for (ComponentRuntimeState &pending : componentRuntimeStates_) {
+		pending.risingCount = 0;
+	}
 	connectorQueueEvents_.clear();
 	for (int32_t node = 0; node < static_cast<int32_t>(nodeStates_.size()); ++node) {
 		if (nodeStates_[node] != 0) {
@@ -1637,13 +1689,68 @@ void SimulationCore::resetInternal() {
 	suppressLatchInputEdges_ = false;
 }
 
+int32_t SimulationCore::getVisibleCellCount() const {
+	return compiled_ ? static_cast<int32_t>(visibleStates_.size()) : 0;
+}
+
+bool SimulationCore::copyVisibleStates(uint8_t *states, size_t capacity) const {
+	if (!compiled_ || states == nullptr || capacity < visibleStates_.size()) {
+		return false;
+	}
+	if (isVisualTrackingDeferred_) {
+		for (int32_t cell = 0; cell < static_cast<int32_t>(visibleStates_.size()); ++cell) {
+			states[cell] = resolveVisibleCellState(cell);
+		}
+		return true;
+	}
+	materializeVisibleStates();
+	std::copy(visibleStates_.begin(), visibleStates_.end(), states);
+	return true;
+}
+
+bool SimulationCore::beginDeferredVisualTracking() {
+	if (!compiled_ || isVisualTrackingDeferred_) {
+		return false;
+	}
+	materializeVisibleStates();
+	reportedVisibleStates_ = visibleStates_;
+	resetChangeCollector();
+	isVisualTrackingDeferred_ = true;
+	return true;
+}
+
+void SimulationCore::endDeferredVisualTracking() {
+	if (!isVisualTrackingDeferred_) {
+		return;
+	}
+	for (int32_t cell = 0; cell < static_cast<int32_t>(visibleStates_.size()); ++cell) {
+		const uint8_t state = resolveVisibleCellState(cell);
+		visibleStates_[cell] = state;
+		reportedVisibleStates_[cell] = state;
+	}
+	dirtyNodes_.clear();
+	++dirtyNodeStamp_;
+	if (dirtyNodeStamp_ == 0) {
+		std::fill(dirtyNodeStamps_.begin(), dirtyNodeStamps_.end(), 0);
+		dirtyNodeStamp_ = 1;
+	}
+	resetChangeCollector();
+	isVisualTrackingDeferred_ = false;
+}
+
 std::vector<int32_t> SimulationCore::getStates() const {
 	if (!compiled_) {
 		return {};
 	}
-	materializeVisibleStates();
 	std::vector<int32_t> states(visibleStates_.size(), 0);
-	for (int32_t cell = 0; cell < static_cast<int32_t>(visibleStates_.size()); ++cell) {
+	if (isVisualTrackingDeferred_) {
+		for (int32_t cell = 0; cell < static_cast<int32_t>(states.size()); ++cell) {
+			states[cell] = resolveVisibleCellState(cell);
+		}
+		return states;
+	}
+	materializeVisibleStates();
+	for (int32_t cell = 0; cell < static_cast<int32_t>(states.size()); ++cell) {
 		states[cell] = visibleStates_[cell];
 	}
 	return states;
@@ -1658,6 +1765,30 @@ void SimulationCore::resetChangeCollector() {
 	}
 }
 
+size_t SimulationCore::drainStateChangesTo(int32_t *changes, size_t capacity) {
+	if (!compiled_) {
+		return 0;
+	}
+	assert(!isVisualTrackingDeferred_);
+	materializeVisibleStates();
+	if (changedCells_.empty()) {
+		return 0;
+	}
+	std::sort(changedCells_.begin(), changedCells_.end());
+	assert(changes != nullptr);
+	assert(capacity >= changedCells_.size() * 2U);
+	size_t changeCount = 0;
+	for (int32_t cell : changedCells_) {
+		if (visibleStates_[cell] != reportedVisibleStates_[cell]) {
+			changes[changeCount++] = cell;
+			changes[changeCount++] = visibleStates_[cell];
+		}
+		reportedVisibleStates_[cell] = visibleStates_[cell];
+	}
+	resetChangeCollector();
+	return changeCount;
+}
+
 std::vector<int32_t> SimulationCore::drainStateChanges() {
 	if (!compiled_) {
 		return {};
@@ -1666,22 +1797,12 @@ std::vector<int32_t> SimulationCore::drainStateChanges() {
 	if (changedCells_.empty()) {
 		return {};
 	}
-	std::sort(changedCells_.begin(), changedCells_.end());
-	std::vector<int32_t> changes;
-	changes.reserve(changedCells_.size() * 2U);
-	for (int32_t cell : changedCells_) {
-		if (visibleStates_[cell] != reportedVisibleStates_[cell]) {
-			changes.push_back(cell);
-			changes.push_back(visibleStates_[cell]);
-		}
-		reportedVisibleStates_[cell] = visibleStates_[cell];
-	}
-	resetChangeCollector();
+	std::vector<int32_t> changes(changedCells_.size() * 2U);
+	changes.resize(drainStateChangesTo(changes.data(), changes.size()));
 	return changes;
 }
 
-bool SimulationCore::toggleLatch(int32_t cellIndex, std::vector<int32_t> &changes, std::string &errorReason) {
-	changes.clear();
+bool SimulationCore::toggleLatch(int32_t cellIndex, std::string &errorReason) {
 	errorReason.clear();
 	if (!compiled_) {
 		errorReason = "simulation_not_compiled";
@@ -1703,6 +1824,14 @@ bool SimulationCore::toggleLatch(int32_t cellIndex, std::vector<int32_t> &change
 		nextGateStates_[node] = nextGateStates_[node] == 0 ? 1 : 0;
 	}
 	propagateStateChange(node, previousState, nextState);
+	return true;
+}
+
+bool SimulationCore::toggleLatch(int32_t cellIndex, std::vector<int32_t> &changes, std::string &errorReason) {
+	changes.clear();
+	if (!toggleLatch(cellIndex, errorReason)) {
+		return false;
+	}
 	changes = drainStateChanges();
 	return true;
 }
@@ -1710,8 +1839,9 @@ bool SimulationCore::toggleLatch(int32_t cellIndex, std::vector<int32_t> &change
 void SimulationCore::clearNextGateFrontier() {
 	const size_t sparseClearThreshold =
 			(nextGateSummaryWords_.size() + GateFrontierSparseClearDivisor - 1U) / GateFrontierSparseClearDivisor;
-	if (nextGateActiveSummaryWordCount_ < sparseClearThreshold) {
-		for (size_t summaryWordIndex = 0; summaryWordIndex < nextGateSummaryWords_.size(); ++summaryWordIndex) {
+	if (nextGateActiveSummaryWordIndices_.size() < sparseClearThreshold) {
+		for (uint32_t activeSummaryWordIndex : nextGateActiveSummaryWordIndices_) {
+			const size_t summaryWordIndex = static_cast<size_t>(activeSummaryWordIndex);
 			uint64_t summary = nextGateSummaryWords_[summaryWordIndex];
 			while (summary != 0) {
 				const int32_t wordOffset = countTrailingZeros(summary);
@@ -1725,18 +1855,19 @@ void SimulationCore::clearNextGateFrontier() {
 		std::fill(nextGateWords_.begin(), nextGateWords_.end(), 0);
 		std::fill(nextGateSummaryWords_.begin(), nextGateSummaryWords_.end(), 0);
 	}
-	nextGateActiveSummaryWordCount_ = 0;
+	nextGateActiveSummaryWordIndices_.clear();
 }
 
 void SimulationCore::advanceState() {
 	currentGateWords_.swap(nextGateWords_);
 	currentGateSummaryWords_.swap(nextGateSummaryWords_);
+	currentGateActiveSummaryWordIndices_.swap(nextGateActiveSummaryWordIndices_);
 	currentGateStates_.swap(nextGateStates_);
-	std::swap(currentGateActiveSummaryWordCount_, nextGateActiveSummaryWordCount_);
 	clearNextGateFrontier();
 	connectorQueueEvents_.clear();
 	beginPropagationBatch(true);
-	for (size_t summaryWordIndex = 0; summaryWordIndex < currentGateSummaryWords_.size(); ++summaryWordIndex) {
+	for (uint32_t activeSummaryWordIndex : currentGateActiveSummaryWordIndices_) {
+		const size_t summaryWordIndex = static_cast<size_t>(activeSummaryWordIndex);
 		uint64_t summary = currentGateSummaryWords_[summaryWordIndex];
 		while (summary != 0) {
 			const int32_t wordOffset = countTrailingZeros(summary);
@@ -1795,11 +1926,22 @@ std::vector<int32_t> SimulationCore::advanceTicks(int32_t tickCount) {
 	return drainStateChanges();
 }
 
+void SimulationCore::resetSilent() {
+	if (!compiled_) {
+		return;
+	}
+	resetInternal();
+	if (isVisualTrackingDeferred_) {
+		return;
+	}
+	// The synchronous caller will materialize and drain the resulting state changes.
+}
+
 std::vector<int32_t> SimulationCore::reset() {
+	resetSilent();
 	if (!compiled_) {
 		return {};
 	}
-	resetInternal();
 	return drainStateChanges();
 }
 
@@ -1935,7 +2077,7 @@ bool SimulationCore::restoreState(const std::vector<uint8_t> &snapshot, std::str
 	rebuildDerivedState(componentStatesInRuntimeOrder);
 	std::fill(nextGateWords_.begin(), nextGateWords_.end(), 0);
 	std::fill(nextGateSummaryWords_.begin(), nextGateSummaryWords_.end(), 0);
-	nextGateActiveSummaryWordCount_ = 0;
+	nextGateActiveSummaryWordIndices_.clear();
 	std::fill(nextGateStates_.begin(), nextGateStates_.end(), 0);
 	for (int32_t component = 0; component < static_cast<int32_t>(snapshotComponentNodes_.size()); ++component) {
 		const uint8_t queuedState = queuedGateStates[component];

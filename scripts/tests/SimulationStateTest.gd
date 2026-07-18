@@ -35,6 +35,23 @@ func run(context) -> void:
 	board.call("clearRuntimeTileStates")
 	assert(bool(board.call("getRuntimeTileState", stateOnCoordinates)))
 	assert(bool((occupancy[stateOnCoordinates] as Node2D).get("IsOn")))
+	var gridWidth := int(board.get("GridWidthCount"))
+	var gridHeight := int(board.get("GridHeightCount"))
+	var gridOrigin := board.call("getSimulationGridOrigin") as Vector2i
+	var stateOnIndex := (stateOnCoordinates.y - gridOrigin.y) * gridWidth + stateOnCoordinates.x - gridOrigin.x
+	var stateOffIndex := (stateOffCoordinates.y - gridOrigin.y) * gridWidth + stateOffCoordinates.x - gridOrigin.x
+	var packedStates := PackedInt32Array()
+	packedStates.resize(gridWidth * gridHeight)
+	packedStates.fill(0)
+	packedStates[stateOffIndex] = 1
+	board.call("applyRuntimeTileStatesFromGrid", packedStates, gridWidth, gridOrigin)
+	assert(not bool(board.call("getRuntimeTileState", stateOnCoordinates)))
+	assert(bool(board.call("getRuntimeTileState", stateOffCoordinates)))
+	var packedChanges := PackedInt32Array([stateOnIndex, 1, stateOffIndex, 0])
+	board.call("applyRuntimeTileStateChanges", packedChanges, gridWidth, gridOrigin)
+	assert(bool(board.call("getRuntimeTileState", stateOnCoordinates)))
+	assert(not bool(board.call("getRuntimeTileState", stateOffCoordinates)))
+	board.call("clearRuntimeTileStates")
 	var simulationTiles: Array = board.call("getSimulationTiles")
 	var capturedStates := {}
 	for simulationTileVariant in simulationTiles:
