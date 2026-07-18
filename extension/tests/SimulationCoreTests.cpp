@@ -536,6 +536,36 @@ void testLargeComponentFrontierPropagatesAcrossLanes() {
 	}
 }
 
+void testRuntimeArenaUsesOnePageAlignedAllocationAcrossLargeRecompile() {
+	constexpr int32_t LaneCount = 4097;
+	CompileInput input = makeInput(5, LaneCount * 2);
+	for (int32_t lane = 0; lane < LaneCount; ++lane) {
+		const int32_t y = lane * 2;
+		setKind(input, 0, y, ToolKind::Clock);
+		setKind(input, 1, y, ToolKind::Read);
+		setKind(input, 2, y, ToolKind::Trace);
+		setKind(input, 3, y, ToolKind::Write);
+		setKind(input, 4, y, ToolKind::Buffer);
+	}
+	SimulationCore core;
+	CompileError error;
+	expect(core.compile(input, error), "large generic graph compiles into the runtime arena");
+	const ocb::RuntimeArenaDebugInfo firstLayout = core.getRuntimeArenaDebugInfo();
+	expect(firstLayout.baseAddress % 4096U == 0, "runtime arena base is 4K aligned");
+	expect(firstLayout.capacity % 4096U == 0, "runtime arena capacity is rounded to 4K pages");
+	expect(firstLayout.used > 0 && firstLayout.used <= firstLayout.capacity, "runtime arena reports bounded usage");
+	expect(firstLayout.allocationCount == 1, "large graph uses one runtime arena allocation");
+	expect(core.validateRuntimeArenaLayout(), "all large-graph runtime slices reside in the arena");
+	core.advanceTicksSilent(2);
+	expectState(core, input, 4, (LaneCount / 2) * 2, 1, "arena-backed runtime state advances normally");
+
+	expect(core.compile(input, error), "same core recompiles a large generic graph");
+	const ocb::RuntimeArenaDebugInfo secondLayout = core.getRuntimeArenaDebugInfo();
+	expect(secondLayout.baseAddress % 4096U == 0, "recompiled runtime arena base remains 4K aligned");
+	expect(secondLayout.allocationCount == 1, "recompile replaces the old arena with one allocation");
+	expect(core.validateRuntimeArenaLayout(), "recompiled runtime slices reside in the new arena");
+}
+
 void testSparseGateFrontierClearsPreviousTick() {
 	constexpr int32_t SparseComponentCount = 16385;
 	CompileInput input = makeInput(5, SparseComponentCount);
@@ -1735,6 +1765,7 @@ int main() {
 	testUnequalDepthConnectorDiamondConverges();
 	testConnectorQueueSpansTopologicalRankWords();
 	testLargeComponentFrontierPropagatesAcrossLanes();
+	testRuntimeArenaUsesOnePageAlignedAllocationAcrossLargeRecompile();
 	testSparseGateFrontierClearsPreviousTick();
 	testSparseGateFrontierHandlesNonMonotonicSummaryIndices();
 	testQueuedComponentGateTracksLaterDelta();

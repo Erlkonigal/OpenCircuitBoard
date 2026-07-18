@@ -237,17 +237,25 @@ void appendCsrEdge(std::vector<std::vector<int32_t>> &outgoing, int32_t source, 
 	outgoing[source].push_back(target);
 }
 
+template <typename OffsetBuffer, typename TargetBuffer>
 void flattenCsr(
 		const std::vector<std::vector<int32_t>> &adjacency,
-		std::vector<int32_t> &offsets,
-		std::vector<int32_t> &targets) {
+		OffsetBuffer &offsets,
+		TargetBuffer &targets) {
 	offsets.assign(adjacency.size() + 1U, 0);
-	targets.clear();
+	size_t targetCount = 0;
 	for (int32_t node = 0; node < static_cast<int32_t>(adjacency.size()); ++node) {
-		offsets[node] = static_cast<int32_t>(targets.size());
-		targets.insert(targets.end(), adjacency[node].begin(), adjacency[node].end());
+		offsets[node] = static_cast<int32_t>(targetCount);
+		targetCount += adjacency[node].size();
 	}
-	offsets[adjacency.size()] = static_cast<int32_t>(targets.size());
+	offsets[adjacency.size()] = static_cast<int32_t>(targetCount);
+	targets.resize(targetCount);
+	size_t targetIndex = 0;
+	for (const std::vector<int32_t> &edges : adjacency) {
+		for (int32_t target : edges) {
+			targets[targetIndex++] = target;
+		}
+	}
 }
 
 } // namespace
@@ -308,7 +316,160 @@ int32_t SimulationCore::colorForKind(ToolKind kind) {
 	}
 }
 
+void SimulationCore::resetRuntimeBuffers() {
+	cellToComponent_.reset();
+	nodeStates_.reset();
+	clockPhases_.reset();
+	nodeKinds_.reset();
+	nodeClockHoldTicks_.reset();
+	nodeLatchInitialStates_.reset();
+	nodeEvaluationPolicies_.reset();
+	componentInputCounts_.reset();
+	outgoingOffsets_.reset();
+	outgoingComponentEnds_.reset();
+	outgoingTargets_.reset();
+	componentNodes_.reset();
+	connectorNodes_.reset();
+	snapshotComponentNodes_.reset();
+	snapshotConnectorNodes_.reset();
+	clockNodes_.reset();
+	nextGateWords_.reset();
+	nextGateSummaryWords_.reset();
+	currentGateWords_.reset();
+	currentGateSummaryWords_.reset();
+	nextGateActiveSummaryWordIndices_.reset();
+	currentGateActiveSummaryWordIndices_.reset();
+	nextGateStates_.reset();
+	currentGateStates_.reset();
+	connectorQueueEvents_.reset();
+	componentRuntimeStates_.reset();
+	connectorRuntimeStates_.reset();
+	connectorWorkWords_.reset();
+	connectorWorkWordStamps_.reset();
+	connectorActiveWordHierarchy_.reset();
+	connectorActiveWordLevelOffsets_.fill(0);
+	connectorActiveWordLevelCount_ = 0;
+	visibleCellOffsets_.reset();
+	visibleCellIndices_.reset();
+	cellVisibleNodeOffsets_.reset();
+	cellVisibleNodes_.reset();
+	nodeHasVisibleCells_.reset();
+	dirtyNodeStamps_.reset();
+	dirtyNodeInitialStates_.reset();
+	dirtyNodes_.reset();
+	materializedCellStamps_.reset();
+	visibleStates_.reset();
+	reportedVisibleStates_.reset();
+	changedCellStamps_.reset();
+	changedCells_.reset();
+}
+
+bool SimulationCore::planRuntimeBuffers() {
+	const auto plan = [&](const auto &buffer) {
+		return buffer.plan(runtimeArena_);
+	};
+	return plan(cellToComponent_) &&
+			plan(nodeStates_) &&
+			plan(clockPhases_) &&
+			plan(nodeKinds_) &&
+			plan(nodeClockHoldTicks_) &&
+			plan(nodeLatchInitialStates_) &&
+			plan(nodeEvaluationPolicies_) &&
+			plan(componentInputCounts_) &&
+			plan(outgoingOffsets_) &&
+			plan(outgoingComponentEnds_) &&
+			plan(outgoingTargets_) &&
+			plan(componentNodes_) &&
+			plan(connectorNodes_) &&
+			plan(snapshotComponentNodes_) &&
+			plan(snapshotConnectorNodes_) &&
+			plan(clockNodes_) &&
+			plan(nextGateWords_) &&
+			plan(nextGateSummaryWords_) &&
+			plan(currentGateWords_) &&
+			plan(currentGateSummaryWords_) &&
+			plan(nextGateActiveSummaryWordIndices_) &&
+			plan(currentGateActiveSummaryWordIndices_) &&
+			plan(nextGateStates_) &&
+			plan(currentGateStates_) &&
+			connectorQueueEvents_.plan(runtimeArena_) &&
+			plan(componentRuntimeStates_) &&
+			plan(connectorRuntimeStates_) &&
+			plan(connectorWorkWords_) &&
+			plan(connectorWorkWordStamps_) &&
+			plan(connectorActiveWordHierarchy_) &&
+			plan(visibleCellOffsets_) &&
+			plan(visibleCellIndices_) &&
+			plan(cellVisibleNodeOffsets_) &&
+			plan(cellVisibleNodes_) &&
+			plan(nodeHasVisibleCells_) &&
+			plan(dirtyNodeStamps_) &&
+			plan(dirtyNodeInitialStates_) &&
+			plan(dirtyNodes_) &&
+			plan(materializedCellStamps_) &&
+			plan(visibleStates_) &&
+			plan(reportedVisibleStates_) &&
+			plan(changedCellStamps_) &&
+			plan(changedCells_);
+}
+
+bool SimulationCore::commitRuntimeBuffers() {
+	runtimeArena_.beginLayout();
+	if (!planRuntimeBuffers() || !runtimeArena_.allocatePlanned()) {
+		return false;
+	}
+	const auto commit = [&](auto &buffer) {
+		return buffer.commit(runtimeArena_);
+	};
+	return commit(cellToComponent_) &&
+			commit(nodeStates_) &&
+			commit(clockPhases_) &&
+			commit(nodeKinds_) &&
+			commit(nodeClockHoldTicks_) &&
+			commit(nodeLatchInitialStates_) &&
+			commit(nodeEvaluationPolicies_) &&
+			commit(componentInputCounts_) &&
+			commit(outgoingOffsets_) &&
+			commit(outgoingComponentEnds_) &&
+			commit(outgoingTargets_) &&
+			commit(componentNodes_) &&
+			commit(connectorNodes_) &&
+			commit(snapshotComponentNodes_) &&
+			commit(snapshotConnectorNodes_) &&
+			commit(clockNodes_) &&
+			commit(nextGateWords_) &&
+			commit(nextGateSummaryWords_) &&
+			commit(currentGateWords_) &&
+			commit(currentGateSummaryWords_) &&
+			commit(nextGateActiveSummaryWordIndices_) &&
+			commit(currentGateActiveSummaryWordIndices_) &&
+			commit(nextGateStates_) &&
+			commit(currentGateStates_) &&
+			connectorQueueEvents_.commit(runtimeArena_) &&
+			commit(componentRuntimeStates_) &&
+			commit(connectorRuntimeStates_) &&
+			commit(connectorWorkWords_) &&
+			commit(connectorWorkWordStamps_) &&
+			commit(connectorActiveWordHierarchy_) &&
+			commit(visibleCellOffsets_) &&
+			commit(visibleCellIndices_) &&
+			commit(cellVisibleNodeOffsets_) &&
+			commit(cellVisibleNodes_) &&
+			commit(nodeHasVisibleCells_) &&
+			commit(dirtyNodeStamps_) &&
+			commit(dirtyNodeInitialStates_) &&
+			commit(dirtyNodes_) &&
+			commit(materializedCellStamps_) &&
+			commit(visibleStates_) &&
+			commit(reportedVisibleStates_) &&
+			commit(changedCellStamps_) &&
+			commit(changedCells_) &&
+			validateRuntimeArenaLayout();
+}
+
 void SimulationCore::clear() {
+	resetRuntimeBuffers();
+	runtimeArena_.reset();
 	width_ = 0;
 	height_ = 0;
 	compiled_ = false;
@@ -324,65 +485,21 @@ void SimulationCore::clear() {
 	components_.clear();
 	readBindings_.clear();
 	writeBindings_.clear();
-	cellToComponent_.clear();
 	cellNetwork_.clear();
 	meshNetworksByCell_.clear();
 	crossNetworksByCell_.clear();
 	readBindingByCell_.clear();
 	writeBindingByCell_.clear();
-	nodeStates_.clear();
 	networkStates_.clear();
-	clockPhases_.clear();
 	nodeIsComponent_.clear();
-	nodeKinds_.clear();
-	nodeClockHoldTicks_.clear();
-	nodeLatchInitialStates_.clear();
-	nodeEvaluationPolicies_.clear();
-	componentInputCounts_.clear();
-	outgoingOffsets_.clear();
-	outgoingComponentEnds_.clear();
-	outgoingTargets_.clear();
 	incomingOffsets_.clear();
 	incomingSources_.clear();
-	componentNodes_.clear();
-	connectorNodes_.clear();
-	snapshotComponentNodes_.clear();
-	snapshotConnectorNodes_.clear();
-	clockNodes_.clear();
-	nextGateWords_.clear();
-	nextGateSummaryWords_.clear();
-	currentGateWords_.clear();
-	currentGateSummaryWords_.clear();
-	nextGateActiveSummaryWordIndices_.clear();
-	currentGateActiveSummaryWordIndices_.clear();
-	nextGateStates_.clear();
-	currentGateStates_.clear();
-	connectorQueueEvents_.clear();
-	componentRuntimeStates_.clear();
-	connectorRuntimeStates_.clear();
 	pendingComponentHeads_.fill(-1);
 	pendingComponentTails_.fill(-1);
-	connectorWorkWords_.clear();
-	connectorWorkWordStamps_.clear();
-	connectorActiveWordHierarchy_.clear();
-	connectorActiveWordLevelOffsets_.clear();
 	propagationStamp_ = 1;
 	suppressLatchInputEdges_ = false;
-	visibleCellOffsets_.clear();
-	visibleCellIndices_.clear();
-	cellVisibleNodeOffsets_.clear();
-	cellVisibleNodes_.clear();
-	nodeHasVisibleCells_.clear();
-	dirtyNodeStamps_.clear();
-	dirtyNodeInitialStates_.clear();
-	dirtyNodes_.clear();
 	dirtyNodeStamp_ = 1;
-	materializedCellStamps_.clear();
 	materializedCellStamp_ = 1;
-	visibleStates_.clear();
-	reportedVisibleStates_.clear();
-	changedCellStamps_.clear();
-	changedCells_.clear();
 	changeStamp_ = 1;
 }
 
@@ -758,6 +875,17 @@ bool SimulationCore::compile(const CompileInput &input, CompileError &error) {
 
 	buildExecutionGraph();
 	topologySignature_ = makeTopologySignature();
+	if (!commitRuntimeBuffers()) {
+		return fail(-1, "runtime_arena_allocation_failed");
+	}
+	const auto releaseCompileVector = [](auto &values) {
+		values.clear();
+		values.shrink_to_fit();
+	};
+	releaseCompileVector(kinds_);
+	releaseCompileVector(initialStates_);
+	releaseCompileVector(clockHoldTicks_);
+	releaseCompileVector(meshIds_);
 	resetInternal();
 	materializeVisibleStates();
 	reportedVisibleStates_ = visibleStates_;
@@ -1198,7 +1326,7 @@ void SimulationCore::buildExecutionGraph() {
 		visibleCellOffsets_[node] += visibleCellOffsets_[node - 1U];
 	}
 	visibleCellIndices_.resize(visibleCellOffsets_.back());
-	std::vector<size_t> nextVisibleCellOffsets = visibleCellOffsets_;
+	std::vector<size_t> nextVisibleCellOffsets(visibleCellOffsets_.begin(), visibleCellOffsets_.end());
 	for (int32_t cell = 0; cell < static_cast<int32_t>(kinds_.size()); ++cell) {
 		for (size_t offset = cellVisibleNodeOffsets_[cell]; offset < cellVisibleNodeOffsets_[static_cast<size_t>(cell) + 1U]; ++offset) {
 			const int32_t node = cellVisibleNodes_[offset];
@@ -1243,12 +1371,14 @@ void SimulationCore::buildExecutionGraph() {
 
 void SimulationCore::initializeConnectorWorkWordHierarchy(size_t workWordCount) {
 	connectorActiveWordHierarchy_.clear();
-	connectorActiveWordLevelOffsets_.clear();
+	connectorActiveWordLevelOffsets_.fill(0);
+	connectorActiveWordLevelCount_ = 0;
 	while (workWordCount != 0) {
-		connectorActiveWordLevelOffsets_.push_back(connectorActiveWordHierarchy_.size());
+		assert(connectorActiveWordLevelCount_ < ConnectorActiveWordMaxLevels);
+		connectorActiveWordLevelOffsets_[connectorActiveWordLevelCount_++] = connectorActiveWordHierarchy_.size();
 		const size_t levelWordCount = (workWordCount + 63U) / 64U;
-		connectorActiveWordHierarchy_.insert(
-				connectorActiveWordHierarchy_.end(), levelWordCount, uint64_t{0});
+		const size_t levelBegin = connectorActiveWordHierarchy_.size();
+		connectorActiveWordHierarchy_.resize(levelBegin + levelWordCount, uint64_t{0});
 		if (levelWordCount == 1U) {
 			break;
 		}
@@ -1310,7 +1440,7 @@ void SimulationCore::updateVisibleCell(int32_t cell) const {
 	if (changedCellStamps_[cell] != changeStamp_) {
 		changedCellStamps_[cell] = changeStamp_;
 		assert(changedCells_.size() < changedCells_.capacity());
-		changedCells_.push_back(cell);
+		changedCells_.pushBackRuntime(cell);
 	}
 }
 
@@ -1319,7 +1449,7 @@ void SimulationCore::markVisibleNodeDirty(int32_t node, uint8_t initialState, bo
 		dirtyNodeStamps_[node] = dirtyNodeStamp_;
 		dirtyNodeInitialStates_[node] = forceMaterialization ? ForcedVisibleNodeInitialState : initialState;
 		assert(dirtyNodes_.size() < dirtyNodes_.capacity());
-		dirtyNodes_.push_back(node);
+		dirtyNodes_.pushBackRuntime(node);
 		return;
 	}
 	if (forceMaterialization) {
@@ -1808,7 +1938,7 @@ bool SimulationCore::toggleLatch(int32_t cellIndex, std::string &errorReason) {
 		errorReason = "simulation_not_compiled";
 		return false;
 	}
-	if (cellIndex < 0 || cellIndex >= static_cast<int32_t>(kinds_.size())) {
+	if (cellIndex < 0 || cellIndex >= static_cast<int32_t>(cellToComponent_.size())) {
 		errorReason = "cell_out_of_bounds";
 		return false;
 	}
@@ -2104,6 +2234,75 @@ bool SimulationCore::isGraphLocalityOrderingApplied() const {
 
 int64_t SimulationCore::getGraphLocalityScore() const {
 	return graphLocalityScore_;
+}
+
+RuntimeArenaDebugInfo SimulationCore::getRuntimeArenaDebugInfo() const {
+	return runtimeArena_.getDebugInfo();
+}
+
+bool SimulationCore::validateRuntimeArenaLayout() const {
+	if (!runtimeArena_.isValid() || connectorActiveWordLevelCount_ > ConnectorActiveWordMaxLevels) {
+		return false;
+	}
+	if (connectorActiveWordLevelCount_ != 0 && connectorActiveWordHierarchy_.empty()) {
+		return false;
+	}
+	for (size_t level = 0; level < connectorActiveWordLevelCount_; ++level) {
+		if (connectorActiveWordLevelOffsets_[level] >= connectorActiveWordHierarchy_.size() ||
+				(level != 0 && connectorActiveWordLevelOffsets_[level] <= connectorActiveWordLevelOffsets_[level - 1U])) {
+			return false;
+		}
+	}
+	const auto isRuntimeSlice = [&](const auto &buffer) {
+		return buffer.isCommitted() &&
+				buffer.isInArena(runtimeArena_) &&
+				buffer.isAligned(RuntimeArena::CacheLineAlignment);
+	};
+	return isRuntimeSlice(cellToComponent_) &&
+			isRuntimeSlice(nodeStates_) &&
+			isRuntimeSlice(clockPhases_) &&
+			isRuntimeSlice(nodeKinds_) &&
+			isRuntimeSlice(nodeClockHoldTicks_) &&
+			isRuntimeSlice(nodeLatchInitialStates_) &&
+			isRuntimeSlice(nodeEvaluationPolicies_) &&
+			isRuntimeSlice(componentInputCounts_) &&
+			isRuntimeSlice(outgoingOffsets_) &&
+			isRuntimeSlice(outgoingComponentEnds_) &&
+			isRuntimeSlice(outgoingTargets_) &&
+			isRuntimeSlice(componentNodes_) &&
+			isRuntimeSlice(connectorNodes_) &&
+			isRuntimeSlice(snapshotComponentNodes_) &&
+			isRuntimeSlice(snapshotConnectorNodes_) &&
+			isRuntimeSlice(clockNodes_) &&
+			isRuntimeSlice(nextGateWords_) &&
+			isRuntimeSlice(nextGateSummaryWords_) &&
+			isRuntimeSlice(currentGateWords_) &&
+			isRuntimeSlice(currentGateSummaryWords_) &&
+			isRuntimeSlice(nextGateActiveSummaryWordIndices_) &&
+			isRuntimeSlice(currentGateActiveSummaryWordIndices_) &&
+			isRuntimeSlice(nextGateStates_) &&
+			isRuntimeSlice(currentGateStates_) &&
+			connectorQueueEvents_.isCommitted() &&
+			connectorQueueEvents_.isInArena(runtimeArena_) &&
+			connectorQueueEvents_.isCacheLineAligned() &&
+			isRuntimeSlice(componentRuntimeStates_) &&
+			isRuntimeSlice(connectorRuntimeStates_) &&
+			isRuntimeSlice(connectorWorkWords_) &&
+			isRuntimeSlice(connectorWorkWordStamps_) &&
+			isRuntimeSlice(connectorActiveWordHierarchy_) &&
+			isRuntimeSlice(visibleCellOffsets_) &&
+			isRuntimeSlice(visibleCellIndices_) &&
+			isRuntimeSlice(cellVisibleNodeOffsets_) &&
+			isRuntimeSlice(cellVisibleNodes_) &&
+			isRuntimeSlice(nodeHasVisibleCells_) &&
+			isRuntimeSlice(dirtyNodeStamps_) &&
+			isRuntimeSlice(dirtyNodeInitialStates_) &&
+			isRuntimeSlice(dirtyNodes_) &&
+			isRuntimeSlice(materializedCellStamps_) &&
+			isRuntimeSlice(visibleStates_) &&
+			isRuntimeSlice(reportedVisibleStates_) &&
+			isRuntimeSlice(changedCellStamps_) &&
+			isRuntimeSlice(changedCells_);
 }
 
 } // namespace ocb

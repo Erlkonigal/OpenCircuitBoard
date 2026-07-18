@@ -5,9 +5,12 @@
 #include <cassert>
 #include <cstddef>
 #include <cstdint>
+#include <limits>
 #include <string>
 #include <type_traits>
 #include <vector>
+
+#include "RuntimeArena.hpp"
 
 #if defined(_MSC_VER)
 #include <intrin.h>
@@ -86,6 +89,8 @@ public:
 	bool isCompiled() const;
 	bool isGraphLocalityOrderingApplied() const;
 	int64_t getGraphLocalityScore() const;
+	RuntimeArenaDebugInfo getRuntimeArenaDebugInfo() const;
+	bool validateRuntimeArenaLayout() const;
 
 private:
 	enum class EvaluationMode : uint8_t {
@@ -102,6 +107,7 @@ private:
 	static constexpr size_t SignalColorCount = 6U;
 	static constexpr size_t CrossChannelCount = SignalColorCount * 2U;
 	static constexpr size_t GateFrontierSparseClearDivisor = 4U;
+	static constexpr size_t ConnectorActiveWordMaxLevels = (std::numeric_limits<size_t>::digits + 5U) / 6U;
 
 	struct Component {
 		ToolKind kind = ToolKind::Empty;
@@ -112,18 +118,16 @@ private:
 
 	struct ConnectorEventQueue {
 		void clear() {
-			size_ = 0;
+			storage_.clearRuntime();
 		}
 
 		void prepare(size_t capacity) {
-			if (storage_.size() < capacity) {
-				storage_.resize(capacity);
-			}
-			size_ = 0;
+			storage_.reserve(capacity);
+			storage_.clear();
 		}
 
 		size_t size() const {
-			return size_;
+			return storage_.size();
 		}
 
 		int32_t operator[](size_t index) const {
@@ -131,14 +135,35 @@ private:
 		}
 
 		void push_back(int32_t event) {
-			assert(size_ < storage_.size());
-			storage_[size_++] = event;
+			storage_.pushBackRuntime(event);
+		}
+
+		bool plan(RuntimeArena &arena) const {
+			return storage_.plan(arena);
+		}
+
+		bool commit(RuntimeArena &arena) {
+			return storage_.commit(arena);
+		}
+
+		void reset() {
+			storage_.reset();
+		}
+
+		bool isInArena(const RuntimeArena &arena) const {
+			return storage_.isInArena(arena);
+		}
+
+		bool isCommitted() const {
+			return storage_.isCommitted();
+		}
+
+		bool isCacheLineAligned() const {
+			return storage_.isAligned(RuntimeArena::CacheLineAlignment);
 		}
 
 	private:
-		// Retain constructed slots so repeated ticks overwrite the high-water range.
-		std::vector<int32_t> storage_;
-		size_t size_ = 0;
+		PodBuffer<int32_t> storage_;
 	};
 
 	struct ComponentRuntimeState {
@@ -212,12 +237,12 @@ private:
 	void drainConnectorWorkWord(size_t workWordIndex);
 	void initializeConnectorWorkWordHierarchy(size_t workWordCount);
 	bool hasActiveConnectorWorkWords() const {
-		return !connectorActiveWordLevelOffsets_.empty() &&
-				connectorActiveWordHierarchy_[connectorActiveWordLevelOffsets_.back()] != 0;
+		return connectorActiveWordLevelCount_ != 0 &&
+				connectorActiveWordHierarchy_[connectorActiveWordLevelOffsets_[connectorActiveWordLevelCount_ - 1U]] != 0;
 	}
 	void activateConnectorWorkWord(size_t workWordIndex) {
 		size_t index = workWordIndex;
-		for (size_t level = 0; level < connectorActiveWordLevelOffsets_.size(); ++level) {
+		for (size_t level = 0; level < connectorActiveWordLevelCount_; ++level) {
 			const size_t wordIndex = index / 64U;
 			const uint64_t mask = uint64_t{1} << (index % 64U);
 			uint64_t &word = connectorActiveWordHierarchy_[connectorActiveWordLevelOffsets_[level] + wordIndex];
@@ -234,13 +259,13 @@ private:
 	}
 	void deactivateConnectorWorkWord(size_t workWordIndex) {
 		size_t index = workWordIndex;
-		for (size_t level = 0; level < connectorActiveWordLevelOffsets_.size(); ++level) {
+		for (size_t level = 0; level < connectorActiveWordLevelCount_; ++level) {
 			const size_t wordIndex = index / 64U;
 			const uint64_t mask = uint64_t{1} << (index % 64U);
 			uint64_t &word = connectorActiveWordHierarchy_[connectorActiveWordLevelOffsets_[level] + wordIndex];
 			assert((word & mask) != 0);
 			word &= ~mask;
-			if (word != 0 || level + 1U == connectorActiveWordLevelOffsets_.size()) {
+			if (word != 0 || level + 1U == connectorActiveWordLevelCount_) {
 				return;
 			}
 			index = wordIndex;
@@ -249,7 +274,7 @@ private:
 	size_t firstActiveConnectorWorkWord() const {
 		assert(hasActiveConnectorWorkWords());
 		size_t wordIndex = 0;
-		for (size_t level = connectorActiveWordLevelOffsets_.size(); level > 0; --level) {
+		for (size_t level = connectorActiveWordLevelCount_; level > 0; --level) {
 			const uint64_t word = connectorActiveWordHierarchy_[connectorActiveWordLevelOffsets_[level - 1U] + wordIndex];
 			assert(word != 0);
 			wordIndex = wordIndex * 64U + static_cast<size_t>(countTrailingZeros(word));
@@ -336,7 +361,7 @@ private:
 		uint64_t &summaryWord = nextGateSummaryWords_[summaryWordIndex];
 		if (summaryWord == 0) {
 			assert(nextGateActiveSummaryWordIndices_.size() < nextGateActiveSummaryWordIndices_.capacity());
-			nextGateActiveSummaryWordIndices_.push_back(static_cast<uint32_t>(summaryWordIndex));
+			nextGateActiveSummaryWordIndices_.pushBackRuntime(static_cast<uint32_t>(summaryWordIndex));
 		}
 		summaryWord |= uint64_t{1} << (wordIndex % 64U);
 	}
@@ -357,7 +382,7 @@ private:
 		uint64_t &summaryWord = nextGateSummaryWords_[summaryWordIndex];
 		if (summaryWord == 0) {
 			assert(nextGateActiveSummaryWordIndices_.size() < nextGateActiveSummaryWordIndices_.capacity());
-			nextGateActiveSummaryWordIndices_.push_back(static_cast<uint32_t>(summaryWordIndex));
+			nextGateActiveSummaryWordIndices_.pushBackRuntime(static_cast<uint32_t>(summaryWordIndex));
 		}
 		summaryWord |= uint64_t{1} << (wordIndex % 64U);
 	}
@@ -378,6 +403,9 @@ private:
 	void advanceState();
 	void resetInternal();
 	uint64_t makeTopologySignature() const;
+	bool planRuntimeBuffers();
+	bool commitRuntimeBuffers();
+	void resetRuntimeBuffers();
 	void clear();
 
 	int32_t width_ = 0;
@@ -396,66 +424,68 @@ private:
 	std::vector<Component> components_;
 	std::vector<ReadBinding> readBindings_;
 	std::vector<WriteBinding> writeBindings_;
-	std::vector<int32_t> cellToComponent_;
+	PodBuffer<int32_t> cellToComponent_;
 	std::vector<int32_t> cellNetwork_;
 	std::vector<std::array<int32_t, SignalColorCount>> meshNetworksByCell_;
 	std::vector<std::array<int32_t, CrossChannelCount>> crossNetworksByCell_;
 	std::vector<int32_t> readBindingByCell_;
 	std::vector<int32_t> writeBindingByCell_;
-	std::vector<uint8_t> nodeStates_;
+	PodBuffer<uint8_t> nodeStates_;
 	std::vector<uint8_t> networkStates_;
-	std::vector<int32_t> clockPhases_;
+	PodBuffer<int32_t> clockPhases_;
 	std::vector<uint8_t> nodeIsComponent_;
-	std::vector<ToolKind> nodeKinds_;
-	std::vector<int32_t> nodeClockHoldTicks_;
-	std::vector<uint8_t> nodeLatchInitialStates_;
-	std::vector<uint8_t> nodeEvaluationPolicies_;
-	std::vector<int32_t> componentInputCounts_;
-	std::vector<int32_t> outgoingOffsets_;
-	std::vector<int32_t> outgoingComponentEnds_;
-	std::vector<int32_t> outgoingTargets_;
+	PodBuffer<ToolKind> nodeKinds_;
+	PodBuffer<int32_t> nodeClockHoldTicks_;
+	PodBuffer<uint8_t> nodeLatchInitialStates_;
+	PodBuffer<uint8_t> nodeEvaluationPolicies_;
+	PodBuffer<int32_t> componentInputCounts_;
+	PodBuffer<int32_t> outgoingOffsets_;
+	PodBuffer<int32_t> outgoingComponentEnds_;
+	PodBuffer<int32_t> outgoingTargets_;
 	std::vector<int32_t> incomingOffsets_;
 	std::vector<int32_t> incomingSources_;
-	std::vector<int32_t> componentNodes_;
-	std::vector<int32_t> connectorNodes_;
-	std::vector<int32_t> snapshotComponentNodes_;
-	std::vector<int32_t> snapshotConnectorNodes_;
-	std::vector<int32_t> clockNodes_;
-	std::vector<uint64_t> nextGateWords_;
-	std::vector<uint64_t> nextGateSummaryWords_;
-	std::vector<uint64_t> currentGateWords_;
-	std::vector<uint64_t> currentGateSummaryWords_;
-	std::vector<uint32_t> nextGateActiveSummaryWordIndices_;
-	std::vector<uint32_t> currentGateActiveSummaryWordIndices_;
-	std::vector<uint8_t> nextGateStates_;
-	std::vector<uint8_t> currentGateStates_;
+	PodBuffer<int32_t> componentNodes_;
+	PodBuffer<int32_t> connectorNodes_;
+	PodBuffer<int32_t> snapshotComponentNodes_;
+	PodBuffer<int32_t> snapshotConnectorNodes_;
+	PodBuffer<int32_t> clockNodes_;
+	PodBuffer<uint64_t> nextGateWords_;
+	PodBuffer<uint64_t> nextGateSummaryWords_;
+	PodBuffer<uint64_t> currentGateWords_;
+	PodBuffer<uint64_t> currentGateSummaryWords_;
+	PodBuffer<uint32_t> nextGateActiveSummaryWordIndices_;
+	PodBuffer<uint32_t> currentGateActiveSummaryWordIndices_;
+	PodBuffer<uint8_t> nextGateStates_;
+	PodBuffer<uint8_t> currentGateStates_;
 	ConnectorEventQueue connectorQueueEvents_;
-	std::vector<ComponentRuntimeState> componentRuntimeStates_;
-	std::vector<ConnectorRuntimeState> connectorRuntimeStates_;
+	PodBuffer<ComponentRuntimeState> componentRuntimeStates_;
+	PodBuffer<ConnectorRuntimeState> connectorRuntimeStates_;
 	std::array<int32_t, EvaluationModeCount> pendingComponentHeads_;
 	std::array<int32_t, EvaluationModeCount> pendingComponentTails_;
-	std::vector<uint64_t> connectorWorkWords_;
-	std::vector<uint32_t> connectorWorkWordStamps_;
-	std::vector<uint64_t> connectorActiveWordHierarchy_;
-	std::vector<size_t> connectorActiveWordLevelOffsets_;
+	PodBuffer<uint64_t> connectorWorkWords_;
+	PodBuffer<uint32_t> connectorWorkWordStamps_;
+	PodBuffer<uint64_t> connectorActiveWordHierarchy_;
+	std::array<size_t, ConnectorActiveWordMaxLevels> connectorActiveWordLevelOffsets_{};
+	uint8_t connectorActiveWordLevelCount_ = 0;
 	uint32_t propagationStamp_ = 1;
 	bool suppressLatchInputEdges_ = false;
-	std::vector<size_t> visibleCellOffsets_;
-	std::vector<int32_t> visibleCellIndices_;
-	std::vector<size_t> cellVisibleNodeOffsets_;
-	std::vector<int32_t> cellVisibleNodes_;
-	std::vector<uint8_t> nodeHasVisibleCells_;
-	mutable std::vector<uint32_t> dirtyNodeStamps_;
-	mutable std::vector<uint8_t> dirtyNodeInitialStates_;
-	mutable std::vector<int32_t> dirtyNodes_;
+	PodBuffer<size_t> visibleCellOffsets_;
+	PodBuffer<int32_t> visibleCellIndices_;
+	PodBuffer<size_t> cellVisibleNodeOffsets_;
+	PodBuffer<int32_t> cellVisibleNodes_;
+	PodBuffer<uint8_t> nodeHasVisibleCells_;
+	mutable PodBuffer<uint32_t> dirtyNodeStamps_;
+	mutable PodBuffer<uint8_t> dirtyNodeInitialStates_;
+	mutable PodBuffer<int32_t> dirtyNodes_;
 	mutable uint32_t dirtyNodeStamp_ = 1;
-	mutable std::vector<uint32_t> materializedCellStamps_;
+	mutable PodBuffer<uint32_t> materializedCellStamps_;
 	mutable uint32_t materializedCellStamp_ = 1;
-	mutable std::vector<uint8_t> visibleStates_;
-	std::vector<uint8_t> reportedVisibleStates_;
-	mutable std::vector<uint32_t> changedCellStamps_;
-	mutable std::vector<int32_t> changedCells_;
+	mutable PodBuffer<uint8_t> visibleStates_;
+	PodBuffer<uint8_t> reportedVisibleStates_;
+	mutable PodBuffer<uint32_t> changedCellStamps_;
+	mutable PodBuffer<int32_t> changedCells_;
 	mutable uint32_t changeStamp_ = 1;
+	RuntimeArena runtimeArena_;
 };
 
 } // namespace ocb

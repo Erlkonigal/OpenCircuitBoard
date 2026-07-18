@@ -372,11 +372,13 @@ CoreBenchmarkObservation benchmarkSample(SimulationCore &core, const BenchmarkCo
 	core.advanceTicksSilent(config.warmupTicks);
 	static_cast<void>(core.drainStateChanges());
 
+	CoreBenchmarkObservation result;
+	result.stateChanges.resize(static_cast<size_t>(core.getVisibleCellCount()) * 2U);
 	const auto advanceStart = std::chrono::steady_clock::now();
 	core.advanceTicksSilent(config.measurementTicks);
 	const auto advanceFinish = std::chrono::steady_clock::now();
-	CoreBenchmarkObservation result;
-	result.stateChanges = core.drainStateChanges();
+	const size_t changeCount = core.drainStateChangesTo(result.stateChanges.data(), result.stateChanges.size());
+	result.stateChanges.resize(changeCount);
 	const auto finish = std::chrono::steady_clock::now();
 
 	result.sample.advanceSeconds = std::chrono::duration<double>(advanceFinish - advanceStart).count();
