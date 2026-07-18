@@ -17,7 +17,7 @@
 
 - Use Bash syntax for project commands. Commands must work in both Linux and MSYS2 environments.
 - Before build, test, configure, package, or platform diagnostics, read and follow `.codex/skills/platform-shell/SKILL.md`.
-- Select the execution shell from the requested `targetPlatform`, not from whichever `bash` executable is available. Inspect the Makefile when no target is specified.
+- Select the execution shell from the requested `TARGET_PLATFORM`, not from whichever `bash` executable is available. Inspect the Makefile when no target is specified.
 - Run Linux targets in native Linux Bash. Verify `uname -o` reports `GNU/Linux` before Linux-native work.
 - Run Windows targets only in an MSYS2 UCRT64 Bash environment. Verify `MSYSTEM=UCRT64`, `uname -o` reports `Msys`, and `make`, `g++`, and `scons` resolve from MSYS2 before native Windows work.
 - Use `C:\msys64\msys2_shell.cmd -defterm -here -no-start -ucrt64` to bootstrap UCRT64 when the host runner is not already in that environment. Use cmd.exe only for this bootstrap; execute project commands inside UCRT64 Bash.

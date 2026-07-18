@@ -12,19 +12,17 @@ Initialize the third-party submodule, then select the target platform:
 
 ```bash
 make init
-make frontend targetPlatform=linux
-make backend targetPlatform=linux
-make coreBenchmark targetPlatform=linux
+make build TARGET_PLATFORM=linux
+make core-benchmark TARGET_PLATFORM=linux
 ```
 
 Run Windows targets from an MSYS2 UCRT64 Bash shell:
 
 ```bash
-make frontend targetPlatform=windows
-make backend targetPlatform=windows
-make coreBenchmark targetPlatform=windows
+make build TARGET_PLATFORM=windows
+make core-benchmark TARGET_PLATFORM=windows
 ```
 
-`make build targetPlatform=<linux|windows>` runs both shell targets. `make clean` removes generated build output.
+`make build TARGET_PLATFORM=<linux|windows>` builds the GDExtension. `make clean` removes generated build output.
 
-`coreBenchmark` defaults to a 1024x1024 board with 256 continuously toggling pipelines and reports median TPS against the 100K target. Use `coreBenchmarkArgs="--quick --compare-ordering"` for the legacy-sized graph-ordering comparison.
+`core-benchmark` defaults to a 1024x1024 board with 256 continuously toggling pipelines and reports median TPS against the 100K target. Use `CORE_BENCHMARK_ARGS="--quick --compare-ordering"` for the legacy-sized graph-ordering comparison.
