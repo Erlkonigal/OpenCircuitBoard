@@ -875,11 +875,24 @@ void testGraphOrderingPreservesExternalStatesAndDeltas() {
 		expect(orderedScore == baselineScore, "rejected ordering preserves the compact baseline locality score");
 	}
 	expect(orderedCore.getStates() == baselineCore.getStates(), "reordered compile preserves initial visible states");
-	for (int32_t tick = 0; tick < 12; ++tick) {
+	for (int32_t tick = 0; tick < 3; ++tick) {
 		const std::vector<int32_t> baselineChanges = baselineCore.advanceTick();
 		const std::vector<int32_t> orderedChanges = orderedCore.advanceTick();
 		expect(orderedChanges == baselineChanges, "reordered execution preserves sorted external delta order");
 		expect(orderedCore.getStates() == baselineCore.getStates(), "reordered execution preserves each tick's visible state");
+	}
+	const std::vector<uint8_t> snapshot = baselineCore.captureState();
+	expect(!snapshot.empty(), "baseline final-layout snapshot captures connector and component state");
+	orderedCore.advanceTick();
+	expect(orderedCore.getStates() != baselineCore.getStates(), "ordered core advances away from the captured snapshot state");
+	std::string restoreError;
+	expect(orderedCore.restoreState(snapshot, restoreError), "ordered final-layout restores a baseline snapshot");
+	expect(orderedCore.getStates() == baselineCore.getStates(), "cross-layout snapshot restore preserves visible state");
+	for (int32_t tick = 3; tick < 12; ++tick) {
+		const std::vector<int32_t> baselineChanges = baselineCore.advanceTick();
+		const std::vector<int32_t> orderedChanges = orderedCore.advanceTick();
+		expect(orderedChanges == baselineChanges, "restored reordered execution preserves sorted external delta order");
+		expect(orderedCore.getStates() == baselineCore.getStates(), "restored reordered execution preserves each tick's visible state");
 	}
 }
 

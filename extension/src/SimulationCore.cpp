@@ -128,6 +128,85 @@ GraphLocalityOrder makeTypeStableOrder(const GraphLocalityOrder &gorderOrder, in
 	return result;
 }
 
+// Components retain their type-stable positions while connectors are assigned their DAG rank.
+// This makes every connector runtime node C + rank, where C is the component count.
+GraphLocalityOrder makeConnectorRankOrder(
+		int32_t componentCount,
+		const std::vector<std::vector<int32_t>> &outgoing,
+		const GraphLocalityOrder &typeStableOrder) {
+	const int32_t nodeCount = static_cast<int32_t>(outgoing.size());
+	assert(componentCount >= 0 && componentCount <= nodeCount);
+	assert(typeStableOrder.oldToNew.size() == static_cast<size_t>(nodeCount));
+	assert(typeStableOrder.newToOld.size() == static_cast<size_t>(nodeCount));
+
+	std::vector<std::vector<int32_t>> typeStableOutgoing(nodeCount);
+	for (int32_t source = 0; source < nodeCount; ++source) {
+		const int32_t typeStableSource = typeStableOrder.oldToNew[source];
+		assert(typeStableSource >= 0 && typeStableSource < nodeCount);
+		for (int32_t target : outgoing[source]) {
+			assert(target >= 0 && target < nodeCount);
+			typeStableOutgoing[typeStableSource].push_back(typeStableOrder.oldToNew[target]);
+		}
+	}
+	for (std::vector<int32_t> &targets : typeStableOutgoing) {
+		std::sort(targets.begin(), targets.end());
+		targets.erase(std::unique(targets.begin(), targets.end()), targets.end());
+	}
+
+	std::vector<int32_t> connectorIncomingCounts(nodeCount, 0);
+	for (int32_t source = componentCount; source < nodeCount; ++source) {
+		for (int32_t target : typeStableOutgoing[source]) {
+			if (target >= componentCount) {
+				++connectorIncomingCounts[target];
+			}
+		}
+	}
+	std::vector<int32_t> connectorTopologicalQueue;
+	connectorTopologicalQueue.reserve(static_cast<size_t>(nodeCount - componentCount));
+	for (int32_t node = componentCount; node < nodeCount; ++node) {
+		if (connectorIncomingCounts[node] == 0) {
+			connectorTopologicalQueue.push_back(node);
+		}
+	}
+	for (size_t cursor = 0; cursor < connectorTopologicalQueue.size(); ++cursor) {
+		const int32_t source = connectorTopologicalQueue[cursor];
+		for (int32_t target : typeStableOutgoing[source]) {
+			if (target >= componentCount && --connectorIncomingCounts[target] == 0) {
+				connectorTopologicalQueue.push_back(target);
+			}
+		}
+	}
+	assert(connectorTopologicalQueue.size() == static_cast<size_t>(nodeCount - componentCount));
+
+	GraphLocalityOrder result;
+	result.newToOld.assign(nodeCount, -1);
+	result.oldToNew.assign(nodeCount, -1);
+	for (int32_t finalNode = 0; finalNode < componentCount; ++finalNode) {
+		const int32_t originalNode = typeStableOrder.newToOld[finalNode];
+		assert(originalNode >= 0 && originalNode < componentCount);
+		result.newToOld[finalNode] = originalNode;
+		result.oldToNew[originalNode] = finalNode;
+	}
+	for (int32_t connectorRank = 0; connectorRank < nodeCount - componentCount; ++connectorRank) {
+		const int32_t typeStableNode = connectorTopologicalQueue[static_cast<size_t>(connectorRank)];
+		const int32_t originalNode = typeStableOrder.newToOld[typeStableNode];
+		const int32_t finalNode = componentCount + connectorRank;
+		assert(originalNode >= componentCount && originalNode < nodeCount);
+		result.newToOld[finalNode] = originalNode;
+		result.oldToNew[originalNode] = finalNode;
+	}
+#ifndef NDEBUG
+	for (int32_t source = componentCount; source < nodeCount; ++source) {
+		for (int32_t target : outgoing[source]) {
+			if (target >= componentCount) {
+				assert(result.oldToNew[source] < result.oldToNew[target]);
+			}
+		}
+	}
+#endif
+	return result;
+}
+
 void hashInt(uint64_t &hash, int32_t value) {
 	const uint32_t unsignedValue = static_cast<uint32_t>(value);
 	for (int32_t shift = 0; shift < 32; shift += 8) {
@@ -331,7 +410,6 @@ void SimulationCore::resetRuntimeBuffers() {
 	outgoingComponentEnds_.reset();
 	outgoingTargets_.reset();
 	componentNodes_.reset();
-	connectorNodes_.reset();
 	snapshotComponentNodes_.reset();
 	snapshotConnectorNodes_.reset();
 	clockNodes_.reset();
@@ -382,7 +460,6 @@ bool SimulationCore::planRuntimeBuffers() {
 			plan(outgoingComponentEnds_) &&
 			plan(outgoingTargets_) &&
 			plan(componentNodes_) &&
-			plan(connectorNodes_) &&
 			plan(snapshotComponentNodes_) &&
 			plan(snapshotConnectorNodes_) &&
 			plan(clockNodes_) &&
@@ -435,7 +512,6 @@ bool SimulationCore::commitRuntimeBuffers() {
 			commit(outgoingComponentEnds_) &&
 			commit(outgoingTargets_) &&
 			commit(componentNodes_) &&
-			commit(connectorNodes_) &&
 			commit(snapshotComponentNodes_) &&
 			commit(snapshotConnectorNodes_) &&
 			commit(clockNodes_) &&
@@ -1044,11 +1120,17 @@ void SimulationCore::buildExecutionGraph() {
 	std::vector<int32_t> originalIncomingOffsets;
 	std::vector<int32_t> originalIncomingSources;
 	flattenCsr(originalIncoming, originalIncomingOffsets, originalIncomingSources);
-	GraphLocalityOrder order;
-	order.newToOld.resize(originalNodeCount);
-	order.oldToNew.resize(originalNodeCount);
-	std::iota(order.newToOld.begin(), order.newToOld.end(), 0);
-	std::iota(order.oldToNew.begin(), order.oldToNew.end(), 0);
+	GraphLocalityOrder typeStableIdentityOrder;
+	typeStableIdentityOrder.newToOld.resize(originalNodeCount);
+	typeStableIdentityOrder.oldToNew.resize(originalNodeCount);
+	std::iota(typeStableIdentityOrder.newToOld.begin(), typeStableIdentityOrder.newToOld.end(), 0);
+	std::iota(typeStableIdentityOrder.oldToNew.begin(), typeStableIdentityOrder.oldToNew.end(), 0);
+	GraphLocalityOrder finalOrder = makeConnectorRankOrder(
+			originalComponentCount, originalOutgoing, typeStableIdentityOrder);
+	const int64_t identityScore = useGraphLocalityOrdering_ || collectGraphLocalityScore_ ?
+			GraphLocalityOrderer::calculateLocalityScore(
+					originalNodeCount, originalOutgoingOffsets, originalOutgoingTargets, finalOrder.oldToNew) :
+			0;
 	if (useGraphLocalityOrdering_) {
 		const GraphLocalityOrder gorderOrder = GraphLocalityOrderer::order(
 				originalNodeCount,
@@ -1056,36 +1138,37 @@ void SimulationCore::buildExecutionGraph() {
 				originalOutgoingTargets,
 				originalIncomingOffsets,
 				originalIncomingSources);
-		GraphLocalityOrder candidateOrder = makeTypeStableOrder(gorderOrder, originalComponentCount);
-		const int64_t identityScore = GraphLocalityOrderer::calculateLocalityScore(
-				originalNodeCount, originalOutgoingOffsets, originalOutgoingTargets, order.oldToNew);
+		const GraphLocalityOrder candidateTypeStableOrder = makeTypeStableOrder(gorderOrder, originalComponentCount);
+		GraphLocalityOrder candidateFinalOrder = makeConnectorRankOrder(
+				originalComponentCount, originalOutgoing, candidateTypeStableOrder);
 		const int64_t candidateScore = GraphLocalityOrderer::calculateLocalityScore(
-				originalNodeCount, originalOutgoingOffsets, originalOutgoingTargets, candidateOrder.oldToNew);
+				originalNodeCount, originalOutgoingOffsets, originalOutgoingTargets, candidateFinalOrder.oldToNew);
 		if (candidateScore > identityScore) {
-			order = std::move(candidateOrder);
+			finalOrder = std::move(candidateFinalOrder);
 			graphLocalityOrderingApplied_ = true;
-		}
-		if (collectGraphLocalityScore_) {
-			graphLocalityScore_ = graphLocalityOrderingApplied_ ? candidateScore : identityScore;
+			if (collectGraphLocalityScore_) {
+				graphLocalityScore_ = candidateScore;
+			}
+		} else if (collectGraphLocalityScore_) {
+			graphLocalityScore_ = identityScore;
 		}
 	} else if (collectGraphLocalityScore_) {
-		graphLocalityScore_ = GraphLocalityOrderer::calculateLocalityScore(
-				originalNodeCount, originalOutgoingOffsets, originalOutgoingTargets, order.oldToNew);
+		graphLocalityScore_ = identityScore;
 	}
 
-	std::vector<std::vector<int32_t>> reorderedOutgoing(originalNodeCount);
+	std::vector<std::vector<int32_t>> runtimeOutgoing(originalNodeCount);
 	for (int32_t source = 0; source < originalNodeCount; ++source) {
-		const int32_t reorderedSource = order.oldToNew[source];
+		const int32_t runtimeSource = finalOrder.oldToNew[source];
 		for (int32_t target : originalOutgoing[source]) {
-			reorderedOutgoing[reorderedSource].push_back(order.oldToNew[target]);
+			runtimeOutgoing[runtimeSource].push_back(finalOrder.oldToNew[target]);
 		}
 	}
-	for (std::vector<int32_t> &targets : reorderedOutgoing) {
+	for (std::vector<int32_t> &targets : runtimeOutgoing) {
 		std::sort(targets.begin(), targets.end());
 		targets.erase(std::unique(targets.begin(), targets.end()), targets.end());
 	}
-	flattenCsr(reorderedOutgoing, outgoingOffsets_, outgoingTargets_);
-	// Type-stable ordering places component nodes before connector nodes.
+	flattenCsr(runtimeOutgoing, outgoingOffsets_, outgoingTargets_);
+	// Final layout keeps components before connectors, so each node's component targets form a prefix.
 	outgoingComponentEnds_.resize(originalNodeCount);
 	for (int32_t node = 0; node < originalNodeCount; ++node) {
 		int32_t edge = outgoingOffsets_[node];
@@ -1095,16 +1178,16 @@ void SimulationCore::buildExecutionGraph() {
 		}
 		outgoingComponentEnds_[node] = edge;
 	}
-	std::vector<std::vector<int32_t>> reorderedIncoming(originalNodeCount);
+	std::vector<std::vector<int32_t>> runtimeIncoming(originalNodeCount);
 	for (int32_t source = 0; source < originalNodeCount; ++source) {
-		for (int32_t target : reorderedOutgoing[source]) {
-			reorderedIncoming[target].push_back(source);
+		for (int32_t target : runtimeOutgoing[source]) {
+			runtimeIncoming[target].push_back(source);
 		}
 	}
-	for (std::vector<int32_t> &sources : reorderedIncoming) {
+	for (std::vector<int32_t> &sources : runtimeIncoming) {
 		std::sort(sources.begin(), sources.end());
 	}
-	flattenCsr(reorderedIncoming, incomingOffsets_, incomingSources_);
+	flattenCsr(runtimeIncoming, incomingOffsets_, incomingSources_);
 
 	std::vector<Component> originalComponents = std::move(components_);
 	components_.assign(originalNodeCount, Component());
@@ -1112,12 +1195,13 @@ void SimulationCore::buildExecutionGraph() {
 	nodeKinds_.assign(originalNodeCount, ToolKind::Empty);
 	nodeClockHoldTicks_.assign(originalNodeCount, 0);
 	nodeLatchInitialStates_.assign(originalNodeCount, 0);
-	componentNodes_.clear();
-	connectorNodes_.clear();
+	componentNodes_.resize(originalComponentCount);
+	std::iota(componentNodes_.begin(), componentNodes_.end(), 0);
 	clockNodes_.clear();
 	snapshotComponentNodes_.resize(originalComponentCount);
 	for (int32_t originalComponent = 0; originalComponent < originalComponentCount; ++originalComponent) {
-		const int32_t node = order.oldToNew[originalComponent];
+		const int32_t node = finalOrder.oldToNew[originalComponent];
+		assert(node >= 0 && node < originalComponentCount);
 		components_[node] = std::move(originalComponents[originalComponent]);
 		nodeIsComponent_[node] = 1;
 		nodeKinds_[node] = components_[node].kind;
@@ -1125,51 +1209,11 @@ void SimulationCore::buildExecutionGraph() {
 		nodeLatchInitialStates_[node] = components_[node].latchInitialState;
 		snapshotComponentNodes_[originalComponent] = node;
 	}
-	for (int32_t node = 0; node < originalNodeCount; ++node) {
-		if (nodeIsComponent_[node] == 0) {
-			connectorNodes_.push_back(node);
-			continue;
-		}
-		componentNodes_.push_back(node);
+	for (int32_t node : componentNodes_) {
 		if (nodeKinds_[node] == ToolKind::Clock) {
 			clockNodes_.push_back(node);
 		}
 	}
-	// Connector SCCs are condensed above, so their remaining zero-delay edges form a DAG.
-	std::vector<int32_t> connectorTopologicalRanks(originalNodeCount, -1);
-	std::vector<int32_t> connectorIncomingCounts(originalNodeCount, 0);
-	for (int32_t source : connectorNodes_) {
-		for (int32_t edge = outgoingComponentEnds_[source]; edge < outgoingOffsets_[source + 1]; ++edge) {
-			++connectorIncomingCounts[outgoingTargets_[edge]];
-		}
-	}
-	std::vector<int32_t> connectorTopologicalQueue;
-	connectorTopologicalQueue.reserve(connectorNodes_.size());
-	for (int32_t node : connectorNodes_) {
-		if (connectorIncomingCounts[node] == 0) {
-			connectorTopologicalQueue.push_back(node);
-		}
-	}
-	for (size_t cursor = 0; cursor < connectorTopologicalQueue.size(); ++cursor) {
-		const int32_t source = connectorTopologicalQueue[cursor];
-		connectorTopologicalRanks[source] = static_cast<int32_t>(cursor);
-		for (int32_t edge = outgoingComponentEnds_[source]; edge < outgoingOffsets_[source + 1]; ++edge) {
-			const int32_t target = outgoingTargets_[edge];
-			if (--connectorIncomingCounts[target] == 0) {
-				connectorTopologicalQueue.push_back(target);
-			}
-		}
-	}
-	assert(connectorTopologicalQueue.size() == connectorNodes_.size());
-	connectorNodes_ = std::move(connectorTopologicalQueue);
-#ifndef NDEBUG
-	for (int32_t source : connectorNodes_) {
-		for (int32_t edge = outgoingComponentEnds_[source]; edge < outgoingOffsets_[source + 1]; ++edge) {
-			const int32_t target = outgoingTargets_[edge];
-			assert(connectorTopologicalRanks[source] < connectorTopologicalRanks[target]);
-		}
-	}
-#endif
 	// Runtime propagation only needs the component edge boundary for non-singleton fanout.
 	// Encode a sole component target as -(target + 1) to bypass CSR range setup on the hot path.
 	for (int32_t source = 0; source < originalNodeCount; ++source) {
@@ -1180,26 +1224,27 @@ void SimulationCore::buildExecutionGraph() {
 			outgoingComponentEnds_[source] = -outgoingTargets_[edgeBegin] - 1;
 		}
 	}
-	// Connector targets are only consumed by runtime propagation. Store their topological ranks directly.
+	// Connector targets are only consumed by runtime propagation. Store their final node ranks directly.
 	for (int32_t source = 0; source < originalNodeCount; ++source) {
 		const int32_t componentEdgeEnd = outgoingComponentEnds_[source];
 		if (componentEdgeEnd < 0) {
 			continue;
 		}
 		for (int32_t edge = componentEdgeEnd; edge < outgoingOffsets_[source + 1]; ++edge) {
-			outgoingTargets_[edge] = connectorTopologicalRanks[outgoingTargets_[edge]];
+			assert(outgoingTargets_[edge] >= originalComponentCount);
+			outgoingTargets_[edge] -= originalComponentCount;
 		}
 	}
 	for (int32_t &component : cellToComponent_) {
 		if (component >= 0) {
-			component = order.oldToNew[component];
+			component = finalOrder.oldToNew[component];
 		}
 	}
 	const auto remapOriginalNode = [&](int32_t originalNode) {
 		while (originalNodeAliases[originalNode] != originalNode) {
 			originalNode = originalNodeAliases[originalNode];
 		}
-		return order.oldToNew[originalNode];
+		return finalOrder.oldToNew[originalNode];
 	};
 	const auto remapConnector = [&](int32_t rawConnector) {
 		if (rawConnector < 0) {
@@ -1286,10 +1331,11 @@ void SimulationCore::buildExecutionGraph() {
 	currentGateStates_.assign(originalComponentCount, 0);
 	connectorQueueEvents_.prepare(static_cast<size_t>(originalNodeCount));
 	componentRuntimeStates_.assign(componentNodes_.size(), ComponentRuntimeState{});
-	connectorRuntimeStates_.assign(connectorNodes_.size(), ConnectorRuntimeState{});
+	const size_t connectorCount = static_cast<size_t>(originalNodeCount - originalComponentCount);
+	connectorRuntimeStates_.assign(connectorCount, ConnectorRuntimeState{});
 	pendingComponentHeads_.fill(-1);
 	pendingComponentTails_.fill(-1);
-	const size_t connectorWorkWordCount = (connectorNodes_.size() + 63U) / 64U;
+	const size_t connectorWorkWordCount = (connectorCount + 63U) / 64U;
 	connectorWorkWords_.assign(connectorWorkWordCount, 0);
 	connectorWorkWordStamps_.assign(connectorWorkWordCount, 0);
 	initializeConnectorWorkWordHierarchy(connectorWorkWordCount);
@@ -1714,7 +1760,8 @@ void SimulationCore::drainConnectorWorkWord(size_t workWordIndex) {
 		const int32_t rankOffset = countTrailingZeros(workWord);
 		workWord &= workWord - 1U;
 		const size_t connectorRank = workWordIndex * 64U + static_cast<size_t>(rankOffset);
-		const int32_t source = connectorNodes_[connectorRank];
+		assert(connectorRank < connectorRuntimeStates_.size());
+		const int32_t source = static_cast<int32_t>(componentNodes_.size() + connectorRank);
 		const int32_t stateDelta = connectorRuntimeStates_[connectorRank].delta;
 		if (stateDelta == 0) {
 			continue;
@@ -2265,7 +2312,6 @@ bool SimulationCore::validateRuntimeArenaLayout() const {
 			isRuntimeSlice(outgoingComponentEnds_) &&
 			isRuntimeSlice(outgoingTargets_) &&
 			isRuntimeSlice(componentNodes_) &&
-			isRuntimeSlice(connectorNodes_) &&
 			isRuntimeSlice(snapshotComponentNodes_) &&
 			isRuntimeSlice(snapshotConnectorNodes_) &&
 			isRuntimeSlice(clockNodes_) &&

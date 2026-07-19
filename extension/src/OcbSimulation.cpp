@@ -78,6 +78,16 @@ godot::PackedInt32Array OcbSimulation::makePackedInt32Array(const uint8_t *value
 	return result;
 }
 
+godot::PackedByteArray OcbSimulation::makePackedByteArray(const uint8_t *values, size_t valueCount) {
+	godot::PackedByteArray result;
+	result.resize(static_cast<int64_t>(valueCount));
+	if (valueCount != 0) {
+		assert(values != nullptr);
+		std::memcpy(result.ptrw(), values, valueCount);
+	}
+	return result;
+}
+
 void OcbSimulation::clearRuntimeBuffers() {
 	stateChangeBuffer_.reset();
 	visibleStateBuffer_.reset();
@@ -237,12 +247,7 @@ godot::PackedByteArray OcbSimulation::getStateBytes() {
 	if (visibleStateBuffer_ == nullptr || !core_.copyVisibleStates(visibleStateBuffer_.get(), runtimeCellCount_)) {
 		return {};
 	}
-	godot::PackedByteArray result;
-	result.resize(static_cast<int64_t>(runtimeCellCount_));
-	if (runtimeCellCount_ != 0) {
-		std::memcpy(result.ptrw(), visibleStateBuffer_.get(), runtimeCellCount_);
-	}
-	return result;
+	return makePackedByteArray(visibleStateBuffer_.get(), runtimeCellCount_);
 }
 
 bool OcbSimulation::enqueueAsyncToggle(int32_t cellIndex) {
@@ -515,13 +520,14 @@ godot::Dictionary OcbSimulation::startAsyncInternal(
 godot::Dictionary OcbSimulation::pollAsync() {
 	godot::Dictionary result;
 	result["ok"] = true;
+	result["isFullState"] = false;
 	result["changes"] = godot::PackedInt32Array();
+	result["states"] = godot::PackedByteArray();
 	const uint64_t completedTicks = asyncCompletedTickCount_.load(std::memory_order_acquire);
 	const uint64_t advancedTicks = completedTicks - asyncLastReportedTickCount_;
 	asyncLastReportedTickCount_ = completedTicks;
 	result["advancedTickCount"] = clampToInt64(advancedTicks);
 	result["running"] = asyncRunning_.load(std::memory_order_acquire);
-	result["isFullState"] = false;
 	if (asyncFullFrameStates_ == nullptr || stateChangeBuffer_ == nullptr) {
 		return result;
 	}
@@ -541,14 +547,8 @@ godot::Dictionary OcbSimulation::pollAsync() {
 	if (frame.generation > asyncLastPresentedGeneration_) {
 		if (frame.isFullState) {
 			const uint8_t *states = asyncFullFrameStates_.get() + static_cast<size_t>(frameIndex) * runtimeCellCount_;
-			godot::PackedInt32Array changes;
-			changes.resize(static_cast<int64_t>(runtimeCellCount_ * 2U));
-			int32_t *output = changes.ptrw();
-			for (size_t cell = 0; cell < runtimeCellCount_; ++cell) {
-				output[cell * 2U] = static_cast<int32_t>(cell);
-				output[cell * 2U + 1U] = states[cell];
-			}
-			result["changes"] = changes;
+			// The worker may reuse this frame after acknowledgement, so copy while readerCount is held.
+			result["states"] = makePackedByteArray(states, runtimeCellCount_);
 			result["isFullState"] = true;
 		} else {
 			result["changes"] = makePackedInt32Array(stateChangeBuffer_.get(), frame.changeValueCount);

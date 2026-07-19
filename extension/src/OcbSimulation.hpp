@@ -56,6 +56,7 @@ protected:
 private:
 	static godot::PackedInt32Array makePackedInt32Array(const int32_t *values, size_t valueCount);
 	static godot::PackedInt32Array makePackedInt32Array(const uint8_t *values, size_t valueCount);
+	static godot::PackedByteArray makePackedByteArray(const uint8_t *values, size_t valueCount);
 
 	static constexpr size_t AsyncFrameCount = 3;
 	static constexpr uint32_t AsyncCommandCapacity = 64;

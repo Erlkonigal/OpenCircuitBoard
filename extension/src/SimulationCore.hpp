@@ -445,7 +445,6 @@ private:
 	std::vector<int32_t> incomingOffsets_;
 	std::vector<int32_t> incomingSources_;
 	PodBuffer<int32_t> componentNodes_;
-	PodBuffer<int32_t> connectorNodes_;
 	PodBuffer<int32_t> snapshotComponentNodes_;
 	PodBuffer<int32_t> snapshotConnectorNodes_;
 	PodBuffer<int32_t> clockNodes_;

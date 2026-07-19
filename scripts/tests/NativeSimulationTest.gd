@@ -105,6 +105,16 @@ func runNativeSimulationTest() -> void:
 		push_error("OcbSimulationAsyncInvalidBudgetAccepted")
 		quit(1)
 		return
+	var idleAsyncPoll: Variant = simulation.call("pollAsync")
+	if not (idleAsyncPoll is Dictionary):
+		push_error("OcbSimulationIdleAsyncPollInvalid")
+		quit(1)
+		return
+	var idleAsyncPollResult := idleAsyncPoll as Dictionary
+	if not bool(idleAsyncPollResult.get("ok", false)) or bool(idleAsyncPollResult.get("isFullState", true)) or not (idleAsyncPollResult.get("changes", null) is PackedInt32Array) or not (idleAsyncPollResult.get("states", null) is PackedByteArray) or not (idleAsyncPollResult.get("changes", PackedInt32Array()) as PackedInt32Array).is_empty() or not (idleAsyncPollResult.get("states", PackedByteArray()) as PackedByteArray).is_empty():
+		push_error("OcbSimulationIdleAsyncPollPayloadInvalid")
+		quit(1)
+		return
 	var asyncStart: Variant = simulation.call("startAsync", 64, 1_000)
 	if not (asyncStart is Dictionary) or not bool((asyncStart as Dictionary).get("ok", false)):
 		push_error("OcbSimulationAsyncStartInvalid")
@@ -112,7 +122,6 @@ func runNativeSimulationTest() -> void:
 		return
 	var asyncPollResult: Dictionary = {}
 	var receivedAsyncTick := false
-	var receivedAsyncChanges := false
 	var receivedAsyncFullState := false
 	for _attempt in 20:
 		await create_timer(0.01).timeout
@@ -122,19 +131,24 @@ func runNativeSimulationTest() -> void:
 		asyncPollResult = asyncPoll as Dictionary
 		if not bool(asyncPollResult.get("ok", false)) or not bool(asyncPollResult.get("running", false)):
 			continue
-		if int(asyncPollResult.get("advancedTickCount", 0)) <= 0 or not (asyncPollResult.get("changes", null) is PackedInt32Array):
+		if int(asyncPollResult.get("advancedTickCount", 0)) <= 0 or not (asyncPollResult.get("isFullState", null) is bool) or not (asyncPollResult.get("changes", null) is PackedInt32Array) or not (asyncPollResult.get("states", null) is PackedByteArray):
 			continue
 		receivedAsyncTick = true
-		if not (asyncPollResult.get("changes", PackedInt32Array()) as PackedInt32Array).is_empty():
-			receivedAsyncChanges = true
-			receivedAsyncFullState = bool(asyncPollResult.get("isFullState", false))
+		var asyncChanges := asyncPollResult.get("changes", PackedInt32Array()) as PackedInt32Array
+		var asyncStates := asyncPollResult.get("states", PackedByteArray()) as PackedByteArray
+		if bool(asyncPollResult.get("isFullState", false)):
+			if not asyncChanges.is_empty() or asyncStates.size() != kinds.size():
+				push_error("OcbSimulationAsyncFullStatePayloadInvalid")
+				quit(1)
+				return
+			receivedAsyncFullState = true
 			break
+		if not asyncStates.is_empty():
+			push_error("OcbSimulationAsyncDeltaPayloadInvalid")
+			quit(1)
+			return
 	if not receivedAsyncTick:
 		push_error("OcbSimulationAsyncPollValuesInvalid")
-		quit(1)
-		return
-	if not receivedAsyncChanges:
-		push_error("OcbSimulationAsyncDeltaMissing")
 		quit(1)
 		return
 	if not receivedAsyncFullState:
@@ -161,6 +175,72 @@ func runNativeSimulationTest() -> void:
 			push_error("OcbSimulationAsyncStateBytesMismatch")
 			quit(1)
 			return
+	var sparseKinds := PackedInt32Array()
+	var sparseInitialStates := PackedInt32Array()
+	var sparseHolds := PackedInt32Array()
+	var sparseMeshIds := PackedInt32Array()
+	sparseKinds.resize(64)
+	sparseInitialStates.resize(64)
+	sparseHolds.resize(64)
+	sparseMeshIds.resize(64)
+	sparseKinds[0] = 25
+	var sparseCompileResult: Dictionary = simulation.call(
+		"compileGrid",
+		sparseKinds,
+		sparseInitialStates,
+		sparseHolds,
+		sparseMeshIds,
+		64,
+		1
+	)
+	if not bool(sparseCompileResult.get("ok", false)):
+		push_error("OcbSimulationSparseCompileFailed")
+		quit(1)
+		return
+	var sparseAsyncStart: Variant = simulation.call("startAsync", 1, 1_000)
+	if not (sparseAsyncStart is Dictionary) or not bool((sparseAsyncStart as Dictionary).get("ok", false)):
+		push_error("OcbSimulationSparseAsyncStartInvalid")
+		quit(1)
+		return
+	var sparseToggle: Variant = simulation.call("toggleLatch", 0)
+	if not (sparseToggle is Dictionary) or not bool((sparseToggle as Dictionary).get("ok", false)):
+		push_error("OcbSimulationSparseAsyncToggleInvalid")
+		quit(1)
+		return
+	var receivedAsyncDelta := false
+	for _attempt in 20:
+		await create_timer(0.01).timeout
+		var sparseAsyncPoll: Variant = simulation.call("pollAsync")
+		if not (sparseAsyncPoll is Dictionary):
+			continue
+		var sparseAsyncPollResult := sparseAsyncPoll as Dictionary
+		if not bool(sparseAsyncPollResult.get("ok", false)) or not bool(sparseAsyncPollResult.get("running", false)):
+			continue
+		if not (sparseAsyncPollResult.get("isFullState", null) is bool) or not (sparseAsyncPollResult.get("changes", null) is PackedInt32Array) or not (sparseAsyncPollResult.get("states", null) is PackedByteArray):
+			continue
+		var sparseChanges := sparseAsyncPollResult.get("changes", PackedInt32Array()) as PackedInt32Array
+		var sparseStates := sparseAsyncPollResult.get("states", PackedByteArray()) as PackedByteArray
+		if bool(sparseAsyncPollResult.get("isFullState", false)):
+			push_error("OcbSimulationAsyncDeltaUnexpectedFullState")
+			quit(1)
+			return
+		if sparseChanges.is_empty():
+			continue
+		if not sparseStates.is_empty():
+			push_error("OcbSimulationAsyncDeltaPayloadInvalid")
+			quit(1)
+			return
+		receivedAsyncDelta = true
+		break
+	if not receivedAsyncDelta:
+		push_error("OcbSimulationAsyncDeltaMissing")
+		quit(1)
+		return
+	var sparseAsyncStop: Variant = simulation.call("stopAsync")
+	if not (sparseAsyncStop is Dictionary) or not bool((sparseAsyncStop as Dictionary).get("ok", false)):
+		push_error("OcbSimulationSparseAsyncStopInvalid")
+		quit(1)
+		return
 	var budgetedAsyncStart: Variant = simulation.call("startAsyncWithBudget", 64, 1_000, 200)
 	if not (budgetedAsyncStart is Dictionary) or not bool((budgetedAsyncStart as Dictionary).get("ok", false)):
 		push_error("OcbSimulationAsyncBudgetStartInvalid")

@@ -1111,7 +1111,10 @@ func updateSimulation(delta: float) -> void:
 			IsAsyncSimulationRunning = false
 			failActiveSimulation({"ok": false, "errorReason": "SimulationAsyncStopped"})
 			return
-		applySimulationStateChanges(fullSpeedResult.get("changes", PackedInt32Array()) as PackedInt32Array)
+		if bool(fullSpeedResult.get("isFullState", false)):
+			applySimulationStates(fullSpeedResult.get("states", PackedByteArray()))
+		else:
+			applySimulationStateChanges(fullSpeedResult.get("changes", PackedInt32Array()) as PackedInt32Array)
 		var fullSpeedAdvancedTickCount := int(fullSpeedResult.get("advancedTickCount", 0))
 		if fullSpeedAdvancedTickCount > 0 and recordSimulationThroughput(fullSpeedAdvancedTickCount):
 			updateLoopFrequencyMaximum(SimulationTicksPerSecond)

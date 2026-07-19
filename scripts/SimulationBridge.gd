@@ -261,14 +261,24 @@ func pollAsync() -> Dictionary:
 		return makeFailure(-1, -1, String(result.get("errorReason", "OcbSimulationAsyncPollFailed")))
 	var advancedTickCountVariant: Variant = result.get("advancedTickCount", null)
 	var runningVariant: Variant = result.get("running", null)
+	var isFullStateVariant: Variant = result.get("isFullState", null)
 	var changesVariant: Variant = result.get("changes", null)
-	if not (advancedTickCountVariant is int) or not (runningVariant is bool) or not (changesVariant is PackedInt32Array):
+	var statesVariant: Variant = result.get("states", null)
+	if not (advancedTickCountVariant is int) or not (runningVariant is bool) or not (isFullStateVariant is bool) or not (changesVariant is PackedInt32Array) or not (statesVariant is PackedByteArray):
 		return makeFailure(-1, -1, "OcbSimulationAsyncPollValuesInvalid")
+	var isFullState := bool(isFullStateVariant)
+	var changes := changesVariant as PackedInt32Array
+	var states := statesVariant as PackedByteArray
+	var expectedStateCount := GridWidth * GridHeight
+	if (isFullState and (not changes.is_empty() or states.size() != expectedStateCount)) or (not isFullState and not states.is_empty()):
+		return makeFailure(-1, -1, "OcbSimulationAsyncPollPayloadInvalid")
 	return {
 		"ok": true,
 		"advancedTickCount": maxi(0, int(advancedTickCountVariant)),
 		"running": bool(runningVariant),
-		"changes": changesVariant as PackedInt32Array,
+		"isFullState": isFullState,
+		"changes": changes,
+		"states": states,
 	}
 
 func stopAsync() -> Dictionary:
