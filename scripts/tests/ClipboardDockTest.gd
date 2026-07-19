@@ -54,3 +54,24 @@ func run(context) -> void:
 	clipboardDock = clipboardDockState.get("dock") as Control
 	clipboardDockHost = clipboardDockState.get("dockHost") as Control
 	context.assertClipboardDock(clipboardDockHost, clipboardDock, clipboardHistory, selectedHistoryIndex)
+	var oversizedHistory := FrontendTestFixtures.makeOversizedClipboardHistory()
+	clipboardDock.call("setClipboardHistory", oversizedHistory, 0)
+	await context.waitFrames(1)
+	context.assertClipboardDock(clipboardDockHost, clipboardDock, oversizedHistory, 0)
+	var oversizedHistoryGrid := clipboardDock.find_child("ClipboardHistory", true, false) as GridContainer
+	assert(oversizedHistoryGrid != null)
+	for index in oversizedHistory.size():
+		var item := oversizedHistory[index]
+		var itemButton := oversizedHistoryGrid.get_child(index) as Button
+		var preview := itemButton.find_child("ClipboardPreview", true, false) as Control
+		assert(preview != null)
+		assert(preview.clip_contents)
+		assert(preview.has_method("getPreviewRect"))
+		var previewRect: Rect2 = preview.call("getPreviewRect")
+		var dimensions: Vector2i = item.get("boundsSize", Vector2i.ONE)
+		var availableRect := Rect2(Vector2(4.0, 4.0), preview.size - Vector2(8.0, 8.0))
+		assert(previewRect.position.x >= availableRect.position.x - 0.01)
+		assert(previewRect.position.y >= availableRect.position.y - 0.01)
+		assert(previewRect.end.x <= availableRect.end.x + 0.01)
+		assert(previewRect.end.y <= availableRect.end.y + 0.01)
+		assert(is_equal_approx(previewRect.size.x / previewRect.size.y, float(dimensions.x) / float(dimensions.y)))

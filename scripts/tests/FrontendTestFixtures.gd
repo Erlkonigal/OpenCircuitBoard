@@ -71,3 +71,23 @@ static func setupVisualBoardWithClipboard(board: Node2D, clearExisting := false)
 		"history": clipboard.get("history", []),
 		"selectedIndex": clipboard.get("selectedIndex", -1),
 	}
+
+static func makeOversizedClipboardHistory() -> Array[Dictionary]:
+	return [
+		{
+			"bounds": Rect2i(Vector2i.ZERO, Vector2i(120, 1)),
+			"boundsSize": Vector2i(120, 1),
+			"tiles": [
+				{"offset": Vector2i(0, 0), "toolId": "or"},
+				{"offset": Vector2i(119, 0), "toolId": "xor"},
+			],
+		},
+		{
+			"bounds": Rect2i(Vector2i.ZERO, Vector2i(1, 120)),
+			"boundsSize": Vector2i(1, 120),
+			"tiles": [
+				{"offset": Vector2i(0, 0), "toolId": "traceRed"},
+				{"offset": Vector2i(0, 119), "toolId": "traceBlue"},
+			],
+		},
+	]

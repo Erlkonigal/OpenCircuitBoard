@@ -27,23 +27,33 @@ class ClipboardPreview extends Control:
 		Dimensions = Vector2i(maxi(1, nextDimensions.x), maxi(1, nextDimensions.y))
 		queue_redraw()
 
+	func getPreviewRect() -> Rect2:
+		var availableRect := Rect2(Vector2(4.0, 4.0), size - Vector2(8.0, 8.0))
+		if availableRect.size.x <= 0.0 or availableRect.size.y <= 0.0:
+			return Rect2(size * 0.5, Vector2.ZERO)
+		var cellLength := minf(
+			availableRect.size.x / float(Dimensions.x),
+			availableRect.size.y / float(Dimensions.y)
+		)
+		var previewSize := Vector2(Dimensions) * cellLength
+		return Rect2((size - previewSize) * 0.5, previewSize)
+
 	func _draw() -> void:
 		if PreviewTiles.is_empty():
 			return
-		var availableSize := size - Vector2(8.0, 8.0)
-		var cellLength := minf(availableSize.x / float(Dimensions.x), availableSize.y / float(Dimensions.y))
-		cellLength = maxf(2.0, cellLength)
-		var previewSize := Vector2(Dimensions) * cellLength
-		var previewOrigin := (size - previewSize) * 0.5
+		var previewRect := getPreviewRect()
+		if previewRect.size.x <= 0.0 or previewRect.size.y <= 0.0:
+			return
+		var cellLength := previewRect.size.x / float(Dimensions.x)
 		for tile in PreviewTiles:
 			var offset: Vector2i = tile.get("offset", Vector2i.ZERO)
 			if offset.x < 0 or offset.y < 0 or offset.x >= Dimensions.x or offset.y >= Dimensions.y:
 				continue
-			var tileRect := Rect2(previewOrigin + Vector2(offset) * cellLength, Vector2.ONE * cellLength)
+			var tileRect := Rect2(previewRect.position + Vector2(offset) * cellLength, Vector2.ONE * cellLength)
 			var inset := minf(1.5, cellLength * 0.2)
 			draw_rect(tileRect.grow(-inset), tile.get("color", MutedTextColor), true)
 			draw_rect(tileRect.grow(-inset), Color("0b1119"), false, 1.0)
-		draw_rect(Rect2(previewOrigin, previewSize), SectionBorderColor, false, 1.0)
+		draw_rect(previewRect, SectionBorderColor, false, 1.0)
 
 var ClipboardHistory: Array[Dictionary] = []
 var SelectedClipboardIndex := -1
@@ -218,6 +228,7 @@ func buildHistoryItem(index: int, item: Dictionary) -> Button:
 	preview.custom_minimum_size = Vector2(58, 58)
 	preview.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
 	preview.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	preview.clip_contents = true
 	preview.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	preview.setPreview(tiles, dimensions)
 	itemContent.add_child(preview)
