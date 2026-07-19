@@ -34,6 +34,13 @@ RELEASE_EXPORT_PRESET := $(if $(filter windows,$(TARGET_PLATFORM)),Windows Deskt
 RELEASE_EXPORT_EXECUTABLE := $(RELEASE_EXPORT_ROOT)/OpenCircuitBoard$(if $(filter windows,$(TARGET_PLATFORM)),.exe,.x86_64)
 RELEASE_SOURCE_LIBRARY_PATH := res://build/$(TARGET_PLATFORM)/release/ocbsimulation$(if $(filter windows,$(TARGET_PLATFORM)),.dll,.so)
 RELEASE_EXPORT_LIBRARY_PATH := res://ocbsimulation$(if $(filter windows,$(TARGET_PLATFORM)),.dll,.so)
+PROJECT_EXPORT_INPUTS := $(shell find "$(PROJECT_ROOT)" \
+	-path "$(PROJECT_ROOT)/.codex" -prune -o \
+	-path "$(PROJECT_ROOT)/.git" -prune -o \
+	-path "$(PROJECT_ROOT)/.godot" -prune -o \
+	-path "$(BUILD_ROOT)" -prune -o \
+	-path "$(PROJECT_ROOT)/thirdparty" -prune -o \
+	-type f -print)
 
 # Godot toolchain
 GODOT_VERSION := 4.7
@@ -54,8 +61,8 @@ GODOT_EXECUTABLE_INPUT := $(DOWNLOADED_GODOT_EXECUTABLE)
 endif
 
 
-.PHONY: help init build build-debug build-release export-release core-test core-benchmark board-benchmark native-test frontend-test test run clean \
-	check-platform check-backend-tools check-godot-executable download-godot download-godot-templates force
+.PHONY: help init build build-debug build-release core-test core-benchmark board-benchmark native-test frontend-test test run clean \
+	check-platform check-backend-tools check-godot-executable download-godot download-godot-templates
 
 EXTENSION_BUILD_INPUTS := $(shell find "$(PROJECT_ROOT)/extension" -type f -print)
 EXTENSION_INPUT_DIRECTORIES := $(shell find "$(PROJECT_ROOT)/extension" -type d -print)
@@ -73,7 +80,7 @@ BACKEND_CONFIGURE_INPUTS := \
 	$(BACKEND_BUILD_CONFIGURATION) \
 	$(PROJECT_ROOT)/Makefile \
 	$(PROJECT_ROOT)/extension/CMakeLists.txt \
-	$(PROJECT_ROOT)/extension/OcbSimulation.gdextension.in \
+	$(PROJECT_ROOT)/OcbSimulation.gdextension \
 	$(EXTENSION_INPUT_DIRECTORIES) \
 	$(GODOT_CPP_CONFIGURATION_INPUTS) \
 	$(GODOT_CPP_INPUT_DIRECTORIES)
@@ -151,6 +158,9 @@ $(TARGET_BUILD_ROOT):
 $(BACKEND_BUILD_ROOT): | $(TARGET_BUILD_ROOT)
 	@mkdir -p "$@"
 
+$(RELEASE_EXPORT_ROOT): | $(TARGET_BUILD_ROOT)
+	@mkdir -p "$@"
+
 $(EXTENSION_API): $(GODOT_EXECUTABLE_INPUT) | $(TARGET_BUILD_ROOT) check-godot-executable
 	@cd "$(TARGET_BUILD_ROOT)" && "$(GODOT_EXECUTABLE)" --headless --quiet --dump-extension-api
 	@mv "$(TARGET_BUILD_ROOT)/extension_api.json" "$@"
@@ -158,9 +168,7 @@ $(EXTENSION_API): $(GODOT_EXECUTABLE_INPUT) | $(TARGET_BUILD_ROOT) check-godot-e
 $(GODOT_CPP_PROFILE): $(PROJECT_ROOT)/BuildProfile.json | $(TARGET_BUILD_ROOT)
 	@sed -e 's/enabledClasses/enabled_classes/' -e 's/enabledBuiltinClasses/enabled_builtin_classes/' "$<" > "$@"
 
-force:
-
-$(BACKEND_BUILD_CONFIGURATION): force | $(BACKEND_BUILD_ROOT)
+$(BACKEND_BUILD_CONFIGURATION): | $(BACKEND_BUILD_ROOT)
 	@printf '%s\n' "$(BUILD_TYPE)|$(GODOTCPP_TARGET_FOR_BUILD)" > "$@.tmp"; \
 	if ! cmp -s "$@.tmp" "$@"; then mv "$@.tmp" "$@"; else rm "$@.tmp"; fi
 
@@ -190,16 +198,16 @@ build-debug:
 build-release:
 	@$(MAKE) --no-print-directory build TARGET_PLATFORM="$(TARGET_PLATFORM)" BUILD_TYPE=Release
 
-export-release: download-godot-templates
-	@$(MAKE) --no-print-directory build TARGET_PLATFORM="$(TARGET_PLATFORM)" BUILD_TYPE=Release
-	@mkdir -p "$(RELEASE_EXPORT_ROOT)"
+export-release: $(RELEASE_EXPORT_EXECUTABLE)
+
+$(RELEASE_EXPORT_EXECUTABLE): $(BACKEND_LIBRARY) $(GODOT_EXPORT_TEMPLATE) $(PROJECT_EXPORT_INPUTS) | $(RELEASE_EXPORT_ROOT)
 	@set -e; \
 	manifest="$(PROJECT_ROOT)/OcbSimulation.gdextension"; \
 	backup="$(TARGET_BUILD_ROOT)/OcbSimulation.gdextension.export"; \
 	library="$(PROJECT_ROOT)/ocbsimulation$(if $(filter windows,$(TARGET_PLATFORM)),.dll,.so)"; \
 	libraryBackup="$(TARGET_BUILD_ROOT)/ocbsimulation.export$(if $(filter windows,$(TARGET_PLATFORM)),.dll,.so)"; \
-	cp "$$manifest" "$$backup"; \
-	if [ -f "$$library" ]; then cp "$$library" "$$libraryBackup"; fi; \
+	cp -p "$$manifest" "$$backup"; \
+	if [ -f "$$library" ]; then cp -p "$$library" "$$libraryBackup"; fi; \
 	trap 'mv "$$backup" "$$manifest"; if [ -f "$$libraryBackup" ]; then mv "$$libraryBackup" "$$library"; else rm -f "$$library"; fi' EXIT; \
 	cp "$(BACKEND_LIBRARY)" "$$library"; \
 	sed 's#$(RELEASE_SOURCE_LIBRARY_PATH)#$(RELEASE_EXPORT_LIBRARY_PATH)#' "$$backup" > "$$manifest"; \

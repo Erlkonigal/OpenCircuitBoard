@@ -40,12 +40,6 @@ set_target_properties(ocbsimulation PROPERTIES
 	ARCHIVE_OUTPUT_DIRECTORY "${OCBOUTPUTDIR}"
 )
 
-configure_file(
-	"${CMAKE_CURRENT_SOURCE_DIR}/OcbSimulation.gdextension.in"
-	"${CMAKE_CURRENT_SOURCE_DIR}/../OcbSimulation.gdextension"
-	@ONLY
-)
-
 option(OCB_BUILD_CORE_TESTS "Build the SimulationCore unit tests" ON)
 if(OCB_BUILD_CORE_TESTS)
 	enable_testing()

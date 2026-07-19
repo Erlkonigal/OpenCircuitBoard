@@ -1,25 +1,15 @@
 extends RefCounted
 
-const DockDirectory := "res://scenes/docks"
+const DockScenes := [
+	preload("res://scenes/docks/CircuitEditorDock.tscn"),
+	preload("res://scenes/docks/ClipboardDock.tscn"),
+	preload("res://scenes/docks/EventLogDock.tscn"),
+]
 
 static func discoverDocks() -> Array[Dictionary]:
-	var directory := DirAccess.open(DockDirectory)
-	if directory == null:
-		push_error("DockDirectoryUnavailable")
-		return []
-	var scenePaths: Array[String] = []
-	directory.list_dir_begin()
-	var fileName := directory.get_next()
-	while not fileName.is_empty():
-		if not directory.current_is_dir() and fileName.ends_with(".tscn"):
-			scenePaths.append("%s/%s" % [DockDirectory, fileName])
-		fileName = directory.get_next()
-	directory.list_dir_end()
-	scenePaths.sort()
-
 	var docks: Array[Dictionary] = []
-	for scenePath in scenePaths:
-		var dockScene := load(scenePath) as PackedScene
+	for dockSceneVariant in DockScenes:
+		var dockScene := dockSceneVariant as PackedScene
 		if dockScene == null:
 			continue
 		var dock := dockScene.instantiate()
