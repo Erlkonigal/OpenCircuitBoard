@@ -38,6 +38,7 @@ signal selectionChanged(item: Dictionary)
 signal clockHoldTicksChanged(holdTicks: int)
 signal meshIdChanged(meshId: int)
 signal latchInitialStateChanged(isOn: bool)
+signal selectionSettingsRequested(paletteToolId: String, componentId: String)
 
 @export_group("Board")
 @export var CellSize := 64
@@ -396,7 +397,7 @@ func handleMouseButton(event: InputEventMouseButton) -> void:
 	if event.button_index == MOUSE_BUTTON_RIGHT:
 		if event.pressed:
 			var deleteCoordinates := getGridCoordinates(get_global_mouse_position())
-			if handleRightButtonPress(deleteCoordinates):
+			if handleRightButtonPress(deleteCoordinates, event.ctrl_pressed):
 				get_viewport().set_input_as_handled()
 		elif CurrentInteractionMode == InteractionMode.Deleting:
 			finishStroke()
@@ -461,6 +462,13 @@ func setClockHoldTicks(requestedHoldTicks: int) -> bool:
 	clockHoldTicksChanged.emit(ClockHoldTicks)
 	return true
 
+func getSelectedTileClockHoldTicks() -> int:
+	var selectedCoordinates := getSelectedCoordinatesForTool("clock")
+	return getTileClockHoldTicks(selectedCoordinates[0] as Vector2i) if not selectedCoordinates.is_empty() else ClockHoldTicksMinimum
+
+func setSelectedTileClockHoldTicks(requestedHoldTicks: int) -> bool:
+	return setSelectedTileProperty("clock", "clockHoldTicks", normalizePositiveInteger(requestedHoldTicks, ClockHoldTicksMinimum))
+
 func getClockHoldTicks() -> int:
 	var selectedCoordinates: Variant = getSingleSelectedCoordinatesForTool("clock")
 	if selectedCoordinates is Vector2i:
@@ -489,6 +497,13 @@ func setMeshId(requestedMeshId: int) -> bool:
 	meshIdChanged.emit(MeshId)
 	return true
 
+func getSelectedTileMeshId() -> int:
+	var selectedCoordinates := getSelectedCoordinatesForTool("mesh")
+	return getTileMeshId(selectedCoordinates[0] as Vector2i) if not selectedCoordinates.is_empty() else MeshIdMinimum
+
+func setSelectedTileMeshId(requestedMeshId: int) -> bool:
+	return setSelectedTileProperty("mesh", "meshId", normalizePositiveInteger(requestedMeshId, MeshIdMinimum))
+
 func getMeshId() -> int:
 	var selectedCoordinates: Variant = getSingleSelectedCoordinatesForTool("mesh")
 	if selectedCoordinates is Vector2i:
@@ -515,6 +530,13 @@ func setLatchInitialState(requestedIsOn: bool) -> bool:
 	LatchInitialState = requestedIsOn
 	latchInitialStateChanged.emit(LatchInitialState)
 	return true
+
+func getSelectedTileLatchInitialState() -> bool:
+	var selectedCoordinates := getSelectedCoordinatesForTool("latch")
+	return getTileState(selectedCoordinates[0] as Vector2i) if not selectedCoordinates.is_empty() else false
+
+func setSelectedTileLatchInitialState(requestedIsOn: bool) -> bool:
+	return setSelectedTileProperty("latch", "isOn", requestedIsOn)
 
 func getLatchInitialState() -> bool:
 	var selectedCoordinates: Variant = getSingleSelectedCoordinatesForTool("latch")
@@ -583,7 +605,23 @@ func getCursorInfoAt(coordinates: Vector2i) -> Dictionary:
 		"toolId": toolId,
 		"hoveredInkTitle": hoveredInkTitle,
 		"meshId": meshId,
+		"propertyText": getCursorPropertyText(toolId, coordinates, ink),
 	}
+
+func getCursorPropertyText(toolId: String, coordinates: Vector2i, ink: Dictionary) -> String:
+	var paletteToolId := InkRegistry.getPaletteToolId(ink)
+	if paletteToolId == "bus" or paletteToolId == "trace":
+		return "Color #%s" % String((ink.get("color", Color.WHITE) as Color).to_html(false)).to_upper()
+	match toolId:
+		"mesh":
+			return "Mesh ID %d" % getTileMeshId(coordinates)
+		"latch":
+			return "State %s" % ("On" if getTileState(coordinates) else "Off")
+		"clock":
+			var holdTicks := getTileClockHoldTicks(coordinates)
+			return "Hold %d %s" % [holdTicks, "tick" if holdTicks == 1 else "ticks"]
+		_:
+			return "None"
 
 func getTileState(coordinates: Vector2i) -> bool:
 	return bool(getCanonicalTileValueAt(coordinates).get("isOn", false))
@@ -917,7 +955,9 @@ func handleLeftButtonPress(coordinates: Vector2i, isSelectionModifierPressed: bo
 		beginStroke(coordinates, true)
 	return true
 
-func handleRightButtonPress(coordinates: Vector2i) -> bool:
+func handleRightButtonPress(coordinates: Vector2i, isSettingsModifierPressed := false) -> bool:
+	if isSettingsModifierPressed and requestSelectionSettingsAt(coordinates):
+		return true
 	if not SelectedCells.is_empty():
 		if canStartMoveAt(coordinates):
 			deleteSelection()
@@ -927,6 +967,72 @@ func handleRightButtonPress(coordinates: Vector2i) -> bool:
 		if not isCoordinateValid(coordinates):
 			return false
 		beginStroke(coordinates, false)
+	return true
+
+func requestSelectionSettingsAt(coordinates: Vector2i) -> bool:
+	if not canStartMoveAt(coordinates):
+		return false
+	var context := getSelectionSettingsContext()
+	if context.is_empty():
+		return false
+	selectionSettingsRequested.emit(String(context["paletteToolId"]), String(context["componentId"]))
+	return true
+
+func getSelectionSettingsContext() -> Dictionary:
+	if SelectedCells.is_empty():
+		return {}
+	var paletteToolId := ""
+	var componentId := ""
+	for coordinatesVariant in SelectedCells:
+		var coordinates := coordinatesVariant as Vector2i
+		var ink := InkRegistry.getInk(getToolIdAt(coordinates))
+		var nextPaletteToolId := InkRegistry.getPaletteToolId(ink)
+		var paletteInk := InkRegistry.getInk(nextPaletteToolId)
+		if ink.is_empty() or paletteInk.is_empty() or not (bool(paletteInk.get("isExpandable", false)) or bool(paletteInk.get("isConfigurable", false))):
+			return {}
+		if paletteToolId.is_empty():
+			paletteToolId = nextPaletteToolId
+			componentId = InkRegistry.getComponentId(ink)
+		elif paletteToolId != nextPaletteToolId:
+			return {}
+	if paletteToolId.is_empty():
+		return {}
+	return {
+		"paletteToolId": paletteToolId,
+		"componentId": componentId,
+	}
+
+func setSelectedTilesTool(toolId: String) -> bool:
+	var targetInk := InkRegistry.getInk(toolId)
+	var context := getSelectionSettingsContext()
+	if targetInk.is_empty() or context.is_empty() or InkRegistry.getPaletteToolId(targetInk) != String(context["paletteToolId"]):
+		return false
+	var targetValues: Dictionary[Vector2i, Dictionary] = {}
+	for coordinatesVariant in SelectedCells:
+		var coordinates := coordinatesVariant as Vector2i
+		var currentValue := getTileValueAt(coordinates)
+		targetValues[coordinates] = makeTileValue(toolId, currentValue.get("isOn", null))
+	return applySelectedTileValues(targetValues)
+
+func setSelectedTileProperty(toolId: String, propertyName: String, propertyValue: Variant) -> bool:
+	var selectedCoordinates := getSelectedCoordinatesForTool(toolId)
+	if selectedCoordinates.is_empty():
+		return false
+	var targetValues: Dictionary[Vector2i, Dictionary] = {}
+	for coordinatesVariant in selectedCoordinates:
+		var coordinates := coordinatesVariant as Vector2i
+		var nextValue := getTileValueAt(coordinates)
+		nextValue[propertyName] = propertyValue
+		targetValues[coordinates] = nextValue
+	return applySelectedTileValues(targetValues)
+
+func applySelectedTileValues(targetValues: Dictionary[Vector2i, Dictionary]) -> bool:
+	var changes := makeChangesForTargetValues(targetValues)
+	if changes.is_empty():
+		return false
+	var selectionSnapshot := getSelectionSnapshot()
+	applyChanges(changes, true)
+	pushHistory(changes, selectionSnapshot, selectionSnapshot)
 	return true
 
 func beginStroke(coordinates: Vector2i, shouldPlace: bool) -> void:
@@ -1567,6 +1673,15 @@ func getSingleSelectedCoordinatesForTool(toolId: String) -> Variant:
 		if getToolIdAt(coordinates) == toolId:
 			return coordinates
 	return null
+
+func getSelectedCoordinatesForTool(toolId: String) -> Array[Vector2i]:
+	var selectedCoordinates := getSortedCoordinates(SelectedCells.keys())
+	if selectedCoordinates.is_empty():
+		return []
+	for coordinates in selectedCoordinates:
+		if getToolIdAt(coordinates) != toolId:
+			return []
+	return selectedCoordinates
 
 func normalizePositiveInteger(requestedValue: Variant, fallbackValue: int) -> int:
 	if requestedValue == null:

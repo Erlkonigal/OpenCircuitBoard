@@ -105,6 +105,7 @@ var InkVariantMenuGrid: GridContainer
 var InkVariantMenuDock: Control
 var InkVariantMenuPaletteToolId := ""
 var InkVariantButtons: Dictionary[String, Button] = {}
+var SelectionSettingsMenuKind := ""
 var ClockSettingsMenu: PopupPanel
 var ClockHoldTicksControl: SpinBox
 var ClockHoldTicksSuffix: Label
@@ -166,6 +167,8 @@ func _ready() -> void:
 		Board.connect("meshIdChanged", refreshMeshIdControl)
 	if Board.has_signal("latchInitialStateChanged"):
 		Board.connect("latchInitialStateChanged", refreshLatchInitialStateControls)
+	if Board.has_signal("selectionSettingsRequested"):
+		Board.connect("selectionSettingsRequested", showSelectionSettingsMenu)
 	NewProjectButton.pressed.connect(createNewProject)
 	OpenProjectButton.pressed.connect(showOpenProjectDialog)
 	SaveProjectButton.pressed.connect(saveProject)
@@ -230,14 +233,16 @@ func _process(_delta: float) -> void:
 	if not cursorInfo.is_empty():
 		isValid = bool(cursorInfo.get("isValid", isValid))
 	var hoveredInkTitle := "None"
+	var propertyText := "None"
 	if not cursorInfo.is_empty():
 		hoveredInkTitle = String(cursorInfo.get("hoveredInkTitle", "None"))
+		propertyText = String(cursorInfo.get("propertyText", "None"))
 	elif isValid:
 		var hoveredInk: Dictionary = Board.call("getInkAt", coordinates)
 		hoveredInkTitle = String(hoveredInk.get("title", "None"))
 	for dock in getActiveDocks():
 		if dock.has_method("updateCursorInfo"):
-			dock.call("updateCursorInfo", coordinates, isValid, hoveredInkTitle)
+			dock.call("updateCursorInfo", coordinates, isValid, hoveredInkTitle, propertyText)
 
 func isPointerOverCanvas() -> bool:
 	var pointerPosition := get_viewport().get_mouse_position()
@@ -441,6 +446,7 @@ func buildInkVariantMenu() -> void:
 	InkVariantMenu.popup_hide.connect(func() -> void:
 		InkVariantMenuDock = null
 		InkVariantMenuPaletteToolId = ""
+		clearSelectionSettingsMenu("variant")
 	)
 
 func showInkVariantMenu(anchorButton: Button, paletteToolId: String, dock: Control) -> void:
@@ -449,6 +455,7 @@ func showInkVariantMenu(anchorButton: Button, paletteToolId: String, dock: Contr
 	var variants := InkRegistry.getInkVariants(paletteToolId)
 	if variants.size() < 2:
 		return
+	clearSelectionSettingsMenu()
 	InkVariantMenuDock = dock
 	InkVariantMenuPaletteToolId = paletteToolId
 	populateInkVariantMenu(variants)
@@ -468,6 +475,26 @@ func showInkVariantMenu(anchorButton: Button, paletteToolId: String, dock: Contr
 	popupPosition.y = clampi(popupPosition.y, 0, maxi(0, int(viewportSize.y) - menuSize.y))
 	InkVariantMenu.popup(Rect2i(popupPosition, menuSize))
 
+func showSelectionInkVariantMenu(paletteToolId: String) -> void:
+	if IsSimulating:
+		return
+	var variants := InkRegistry.getInkVariants(paletteToolId)
+	if variants.size() < 2:
+		return
+	hideClockSettingsMenu()
+	hideMeshSettingsMenu()
+	hideLatchSettingsMenu()
+	SelectionSettingsMenuKind = "variant"
+	InkVariantMenuDock = null
+	InkVariantMenuPaletteToolId = paletteToolId
+	populateInkVariantMenu(variants)
+	var menuRows := ceili(float(variants.size()) / float(InkVariantMenuColumns))
+	var menuSize := Vector2i(
+		InkVariantMenuPadding + InkVariantMenuColumns * InkVariantMenuButtonSize.x + (InkVariantMenuColumns - 1) * InkVariantMenuSeparation,
+		InkVariantMenuPadding + menuRows * InkVariantMenuButtonSize.y + (menuRows - 1) * InkVariantMenuSeparation
+	)
+	InkVariantMenu.popup(Rect2i(getPointerMenuPosition(menuSize), menuSize))
+
 func populateInkVariantMenu(variants: Array[Dictionary]) -> void:
 	for child in InkVariantMenuGrid.get_children():
 		child.free()
@@ -484,7 +511,9 @@ func selectInkVariant(ink: Dictionary) -> void:
 	if IsSimulating:
 		hideInkVariantMenu()
 		return
-	if InkVariantMenuDock and InkVariantMenuDock.has_method("selectInk"):
+	if InkVariantMenuDock == null:
+		Board.call("setSelectedTilesTool", InkRegistry.getComponentId(ink))
+	elif InkVariantMenuDock and InkVariantMenuDock.has_method("selectInk"):
 		InkVariantMenuDock.call("selectInk", ink)
 	hideInkVariantMenu()
 
@@ -504,6 +533,19 @@ func showComponentSettingsMenu(anchorButton: Button, componentId: String, dock: 
 			showMeshSettingsMenu(anchorButton, dock)
 		"latch":
 			showLatchSettingsMenu(anchorButton, dock)
+		_:
+			return
+
+func showSelectionSettingsMenu(paletteToolId: String, componentId: String) -> void:
+	match paletteToolId:
+		"bus", "trace":
+			showSelectionInkVariantMenu(paletteToolId)
+		"mesh":
+			showSelectionMeshSettingsMenu()
+		"clock":
+			showSelectionClockSettingsMenu()
+		"latch":
+			showSelectionLatchSettingsMenu()
 		_:
 			return
 
@@ -536,6 +578,7 @@ func buildMeshSettingsMenu() -> void:
 	content.add_child(MeshIdControl)
 	MeshSettingsMenu.popup_hide.connect(func() -> void:
 		MeshSettingsMenuDock = null
+		clearSelectionSettingsMenu("mesh")
 	)
 	refreshMeshIdControl()
 
@@ -545,9 +588,21 @@ func showMeshSettingsMenu(anchorButton: Button, dock: Control) -> void:
 	hideInkVariantMenu()
 	hideClockSettingsMenu()
 	hideLatchSettingsMenu()
+	clearSelectionSettingsMenu()
 	MeshSettingsMenuDock = dock
 	refreshMeshIdControl()
 	MeshSettingsMenu.popup(Rect2i(getSettingsMenuPosition(anchorButton, MeshSettingsMenuSize), MeshSettingsMenuSize))
+
+func showSelectionMeshSettingsMenu() -> void:
+	if IsSimulating or MeshSettingsMenu == null:
+		return
+	hideInkVariantMenu()
+	hideClockSettingsMenu()
+	hideLatchSettingsMenu()
+	SelectionSettingsMenuKind = "mesh"
+	MeshSettingsMenuDock = null
+	refreshMeshIdControl()
+	MeshSettingsMenu.popup(Rect2i(getPointerMenuPosition(MeshSettingsMenuSize), MeshSettingsMenuSize))
 
 func hideMeshSettingsMenu() -> void:
 	if MeshSettingsMenu:
@@ -558,13 +613,17 @@ func setMeshId(requestedMeshId: float) -> void:
 	if IsSimulating:
 		refreshMeshIdControl()
 		return
-	Board.call("setMeshId", int(requestedMeshId))
+	if SelectionSettingsMenuKind == "mesh":
+		Board.call("setSelectedTileMeshId", int(requestedMeshId))
+	else:
+		Board.call("setMeshId", int(requestedMeshId))
 	refreshMeshIdControl()
 
 func refreshMeshIdControl(_meshId := 0) -> void:
 	if MeshIdControl == null:
 		return
-	MeshIdControl.set_value_no_signal(maxi(MeshIdMinimum, int(Board.call("getMeshId"))))
+	var meshId: int = int(Board.call("getSelectedTileMeshId")) if SelectionSettingsMenuKind == "mesh" else int(Board.call("getMeshId"))
+	MeshIdControl.set_value_no_signal(maxi(MeshIdMinimum, int(meshId)))
 
 func configureMeshIdControl() -> void:
 	if MeshIdControl == null:
@@ -607,6 +666,7 @@ func buildLatchSettingsMenu() -> void:
 	content.add_child(LatchDisabledStateButton)
 	LatchSettingsMenu.popup_hide.connect(func() -> void:
 		LatchSettingsMenuDock = null
+		clearSelectionSettingsMenu("latch")
 	)
 	refreshLatchInitialStateControls()
 
@@ -616,9 +676,21 @@ func showLatchSettingsMenu(anchorButton: Button, dock: Control) -> void:
 	hideInkVariantMenu()
 	hideClockSettingsMenu()
 	hideMeshSettingsMenu()
+	clearSelectionSettingsMenu()
 	LatchSettingsMenuDock = dock
 	refreshLatchInitialStateControls()
 	LatchSettingsMenu.popup(Rect2i(getSettingsMenuPosition(anchorButton, LatchSettingsMenuSize), LatchSettingsMenuSize))
+
+func showSelectionLatchSettingsMenu() -> void:
+	if IsSimulating or LatchSettingsMenu == null:
+		return
+	hideInkVariantMenu()
+	hideClockSettingsMenu()
+	hideMeshSettingsMenu()
+	SelectionSettingsMenuKind = "latch"
+	LatchSettingsMenuDock = null
+	refreshLatchInitialStateControls()
+	LatchSettingsMenu.popup(Rect2i(getPointerMenuPosition(LatchSettingsMenuSize), LatchSettingsMenuSize))
 
 func hideLatchSettingsMenu() -> void:
 	if LatchSettingsMenu:
@@ -644,13 +716,16 @@ func setLatchInitialState(isOn: bool) -> void:
 	if IsSimulating:
 		refreshLatchInitialStateControls()
 		return
-	Board.call("setLatchInitialState", isOn)
+	if SelectionSettingsMenuKind == "latch":
+		Board.call("setSelectedTileLatchInitialState", isOn)
+	else:
+		Board.call("setLatchInitialState", isOn)
 	refreshLatchInitialStateControls()
 
 func refreshLatchInitialStateControls(_isOn := false) -> void:
 	if LatchEnabledStateButton == null or LatchDisabledStateButton == null:
 		return
-	var isOn := bool(Board.call("getLatchInitialState"))
+	var isOn := bool(Board.call("getSelectedTileLatchInitialState")) if SelectionSettingsMenuKind == "latch" else bool(Board.call("getLatchInitialState"))
 	LatchEnabledStateButton.set_pressed_no_signal(isOn)
 	LatchDisabledStateButton.set_pressed_no_signal(not isOn)
 
@@ -665,6 +740,17 @@ func getSettingsMenuPosition(anchorButton: Button, menuSize: Vector2i) -> Vector
 	popupPosition.x = clampi(popupPosition.x, 0, maxi(0, int(viewportSize.x) - menuSize.x))
 	popupPosition.y = clampi(popupPosition.y, 0, maxi(0, int(viewportSize.y) - menuSize.y))
 	return popupPosition
+
+func getPointerMenuPosition(menuSize: Vector2i) -> Vector2i:
+	var popupPosition := Vector2i(get_viewport().get_mouse_position() + Vector2(4.0, 4.0))
+	var viewportSize := get_viewport_rect().size
+	popupPosition.x = clampi(popupPosition.x, 0, maxi(0, int(viewportSize.x) - menuSize.x))
+	popupPosition.y = clampi(popupPosition.y, 0, maxi(0, int(viewportSize.y) - menuSize.y))
+	return popupPosition
+
+func clearSelectionSettingsMenu(expectedKind := "") -> void:
+	if expectedKind.is_empty() or SelectionSettingsMenuKind == expectedKind:
+		SelectionSettingsMenuKind = ""
 
 func buildClockSettingsMenu() -> void:
 	ClockSettingsMenu = PopupPanel.new()
@@ -702,6 +788,7 @@ func buildClockSettingsMenu() -> void:
 	ClockHoldTicksSuffix = ticksLabel
 	ClockSettingsMenu.popup_hide.connect(func() -> void:
 		ClockSettingsMenuDock = null
+		clearSelectionSettingsMenu("clock")
 	)
 	refreshClockHoldTicksControl()
 
@@ -711,9 +798,21 @@ func showClockSettingsMenu(anchorButton: Button, dock: Control) -> void:
 	hideInkVariantMenu()
 	hideMeshSettingsMenu()
 	hideLatchSettingsMenu()
+	clearSelectionSettingsMenu()
 	ClockSettingsMenuDock = dock
 	refreshClockHoldTicksControl()
 	ClockSettingsMenu.popup(Rect2i(getSettingsMenuPosition(anchorButton, ClockSettingsMenuSize), ClockSettingsMenuSize))
+
+func showSelectionClockSettingsMenu() -> void:
+	if IsSimulating or ClockSettingsMenu == null:
+		return
+	hideInkVariantMenu()
+	hideMeshSettingsMenu()
+	hideLatchSettingsMenu()
+	SelectionSettingsMenuKind = "clock"
+	ClockSettingsMenuDock = null
+	refreshClockHoldTicksControl()
+	ClockSettingsMenu.popup(Rect2i(getPointerMenuPosition(ClockSettingsMenuSize), ClockSettingsMenuSize))
 
 func hideClockSettingsMenu() -> void:
 	if ClockSettingsMenu:
@@ -724,11 +823,14 @@ func setClockHoldTicks(requestedHoldTicks: float) -> void:
 	if IsSimulating:
 		refreshClockHoldTicksControl()
 		return
-	Board.call("setClockHoldTicks", int(requestedHoldTicks))
+	if SelectionSettingsMenuKind == "clock":
+		Board.call("setSelectedTileClockHoldTicks", int(requestedHoldTicks))
+	else:
+		Board.call("setClockHoldTicks", int(requestedHoldTicks))
 	refreshClockHoldTicksControl()
 
 func refreshClockHoldTicksControl(_holdTicks := 0) -> void:
-	var holdTicks := int(Board.call("getClockHoldTicks"))
+	var holdTicks := int(Board.call("getSelectedTileClockHoldTicks")) if SelectionSettingsMenuKind == "clock" else int(Board.call("getClockHoldTicks"))
 	if ClockHoldTicksControl:
 		ClockHoldTicksControl.set_value_no_signal(maxi(ClockHoldTicksMinimum, holdTicks))
 	if ClockHoldTicksSuffix:

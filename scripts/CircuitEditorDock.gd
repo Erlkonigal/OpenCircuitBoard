@@ -23,6 +23,7 @@ var InkButtons: Dictionary[String, Button] = {}
 var SelectedInkId := "or"
 var LastSelectedInkIdByPaletteToolId: Dictionary[String, String] = {}
 var HoveredInkLabel: Label
+var HoveredPropertyLabel: Label
 var PositionXLabel: Label
 var PositionYLabel: Label
 var DockMenuButton: Button
@@ -108,6 +109,8 @@ func buildCursorInfoSection() -> Control:
 	section.add_child(makeSectionTitle("Cursor Info"))
 	HoveredInkLabel = makeInfoValue("None")
 	section.add_child(makeInfoField("HoveredInk", HoveredInkLabel))
+	HoveredPropertyLabel = makeInfoValue("None")
+	section.add_child(makeInfoField("Property", HoveredPropertyLabel))
 	var positionRow := HBoxContainer.new()
 	positionRow.add_theme_constant_override("separation", 6)
 	PositionXLabel = makeSmallInfoValue("0")
@@ -300,12 +303,14 @@ func clearHoveredInk() -> void:
 	if HoveredInkLabel:
 		HoveredInkLabel.text = "None"
 
-func updateCursorInfo(position: Vector2i, isValid: bool, hoveredInkTitle := "None") -> void:
+func updateCursorInfo(position: Vector2i, isValid: bool, hoveredInkTitle := "None", propertyText := "None") -> void:
 	if PositionXLabel == null or PositionYLabel == null:
 		return
 	PositionXLabel.text = str(position.x) if isValid else "0"
 	PositionYLabel.text = str(position.y) if isValid else "0"
 	setHoveredInk(hoveredInkTitle if isValid else "None")
+	if HoveredPropertyLabel:
+		HoveredPropertyLabel.text = propertyText if isValid else "None"
 
 func recordEvent(eventText: String) -> void:
 	eventRecorded.emit(eventText)
