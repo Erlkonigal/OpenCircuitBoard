@@ -229,7 +229,7 @@ run: build
 	@"$(GODOT_EXECUTABLE)" --path "$(PROJECT_ROOT)"
 else
 run: export-release
-	@"$(RELEASE_EXPORT_EXECUTABLE)"
+	@exec '$(RELEASE_EXPORT_EXECUTABLE)'
 endif
 
 clean:
