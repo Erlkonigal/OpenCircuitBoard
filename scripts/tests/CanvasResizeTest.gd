@@ -99,6 +99,15 @@ func assertGridState(board: Node2D, camera: Camera2D, overlay: Node2D, expectedB
 	assert(canvasBoard.position.is_equal_approx(expectedRect.position))
 	assert(canvasBoard.size.is_equal_approx(expectedRect.size))
 	assert((camera.get("LimitRect") as Rect2).is_equal_approx(expectedRect))
+	var viewportSize := camera.get_viewport_rect().size
+	var maximumZoom := camera.get("MaxZoom") as Vector2
+	var expectedMinimumZoom := minf(viewportSize.x / expectedRect.size.x, viewportSize.y / expectedRect.size.y)
+	expectedMinimumZoom = minf(expectedMinimumZoom, minf(maximumZoom.x, maximumZoom.y))
+	assert((camera.get("MinZoom") as Vector2).is_equal_approx(Vector2.ONE * expectedMinimumZoom))
+	camera.zoom = maximumZoom
+	camera.call("zoomAtPointer", -Vector2.ONE * maximumZoom)
+	assert(camera.zoom.is_equal_approx(Vector2.ONE * expectedMinimumZoom))
+	assert(camera.global_position.is_equal_approx(expectedRect.get_center()))
 	assert((overlay.get("Bounds") as Rect2).is_equal_approx(expectedRect))
 	assert(int(simulationGrid.get("width", 0)) == expectedBounds.size.x)
 	assert(int(simulationGrid.get("height", 0)) == expectedBounds.size.y)

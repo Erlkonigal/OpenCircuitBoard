@@ -1,7 +1,7 @@
 extends Camera2D
 
 @export var ZoomStep := Vector2(0.05, 0.05)
-@export var MinZoom := Vector2(0.15, 0.15)
+@export var MinZoom := Vector2.ZERO
 @export var MaxZoom := Vector2(1.25, 1.25)
 @export var Board: Node2D
 
@@ -9,6 +9,10 @@ var LimitRect := Rect2()
 var HasLimit := false
 var IsDragging := false
 var LastMousePosition := Vector2.ZERO
+
+func _ready() -> void:
+	get_viewport().size_changed.connect(refreshMinimumZoom)
+	refreshMinimumZoom()
 
 func _process(_delta: float) -> void:
 	if not HasLimit:
@@ -18,7 +22,22 @@ func _process(_delta: float) -> void:
 func setDragBounds(bounds: Rect2) -> void:
 	LimitRect = bounds
 	HasLimit = true
+	refreshMinimumZoom()
 	clampPosition()
+
+func refreshMinimumZoom() -> void:
+	if not HasLimit or LimitRect.size.x <= 0.0 or LimitRect.size.y <= 0.0:
+		return
+	var viewportSize := get_viewport_rect().size
+	if viewportSize.x <= 0.0 or viewportSize.y <= 0.0:
+		return
+	var fitZoom := minf(viewportSize.x / LimitRect.size.x, viewportSize.y / LimitRect.size.y)
+	var maximumZoom := minf(MaxZoom.x, MaxZoom.y)
+	MinZoom = Vector2.ONE * minf(fitZoom, maximumZoom)
+	var clampedZoom := zoom.clamp(MinZoom, MaxZoom)
+	if zoom != clampedZoom:
+		zoom = clampedZoom
+		global_position = LimitRect.get_center()
 
 func clampPosition() -> void:
 	if not HasLimit:
@@ -32,7 +51,10 @@ func zoomAtPointer(amount: Vector2) -> void:
 		return
 	var anchorPosition := get_global_mouse_position()
 	zoom = newZoom
-	global_position = anchorPosition + (global_position - anchorPosition) * oldZoom.x / newZoom.x
+	if newZoom.is_equal_approx(MinZoom):
+		global_position = LimitRect.get_center()
+	else:
+		global_position = anchorPosition + (global_position - anchorPosition) * oldZoom.x / newZoom.x
 	clampPosition()
 
 func _unhandled_input(event: InputEvent) -> void:

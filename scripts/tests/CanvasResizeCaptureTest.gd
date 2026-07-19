@@ -16,8 +16,17 @@ func run(context) -> Dictionary:
 	assert(overlay.visible)
 	assert(int(overlay.get("ActiveCorner")) == TopLeftCorner)
 	assert((overlay.get("Bounds") as Rect2).is_equal_approx(boardBounds))
-	context.BoardCamera.global_position = boardBounds.position
-	context.BoardCamera.zoom = Vector2.ONE * maxf(context.getFloatArg("--captureZoom", 1.25), 0.01)
+	var requestedZoom: float = context.getFloatArg("--captureZoom", 0.0)
+	if requestedZoom > 0.0:
+		context.BoardCamera.global_position = boardBounds.position
+		context.BoardCamera.zoom = Vector2.ONE * requestedZoom
+	else:
+		var maximumZoom := context.BoardCamera.get("MaxZoom") as Vector2
+		context.BoardCamera.zoom = maximumZoom
+		context.BoardCamera.call("zoomAtPointer", -Vector2.ONE * maximumZoom)
 	await context.waitFrames(5)
-	assert(context.BoardCamera.global_position.is_equal_approx(boardBounds.position))
+	if requestedZoom > 0.0:
+		assert(context.BoardCamera.global_position.is_equal_approx(boardBounds.position))
+	else:
+		assert(context.BoardCamera.global_position.is_equal_approx(boardBounds.get_center()))
 	return {}
