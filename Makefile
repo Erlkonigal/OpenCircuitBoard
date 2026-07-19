@@ -29,6 +29,11 @@ BACKEND_BUILD_CONFIGURATION := $(BACKEND_BUILD_ROOT)/build-configuration
 BACKEND_CONFIGURE_STAMP := $(BACKEND_BUILD_ROOT)/.configured
 GODOT_CPP_BUILD_STAMP := $(BACKEND_BUILD_ROOT)/.godot-cpp-built
 RELEASE_BACKEND_BUILD_ROOT := $(BUILD_ROOT)/$(TARGET_PLATFORM)/release/extension
+RELEASE_EXPORT_ROOT := $(BUILD_ROOT)/$(TARGET_PLATFORM)/release/export
+RELEASE_EXPORT_PRESET := $(if $(filter windows,$(TARGET_PLATFORM)),Windows Desktop,Linux/X11)
+RELEASE_EXPORT_EXECUTABLE := $(RELEASE_EXPORT_ROOT)/OpenCircuitBoard$(if $(filter windows,$(TARGET_PLATFORM)),.exe,.x86_64)
+RELEASE_SOURCE_LIBRARY_PATH := res://build/$(TARGET_PLATFORM)/release/ocbsimulation$(if $(filter windows,$(TARGET_PLATFORM)),.dll,.so)
+RELEASE_EXPORT_LIBRARY_PATH := res://ocbsimulation$(if $(filter windows,$(TARGET_PLATFORM)),.dll,.so)
 
 # Godot toolchain
 GODOT_VERSION := 4.7
@@ -37,6 +42,10 @@ GODOT_PLATFORM_NAME := $(if $(filter windows,$(TARGET_PLATFORM)),win64.exe,linux
 GODOT_ARCHIVE_NAME := Godot_v$(GODOT_VERSION)-stable_$(GODOT_PLATFORM_NAME).zip
 GODOT_ARCHIVE_URL := https://github.com/godotengine/godot-builds/releases/download/$(GODOT_VERSION)-stable/$(GODOT_ARCHIVE_NAME)
 DOWNLOADED_GODOT_EXECUTABLE := $(GODOT_TOOLS_ROOT)/Godot_v$(GODOT_VERSION)-stable_$(GODOT_PLATFORM_NAME)
+GODOT_EXPORT_TEMPLATES_ARCHIVE := $(GODOT_TOOLS_ROOT)/Godot_v$(GODOT_VERSION)-stable_export_templates.tpz
+GODOT_EXPORT_TEMPLATES_URL := https://github.com/godotengine/godot-builds/releases/download/$(GODOT_VERSION)-stable/$(notdir $(GODOT_EXPORT_TEMPLATES_ARCHIVE))
+GODOT_EXPORT_TEMPLATES_ROOT := $(GODOT_TOOLS_ROOT)/export-templates
+GODOT_EXPORT_TEMPLATE := $(GODOT_EXPORT_TEMPLATES_ROOT)/$(if $(filter windows,$(TARGET_PLATFORM)),windows_release_x86_64.exe,linux_release.x86_64)
 
 ifeq ($(origin GODOT_EXECUTABLE), undefined)
 GODOT_EXECUTABLE := $(DOWNLOADED_GODOT_EXECUTABLE)
@@ -45,8 +54,8 @@ GODOT_EXECUTABLE_INPUT := $(DOWNLOADED_GODOT_EXECUTABLE)
 endif
 
 
-.PHONY: help init build build-debug build-release core-test core-benchmark board-benchmark native-test frontend-test test run clean \
-	check-platform check-backend-tools check-godot-executable download-godot force
+.PHONY: help init build build-debug build-release export-release core-test core-benchmark board-benchmark native-test frontend-test test run clean \
+	check-platform check-backend-tools check-godot-executable download-godot download-godot-templates force
 
 EXTENSION_BUILD_INPUTS := $(shell find "$(PROJECT_ROOT)/extension" -type f -print)
 EXTENSION_INPUT_DIRECTORIES := $(shell find "$(PROJECT_ROOT)/extension" -type d -print)
@@ -73,6 +82,7 @@ help:
 	@echo "make build TARGET_PLATFORM=<linux|windows> [BUILD_TYPE=<Debug|Release>] Build one OcbSimulation variant"
 	@echo "make build-debug TARGET_PLATFORM=<linux|windows> Build the editor/debug GDExtension variant"
 	@echo "make build-release TARGET_PLATFORM=<linux|windows> Build the optimized export GDExtension variant"
+	@echo "make run TARGET_PLATFORM=<linux|windows> BUILD_TYPE=<Debug|Release> Run the editor or a Release export"
 	@echo "make core-test TARGET_PLATFORM=<linux|windows> Run native SimulationCore tests"
 	@echo "make core-benchmark TARGET_PLATFORM=<linux|windows> Run the 1024x1024 Release mixed-gate SimulationCore throughput benchmark"
 	@echo "make board-benchmark TARGET_PLATFORM=<linux|windows> BOARD_PATH=<project.ocb> [BOARD_BENCHMARK_ARGS=...] Run the board-level simulation capacity probe"
@@ -107,6 +117,8 @@ init:
 
 download-godot: $(DOWNLOADED_GODOT_EXECUTABLE)
 
+download-godot-templates: $(GODOT_EXPORT_TEMPLATE)
+
 $(DOWNLOADED_GODOT_EXECUTABLE): | check-platform
 	@set -e; \
 	if [ -f "$@" ]; then exit 0; fi; \
@@ -117,6 +129,20 @@ $(DOWNLOADED_GODOT_EXECUTABLE): | check-platform
 	unzip -oq "$(GODOT_TOOLS_ROOT)/$(GODOT_ARCHIVE_NAME).part" -d "$(GODOT_TOOLS_ROOT)"; \
 	mv "$(GODOT_TOOLS_ROOT)/$(GODOT_ARCHIVE_NAME).part" "$(GODOT_TOOLS_ROOT)/$(GODOT_ARCHIVE_NAME)"; \
 	if [ ! -f "$@" ]; then echo "Downloaded Godot archive did not contain $(notdir $(DOWNLOADED_GODOT_EXECUTABLE))."; exit 1; fi
+
+$(GODOT_EXPORT_TEMPLATES_ARCHIVE): | check-platform
+	@set -e; \
+	if [ -f "$@" ]; then exit 0; fi; \
+	if ! command -v curl >/dev/null; then echo "curl is required to download Godot export templates. Install curl, then rerun make download-godot-templates."; exit 1; fi; \
+	mkdir -p "$(GODOT_TOOLS_ROOT)"; \
+	curl --fail --location --retry 3 --retry-all-errors --output "$@.part" "$(GODOT_EXPORT_TEMPLATES_URL)"; \
+	mv "$@.part" "$@"
+
+$(GODOT_EXPORT_TEMPLATE): $(GODOT_EXPORT_TEMPLATES_ARCHIVE)
+	@mkdir -p "$(GODOT_EXPORT_TEMPLATES_ROOT)"
+	@unzip -p "$(GODOT_EXPORT_TEMPLATES_ARCHIVE)" "templates/$(notdir $@)" > "$@.tmp"
+	@test -s "$@.tmp" || (rm -f "$@.tmp"; echo "Godot export template was not found: templates/$(notdir $@)"; exit 1)
+	@mv "$@.tmp" "$@"
 
 # Build inputs and artifacts
 $(TARGET_BUILD_ROOT):
@@ -164,6 +190,21 @@ build-debug:
 build-release:
 	@$(MAKE) --no-print-directory build TARGET_PLATFORM="$(TARGET_PLATFORM)" BUILD_TYPE=Release
 
+export-release: download-godot-templates
+	@$(MAKE) --no-print-directory build TARGET_PLATFORM="$(TARGET_PLATFORM)" BUILD_TYPE=Release
+	@mkdir -p "$(RELEASE_EXPORT_ROOT)"
+	@set -e; \
+	manifest="$(PROJECT_ROOT)/OcbSimulation.gdextension"; \
+	backup="$(TARGET_BUILD_ROOT)/OcbSimulation.gdextension.export"; \
+	library="$(PROJECT_ROOT)/ocbsimulation$(if $(filter windows,$(TARGET_PLATFORM)),.dll,.so)"; \
+	libraryBackup="$(TARGET_BUILD_ROOT)/ocbsimulation.export$(if $(filter windows,$(TARGET_PLATFORM)),.dll,.so)"; \
+	cp "$$manifest" "$$backup"; \
+	if [ -f "$$library" ]; then cp "$$library" "$$libraryBackup"; fi; \
+	trap 'mv "$$backup" "$$manifest"; if [ -f "$$libraryBackup" ]; then mv "$$libraryBackup" "$$library"; else rm -f "$$library"; fi' EXIT; \
+	cp "$(BACKEND_LIBRARY)" "$$library"; \
+	sed 's#$(RELEASE_SOURCE_LIBRARY_PATH)#$(RELEASE_EXPORT_LIBRARY_PATH)#' "$$backup" > "$$manifest"; \
+	"$(GODOT_EXECUTABLE)" --headless --path "$(PROJECT_ROOT)" --export-release "$(RELEASE_EXPORT_PRESET)" "$(RELEASE_EXPORT_EXECUTABLE)"
+
 core-test: build-release
 	@ctest --test-dir "$(RELEASE_BACKEND_BUILD_ROOT)" --output-on-failure
 
@@ -183,8 +224,13 @@ frontend-test: build-debug
 
 test: core-test native-test frontend-test
 
-run:
+ifeq ($(BUILD_TYPE),Debug)
+run: build
 	@"$(GODOT_EXECUTABLE)" --path "$(PROJECT_ROOT)"
+else
+run: export-release
+	@"$(RELEASE_EXPORT_EXECUTABLE)"
+endif
 
 clean:
 	@rm -rf "$(BUILD_ROOT)"

@@ -2,11 +2,11 @@
 .vscode/
 .agents
 build/
+*.dll
 *.so
 *.ocb
 *.dblite
 *.import
 *.uid
-OcbSimulation.gdextension
 thirdparty/godotcpp/bin/
 thirdparty/godotcpp/gen/
