@@ -1,12 +1,15 @@
 import type {} from 'webdriverio';
 import { spawn, type ChildProcess } from 'node:child_process';
 import path from 'node:path';
+import { mkdir } from 'node:fs/promises';
+import { WorkspaceRoot, buildPath } from './Paths';
 let driver: ChildProcess;
 export const config: WebdriverIO.Config = {
-    runner: 'local', specs: [path.resolve('Tests/Desktop/**/*.spec.ts')], maxInstances: 1, hostname: '127.0.0.1', port: 4444, logLevel: 'warn',
-    capabilities: [{ 'tauri:options': { application: path.resolve('target/release/OpenCircuitBoard' + (process.platform === 'win32' ? '.exe' : '')) }, 'wdio:enforceWebDriverClassic': true } as WebdriverIO.Capabilities],
+    runner: 'local', specs: [path.join(WorkspaceRoot, 'Frontend/Tests/Desktop/**/*.spec.ts')], maxInstances: 1, hostname: '127.0.0.1', port: 4444, logLevel: 'warn',
+    capabilities: [{ 'tauri:options': { application: path.join(WorkspaceRoot, 'Backend/target/release/OpenCircuitBoard' + (process.platform === 'win32' ? '.exe' : '')) }, 'wdio:enforceWebDriverClassic': true } as WebdriverIO.Capabilities],
     framework: 'mocha', reporters: ['spec'], mochaOpts: { timeout: 60000 }, waitforTimeout: 10000,
     beforeSession: async () => {
+        await mkdir(buildPath('.'), { recursive: true });
         let failure: Error | undefined;
         driver = spawn('tauri-driver', [], { stdio: 'inherit', windowsHide: true });
         driver.once('error', error => { failure = error; });

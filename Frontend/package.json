@@ -7,7 +7,7 @@
     "dev": "vite --config Vite.config.ts --host 127.0.0.1",
     "build": "tsc --noEmit && vite build --config Vite.config.ts",
     "test": "vitest run --config Vite.config.ts",
-    "tauri": "tauri",
+    "tauri": "cd ../Backend/Desktop && tauri",
     "test:desktop": "wdio run Tests/Wdio.conf.ts",
     "test:browser": "playwright test",
     "preview": "vite preview --config Vite.config.ts --host 127.0.0.1 --port 1421 --strictPort"

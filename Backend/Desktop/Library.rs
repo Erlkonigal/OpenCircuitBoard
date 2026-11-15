@@ -141,43 +141,6 @@ async fn simulationCommand(
         .map_err(|e| e.to_string())?
         .map(Response::new)
 }
-fn legacyRecent() -> Vec<String> {
-    let base = if cfg!(target_os = "windows") {
-        std::env::var_os("APPDATA").map(PathBuf::from)
-    } else {
-        std::env::var_os("XDG_DATA_HOME")
-            .map(PathBuf::from)
-            .or_else(|| std::env::var_os("HOME").map(|p| PathBuf::from(p).join(".local/share")))
-    };
-    let Some(base) = base else {
-        return vec![];
-    };
-    let Ok(text) = std::fs::read_to_string(base.join(if cfg!(target_os = "windows") {
-        "Godot/app_userdata/OpenCircuitBoard/recentProjects.cfg"
-    } else {
-        "godot/app_userdata/OpenCircuitBoard/recentProjects.cfg"
-    })) else {
-        return vec![];
-    };
-    let Some(line) = text
-        .lines()
-        .find_map(|line| line.strip_prefix("recentProjectPaths="))
-    else {
-        return vec![];
-    };
-    let Some(start) = line.find('[') else {
-        return vec![];
-    };
-    let Some(end) = line.rfind(']') else {
-        return vec![];
-    };
-    serde_json::from_str::<Vec<String>>(&line[start..=end])
-        .unwrap_or_default()
-        .into_iter()
-        .filter(|p| !p.is_empty())
-        .take(8)
-        .collect()
-}
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
@@ -188,7 +151,7 @@ pub fn run() {
             let paths = std::fs::read(&settings)
                 .ok()
                 .and_then(|data| serde_json::from_slice::<Vec<String>>(&data).ok())
-                .unwrap_or_else(legacyRecent);
+                .unwrap_or_default();
             app.manage(Services {
                 Simulation: Arc::new(Session::default()),
                 Settings: settings,

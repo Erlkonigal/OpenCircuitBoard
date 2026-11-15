@@ -6,6 +6,17 @@ The workspace has a searchable component library, a central canvas, and an inspe
 
 Click or drag to draw. Right-drag erases; Shift-drag selects. Drag within a selection to move it. Ctrl+C/X/V copies, cuts, and previews a paste. Click to place; Esc cancels. Middle-drag pans and the wheel zooms. Ctrl+Z undoes, Ctrl+U or Ctrl+Shift+Z redoes. The inspector edits selected components, or the defaults for the active tool. Runtime states never overwrite the editable circuit.
 
+## Repository layout
+
+- `Frontend/Source`: React editor, PixiJS renderer, and TypeScript state and IPC clients.
+- `Frontend/Assets`: component SVGs and third-party notices.
+- `Frontend/Tests`: unit, browser, and desktop UI tests; npm, Vite, TypeScript, and test configuration live in `Frontend/`.
+- `Backend/Core`: independent Rust simulation, project archives, tests, and regression fixtures.
+- `Backend/Desktop`: Tauri host, native commands, application icons, and desktop configuration; the Cargo workspace and lockfile live in `Backend/`.
+- `scripts/` and `Makefile`: shared build entrypoints. Shared test tools and inspected captures are generated in `build/`.
+
+Frontend dependencies and output are `Frontend/node_modules/` and `Frontend/dist/`. Rust binaries and installers are generated under `Backend/target/`.
+
 ## Build and run
 
 Use **make on both Windows and Linux**, from the repository root. The default target matches the native host. You can specify `TARGET_PLATFORM=windows` or `TARGET_PLATFORM=linux` explicitly.
@@ -26,7 +37,7 @@ make run BUILD_TYPE=Debug
 make package
 ```
 
-The app sets `app.security.csp` to `null` in `Desktop/tauri.conf.json` and uses the standard PixiJS renderer.
+The app sets `app.security.csp` to `null` in `Backend/Desktop/tauri.conf.json` and uses the standard PixiJS renderer.
 
 Windows uses `make -> PowerShell -> MSVC`. It does not require MSYS2, UCRT64, MinGW, Git Bash, or WSL.
 
@@ -60,8 +71,8 @@ make board-benchmark BOARD_PATH=C:/Projects/Example.ocb
 
 `test` runs Rust workspace tests, a frontend production build, unit tests, and browser tests. CI defines Windows and Linux validation and packaging separately.
 
-The core tests replay 682 recorded C++ state/delta comparisons, plus snapshots, clock/latch behavior, graph ordering, project compatibility, and worker lifecycle tests. The default mixed benchmark uses 1024x1024 cells and 256 pipelines. The migration gate is 90% of the measured legacy baseline; the separate historical 100K TPS target has not been reached. See `Tests/Fixtures/LegacyBaseline.md`. Pass `CORE_BENCHMARK_ARGS="--quick"` for a short run. `board-benchmark` also accepts `BOARD_BENCHMARK_ARGS="--editorProbe"`.
+The core tests replay 682 recorded C++ state/delta comparisons, plus snapshots, clock/latch behavior, graph ordering, project compatibility, and worker lifecycle tests. The default mixed benchmark uses 1024x1024 cells and 256 pipelines. The migration gate is 90% of the measured legacy baseline; the separate historical 100K TPS target has not been reached. See `Backend/Core/Tests/Fixtures/LegacyBaseline.md`. Pass `CORE_BENCHMARK_ARGS="--quick"` for a short run. `board-benchmark` also accepts `BOARD_BENCHMARK_ARGS="--editorProbe"`.
 
 ## Project format
 
-Existing `.ocb` v2 files remain ZIP archives with `project.json` and `formatVersion: 2`. Grid bounds, per-cell clock/mesh settings, latch initial states, and editor defaults are preserved. Loading completes validation before replacing the open board. Recent projects are imported from the previous editor's settings when no native settings exist.
+Existing `.ocb` v2 files remain ZIP archives with `project.json` and `formatVersion: 2`. Grid bounds, per-cell clock/mesh settings, latch initial states, and editor defaults are preserved. Loading completes validation before replacing the open board. Recent projects are stored in `RecentProjects.json` in the native application data directory.

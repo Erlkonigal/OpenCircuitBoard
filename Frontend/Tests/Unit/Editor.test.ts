@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it } from 'vitest';
-import { useEditor } from '../../Frontend/EditorStore';
-import { cellKey, lineCells, newBoard, validateBoard, type Board, type Tile } from '../../Frontend/Model';
-import { applyFrame, decodeFrame, encodeBoard } from '../../Frontend/Native';
+import { useEditor } from '../../Source/EditorStore';
+import { cellKey, lineCells, newBoard, validateBoard, type Board, type Tile } from '../../Source/Model';
+import { applyFrame, decodeFrame, encodeBoard } from '../../Source/Native';
 const state = () => useEditor.getState();
 function place(x: number, y: number, id = 'or') { state().selectTool(id); state().begin(); state().paint([{ x, y }]); state().commit(); }
 beforeEach(() => { state().load(newBoard()); useEditor.setState({ Simulating: false, LeftDock: 'circuitEditor', RightDock: 'eventLog', LeftOpen: true, RightOpen: true }); });

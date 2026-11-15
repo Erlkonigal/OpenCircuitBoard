@@ -4,6 +4,7 @@
 
 - Use PascalCase for project-owned filenames, resource names, type names, members, and static constants. Use lowerCamel for functions, parameters, local variables, IDs, JSON keys, and config keys. Preserve tool-required names and skill naming conventions.
 - Implement the editor in React and TypeScript, UI controls in Mantine, and the board renderer in PixiJS. Tauri hosts the desktop app; Rust owns simulation, project archives, and native services.
+- Keep frontend source, assets, npm manifests, configuration, and UI tests in `Frontend/`. Keep the Cargo workspace, simulation core, native services, and backend fixtures in `Backend/`. Root build scripts coordinate both workspaces.
 - Keep the simulation core independent of Tauri. Preserve `.ocb` formatVersion 2 and the stable tool IDs. Keep runtime state separate from editable project data.
 - Use locked npm and Cargo dependencies. Do not vendor dependency source or generated bindings.
 

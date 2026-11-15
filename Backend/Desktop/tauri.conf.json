@@ -5,15 +5,15 @@
   "identifier": "org.opencircuitboard.editor",
   "build": {
     "beforeDevCommand": {
-      "cwd": "..",
+      "cwd": "../../Frontend",
       "script": "npm run dev"
     },
     "devUrl": "http://127.0.0.1:1420",
     "beforeBuildCommand": {
-      "cwd": "..",
+      "cwd": "../../Frontend",
       "script": "npm run build"
     },
-    "frontendDist": "../dist"
+    "frontendDist": "../../Frontend/dist"
   },
   "app": {
     "windows": [

@@ -2,9 +2,7 @@
 
 ## Lucide Icons
 
-`panelLeftClose.svg`, `panelLeftOpen.svg`, `panelRightClose.svg`,
-`panelRightOpen.svg`, `circuitEditor.svg`, `eventLog.svg`, and `clipboard.svg`
-are derived from Lucide Icons.
+The editor uses Lucide Icons through the `lucide-react` package.
 
 ISC License
 
@@ -24,7 +22,7 @@ PERFORMANCE OF THIS SOFTWARE.
 
 ## Font Awesome Free
 
-`inks/read.svg` and `inks/write.svg` are derived from Font Awesome Free 7.3.0
+`Inks/Read.svg` and `Inks/Write.svg` are derived from Font Awesome Free 7.3.0
 solid `r` and `w` assets.
 
 Copyright 2026 Fonticons, Inc.

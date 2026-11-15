@@ -18,7 +18,7 @@ fn replayLegacyCore() {
     let mut snapshots = HashMap::new();
     let mut checks = 0;
     let mut ordering = HashMap::new();
-    for (line, text) in include_str!("../../Tests/Fixtures/LegacyCore.jsonl")
+    for (line, text) in include_str!("Fixtures/LegacyCore.jsonl")
         .lines()
         .enumerate()
     {

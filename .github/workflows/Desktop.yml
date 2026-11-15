@@ -17,8 +17,11 @@ jobs:
         with:
           node-version: '26'
           cache: npm
+          cache-dependency-path: Frontend/package-lock.json
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: Backend -> target
       - name: Windows tools
         if: runner.os == 'Windows'
         shell: pwsh
@@ -34,6 +37,7 @@ jobs:
       - run: make init TARGET_PLATFORM=${{ matrix.platform }}
       - name: Chromium
         if: runner.os == 'Linux'
+        working-directory: Frontend
         run: npx playwright install --with-deps chromium
       - run: make test TARGET_PLATFORM=${{ matrix.platform }}
       - run: make test-tools TARGET_PLATFORM=${{ matrix.platform }}
@@ -49,5 +53,5 @@ jobs:
         with:
           name: desktop-${{ matrix.platform }}
           path: |
-            target/release/bundle/
+            Backend/target/release/bundle/
             build/*Capture.png

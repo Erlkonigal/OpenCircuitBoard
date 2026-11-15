@@ -40,10 +40,10 @@ export interface Ink {
     variants?: string[];
 }
 export const ToolIds = ['empty', 'trace', 'traceRed', 'traceGreen', 'traceBlue', 'traceCyan', 'traceMagenta', 'bus', 'busRed', 'busGreen', 'busYellow', 'busCyan', 'busMagenta', 'cross', 'mesh', 'read', 'write', 'buffer', 'and', 'or', 'xor', 'not', 'nand', 'nor', 'xnor', 'latch', 'clock', 'led'];
-const Icons = import.meta.glob('../assets/inks/*.svg', { eager: true, query: '?url', import: 'default' }) as Record<string, string>;
+const Icons = import.meta.glob('../Assets/Inks/*.svg', { eager: true, query: '?url', import: 'default' }) as Record<string, string>;
 const colors: Record<string, string> = { cross: '#8da8cf', mesh: '#91a66c', bus: '#2378f4', read: '#f04f68', write: '#4ca8ef', trace: '#f4df35', buffer: '#55ed91', and: '#f3c46e', or: '#55dfeb', xor: '#a977ed', not: '#ef5b78', nand: '#f59d35', nor: '#46d8e5', xnor: '#bf58ee', latch: '#43ec90', clock: '#f05b70', led: '#e6edf8' };
 export const paletteId = (id: string) => id.startsWith('trace') ? 'trace' : id.startsWith('bus') ? 'bus' : id;
-export function iconUrl(id: string, on = true) { const name = id === 'latch' ? (on ? 'LatchOn' : 'LatchOff') : id[0].toUpperCase() + id.slice(1); return Icons[`../assets/inks/${name}.svg`]; }
+export function iconUrl(id: string, on = true) { const name = id === 'latch' ? (on ? 'LatchOn' : 'LatchOff') : id[0].toUpperCase() + id.slice(1); return Icons[`../Assets/Inks/${name}.svg`]; }
 export const Inks: Ink[] = ['cross', 'mesh', 'bus', 'read', 'write', 'trace', 'buffer', 'and', 'or', 'xor', 'not', 'nand', 'nor', 'xnor', 'latch', 'clock', 'led'].map(id => ({ id, title: id[0].toUpperCase() + id.slice(1), category: ['cross', 'mesh', 'bus'].includes(id) ? 'Space Optimization' : ['read', 'write', 'trace'].includes(id) ? 'Trace' : ['latch', 'clock', 'led'].includes(id) ? 'General Components' : 'Gates', color: colors[id], icon: iconUrl(id), variants: id === 'trace' ? ToolIds.slice(1, 7) : id === 'bus' ? ToolIds.slice(7, 13) : undefined }));
 export function inkColor(id: string) { const suffix = id.slice(paletteId(id).length); return ({ Red: '#ff4d4d', Green: '#71f06b', Blue: '#2378f4', Cyan: '#55dfeb', Magenta: '#c66af6', Yellow: '#f4df35' } as Record<string, string>)[suffix] ?? colors[id] ?? '#ffffff'; }
 export const cellKey = (point: Point) => `${point.x},${point.y}`;

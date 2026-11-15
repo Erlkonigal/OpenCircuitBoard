@@ -1,2 +1,0 @@
-import {defineConfig} from '@playwright/test';
-export default defineConfig({testDir:'Tests/Browser',timeout:90000,use:{channel:process.platform==='win32'?'msedge':undefined,baseURL:'http://127.0.0.1:1421',viewport:{width:1280,height:720},screenshot:'only-on-failure'},webServer:{command:'npm run preview',url:'http://127.0.0.1:1421',reuseExistingServer:!process.env.CI},outputDir:'build/BrowserTests',reporter:'list'});

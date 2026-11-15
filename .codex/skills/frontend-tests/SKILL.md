@@ -19,7 +19,7 @@ make frontend-test TARGET_PLATFORM=windows
 make frontend-test TARGET_PLATFORM=linux
 ```
 
-This builds the production frontend and runs unit and rendered browser workflows. Windows uses installed Edge; Linux uses Playwright Chromium. Unit assertions do not validate the canvas.
+This builds the production frontend and runs unit and rendered browser workflows. Frontend manifests, configuration, source, assets, and UI tests live under `Frontend/`; the make dispatcher selects that working directory automatically. Native tests launch `Backend/target/release/OpenCircuitBoard` (with `.exe` on Windows). Capture paths resolve against the repository root and stay in `build/`. Windows uses installed Edge; Linux uses Playwright Chromium. Unit assertions do not validate the canvas.
 
 For IPC, native project services, runtime rendering, or simulation controls, also run:
 
