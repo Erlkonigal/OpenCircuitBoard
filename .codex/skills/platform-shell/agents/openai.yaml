@@ -1,4 +1,4 @@
 interface:
   display_name: "Platform Shell"
-  short_description: "Run commands in Linux Bash or MSYS2 UCRT64"
-  default_prompt: "Use $platform-shell to run the required build command in the correct platform shell."
+  short_description: "Run make with Windows MSVC or native Linux tools"
+  default_prompt: "Use $platform-shell to run make in native Windows PowerShell/MSVC or native Linux Bash and validate the selected target."

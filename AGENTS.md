@@ -2,24 +2,23 @@
 
 ## Project Rules
 
-- Use PascalCase for project-owned filenames, resource names, type names, script members, scene nodes, shader uniforms, and static constants. Use lowerCamel for functions, signals, parameters, local variables, IDs, JSON keys, config keys, and dynamic method names. Preserve Godot and tool-required names, including built-in snake_case properties and skill naming conventions.
-- Keep the runtime editor, rendering, dialogs, ZIP handling, and project format in GDScript. Native code is limited to the `OcbSimulation` `RefCounted` GDExtension backend.
-- `thirdparty/godotcpp` is the only external source dependency and must remain a Git submodule. Do not vendor generated Godot bindings.
+- Use PascalCase for project-owned filenames, resource names, type names, members, and static constants. Use lowerCamel for functions, parameters, local variables, IDs, JSON keys, and config keys. Preserve tool-required names and skill naming conventions.
+- Implement the editor in React and TypeScript, UI controls in Mantine, and the board renderer in PixiJS. Tauri hosts the desktop app; Rust owns simulation, project archives, and native services.
+- Keep the simulation core independent of Tauri. Preserve `.ocb` formatVersion 2 and the stable tool IDs. Keep runtime state separate from editable project data.
+- Use locked npm and Cargo dependencies. Do not vendor dependency source or generated bindings.
 
 ## Build And Validation
 
-- Use `make` targets for normal configure, build, test, and clean workflows. Native builds require matching Godot 4.7 headers, `g++`, CMake, and SCons.
-- Validate frontend editor, rendering, or interaction changes with `scripts/tests/FrontendTest.gd`; inspect the resulting `user://capture.png` before handoff.
-- Run the relevant validation before handing work over. Each completed work session must finish with a Git commit whose subject is a title and whose body begins on line two with a concise summary of the completed work.
+- Use `make` for normal initialization, build, run, package, test, benchmark, and clean workflows on both Windows and Linux.
+- Before build, test, configure, package, or platform diagnostics, read and follow `.codex/skills/platform-shell/SKILL.md`.
+- Validate editor, rendering, selector, board-boundary, and interaction changes using `.codex/skills/frontend-tests/SKILL.md`; inspect the relevant generated captures before handoff.
+- Run relevant validation before handing work over. Report native and browser validation separately. Each completed work session must finish with a Git commit whose subject is a title and whose body contains a concise summary of completed work.
 - Preserve user changes in a dirty worktree; do not reset or discard them.
 
 ## Shell And Platform
 
-- Use Bash syntax for project commands. Commands must work in both Linux and MSYS2 environments.
-- Before build, test, configure, package, or platform diagnostics, read and follow `.codex/skills/platform-shell/SKILL.md`.
-- Select the execution shell from the requested `TARGET_PLATFORM`, not from whichever `bash` executable is available. Inspect the Makefile when no target is specified.
-- Run Linux targets in native Linux Bash. Verify `uname -o` reports `GNU/Linux` before Linux-native work.
-- Run Windows targets only in an MSYS2 UCRT64 Bash environment. Verify `MSYSTEM=UCRT64`, `uname -o` reports `Msys`, and `make`, `g++`, and `scons` resolve from MSYS2 before native Windows work.
-- Use `C:\msys64\msys2_shell.cmd -defterm -here -no-start -ucrt64` to bootstrap UCRT64 when the host runner is not already in that environment. Use cmd.exe only for this bootstrap; execute project commands inside UCRT64 Bash.
-- Do not run Windows-native commands through a bare `bash`, WSL, Git Bash, or simulated UCRT64 environment variables.
-- Use `/c/` drive access in MSYS2 and `/` paths in Linux.
+- Select the native execution environment from `TARGET_PLATFORM`; make defaults to the native host platform.
+- Run Windows targets from native PowerShell using native Windows `make.exe`, standard Windows Node.js, and `x86_64-pc-windows-msvc` Rust. `scripts/Platform.ps1` loads the real x64 Visual Studio Developer PowerShell environment and checks MSVC and Windows SDK paths.
+- Windows make recipes dispatch to `scripts/Command.ps1`. Do not use MSYS2, UCRT64, MinGW, Git Bash, WSL, or fabricated platform environment variables for Windows work.
+- Run Linux targets in native Linux Bash. `scripts/Platform.sh` verifies `uname -o` is `GNU/Linux` and checks the Linux Rust and Node hosts; make recipes dispatch to `scripts/Command.sh`.
+- Keep scripts compatible with the native platform. Use native Windows paths in PowerShell and POSIX paths in Linux Bash.

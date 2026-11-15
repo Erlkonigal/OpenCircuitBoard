@@ -1,35 +1,44 @@
 ---
 name: frontend-tests
-description: Run and inspect split Godot frontend test scenarios through scripts/tests/FrontendTest.gd. Use for frontend editor, rendering, tile, selector, board-boundary, or interaction changes before handoff.
+description: Validate the React workspace, PixiJS canvas, and Tauri simulation with behavior tests and inspected captures when changing editor layout, components, inspector, clipboard, canvas boundaries, or interactions.
 ---
 
 # Frontend Tests
 
-`scripts/tests/FrontendTest.gd` is the real-renderer runner for independent scenarios in `scripts/tests/`. It runs the complete behavior suite and the default board scenario when no selector is supplied, then writes `user://capture.png`. Keep each scenario's setup and assertions in one `scripts/tests/*Test.gd` file; keep shared startup, selection, image output, and process exit in the runner. Treat direct inspection of the resulting image as required validation, not as a substitute for relevant automated tests.
+Read `.codex/skills/platform-shell/SKILL.md` first. Use `make` on both platforms: native Windows PowerShell/MSVC or native Linux Bash.
 
-## Capture
+## Run
 
-1. Read `.codex/skills/platform-shell/SKILL.md` and select the required `targetPlatform` shell.
-2. Build the selected target with `make build targetPlatform=<linux|windows>`.
-3. Run the selected target's Godot executable with a real rendering backend. Do not pass `--headless`: it uses the dummy renderer, which cannot read the `SubViewport` texture needed for capture.
+From the repository root:
 
-```bash
-"build/tools/godot-4.7/Godot_v4.7-stable_<platform-executable>" --rendering-method gl_compatibility --path . --script scripts/tests/FrontendTest.gd
+```powershell
+make frontend-test TARGET_PLATFORM=windows
 ```
 
-Use `linux.x86_64` for Linux and `win64.exe` for Windows. The script prints the Godot user-data directory; open `<user-data-directory>/capture.png` with the image viewer.
+```bash
+make frontend-test TARGET_PLATFORM=linux
+```
 
-Pass `-- --frontendTest=<camelCaseId>` to run exactly one registered scenario, for example `-- --frontendTest=selector`. Existing `--captureX` arguments remain compatibility aliases.
+This builds the production frontend and runs unit and rendered browser workflows. Windows uses installed Edge; Linux uses Playwright Chromium. Unit assertions do not validate the canvas.
 
-Run one additional capture before image inspection when the changed surface requires it:
+For IPC, native project services, runtime rendering, or simulation controls, also run:
 
-- Use `-- --frontendTest=selector` (or `--captureSelector`) for selector appearance or positioning.
-- Use `-- --frontendTest=boardEdge` (or `--captureBoardEdge`) for board boundary behavior.
+```powershell
+make test-tools TARGET_PLATFORM=windows
+make native-test TARGET_PLATFORM=windows
+```
+
+Linux uses the corresponding `TARGET_PLATFORM=linux` targets, `WebKitWebDriver`, and a display or Xvfb. `test-tools` installs Tauri WebDriver into `build/TestTools`; Windows also downloads the driver matching installed Edge. Native validation is separate from browser validation.
 
 ## Inspect
 
-- Confirm all placed tiles render, are fully visible, and keep their intended depth order.
-- Check tile shadows and the isolated gate for clipping or incorrect silhouettes.
-- For selector captures, check its visibility, placement, and relationship to the selected tile.
-- For board-edge captures, check that the board remains framed correctly at its boundary.
-- Compare the image directly against the changed visual behavior; report observed defects or state that the applicable checks passed.
+Open the relevant captures with the image viewer before handoff:
+
+- `build/InterfaceCapture.png` and `build/SidebarCapture.png`: layout, component visibility, readable labels, inspector, and toolbar at 1280x720.
+- `build/Capture.png` and `build/SelectorCapture.png`: glyphs, colors, shadows, depth order, and hover placement.
+- `build/SelectionCapture.png`, `build/PastePreviewCapture.png`, and `build/PastedLayeringCapture.png`: selected cells, preview validity, and placement.
+- `build/BoardEdgeCapture.png` and `build/CanvasResizeCapture.png`: fitted bounds, zoom, corner handles, and resizing.
+- `build/ClockSettingsCapture.png`, `build/SelectionSettingsCapture.png`, `build/TraceColorCapture.png`, and `build/BusColorCapture.png`: inspector settings.
+- `build/DesktopCapture.png` and `build/DesktopSimulationCapture.png`: actual Tauri rendering and runtime states.
+
+Fix observed defects and report the checks actually completed. Treat a blank native canvas as a failure even when IPC and toolbar assertions pass.

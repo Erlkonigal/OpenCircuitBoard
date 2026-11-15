@@ -1,0 +1,53 @@
+name: Desktop
+on: [push, pull_request, workflow_dispatch]
+jobs:
+  validate:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            platform: windows
+          - os: ubuntu-24.04
+            platform: linux
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '26'
+          cache: npm
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Windows tools
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          choco install make --no-progress -y
+          rustup toolchain install stable-x86_64-pc-windows-msvc
+      - name: Linux tools
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential pkg-config libwebkit2gtk-4.1-dev webkit2gtk-driver libayatana-appindicator3-dev librsvg2-dev patchelf libssl-dev xvfb
+      - run: make check-platform TARGET_PLATFORM=${{ matrix.platform }}
+      - run: make init TARGET_PLATFORM=${{ matrix.platform }}
+      - name: Chromium
+        if: runner.os == 'Linux'
+        run: npx playwright install --with-deps chromium
+      - run: make test TARGET_PLATFORM=${{ matrix.platform }}
+      - run: make test-tools TARGET_PLATFORM=${{ matrix.platform }}
+      - name: Windows native tests
+        if: runner.os == 'Windows'
+        run: make native-test TARGET_PLATFORM=windows
+      - name: Linux native tests
+        if: runner.os == 'Linux'
+        run: xvfb-run -a make native-test TARGET_PLATFORM=linux
+      - run: make package TARGET_PLATFORM=${{ matrix.platform }}
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: desktop-${{ matrix.platform }}
+          path: |
+            target/release/bundle/
+            build/*Capture.png
