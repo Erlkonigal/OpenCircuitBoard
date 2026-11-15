@@ -178,8 +178,13 @@ impl Runtime {
                 self.Running = true;
                 self.Timeline.clear();
                 self.Bytes = 0;
-                self.Last = Instant::now();
+                let now = Instant::now();
+                self.Last = now;
                 self.Accumulator = 0.;
+                self.Sample = now;
+                self.SampleTicks = 0;
+                self.ComputeSeconds = 0.;
+                self.Tps = 0.;
                 Ok(self.frame(true))
             }
             Action::Pause(id) => {
@@ -237,14 +242,12 @@ impl Runtime {
             _ => Err("SimulationCommandInvalid".into()),
         }
     }
-    fn advance(&mut self) {
+    fn advance(&mut self, now: Instant) {
         if !self.Running {
             return;
         }
-        let now = Instant::now();
         let elapsed = now.duration_since(self.Last).as_secs_f64();
         self.Last = now;
-        self.Accumulator = (self.Accumulator + elapsed).min(0.25);
         let start = Instant::now();
         let mut advanced = 0u64;
         if self.Rate == 0. {
@@ -253,6 +256,8 @@ impl Runtime {
                 advanced += 64;
             }
         } else {
+            // Allow a complete tick at any rate while bounding catch-up after a stall.
+            self.Accumulator = (self.Accumulator + elapsed).min(0.25 + 1. / self.Rate);
             let ticks = (self.Accumulator * self.Rate).floor().min(i32::MAX as f64) as i32;
             let mut remaining = ticks;
             while remaining > 0 && start.elapsed() < Duration::from_micros(2000) {
@@ -267,9 +272,11 @@ impl Runtime {
             self.ComputeSeconds += start.elapsed().as_secs_f64();
         }
         self.SampleTicks += advanced;
-        if self.Sample.elapsed() >= Duration::from_millis(250) {
-            self.Tps = self.SampleTicks as f64 / self.Sample.elapsed().as_secs_f64();
-            if self.SampleTicks > 0 && self.ComputeSeconds > 0. {
+        let sampleSeconds = now.duration_since(self.Sample).as_secs_f64();
+        // Slow rates need a sample containing a tick, rather than empty 250 ms windows.
+        if sampleSeconds >= 0.25 && self.SampleTicks > 0 {
+            self.Tps = self.SampleTicks as f64 / sampleSeconds;
+            if self.ComputeSeconds > 0. {
                 let measured = self.SampleTicks as f64 / self.ComputeSeconds;
                 self.Capacity = if measured < self.Capacity {
                     measured
@@ -279,7 +286,7 @@ impl Runtime {
             }
             self.ComputeSeconds = 0.;
             self.SampleTicks = 0;
-            self.Sample = Instant::now();
+            self.Sample = now;
         }
     }
 }
@@ -351,7 +358,7 @@ fn worker(receiver: Receiver<Request>) {
             Err(RecvTimeoutError::Timeout) => {}
         }
         if let Some(r) = runtime.as_mut() {
-            r.advance();
+            r.advance(Instant::now());
         }
     }
 }
@@ -370,6 +377,95 @@ mod tests {
     }
     fn u32At(frame: &[u8], offset: usize) -> u32 {
         u32::from_le_bytes(frame[offset..offset + 4].try_into().unwrap())
+    }
+    fn running(rate: f64) -> Runtime {
+        let now = Instant::now();
+        let mut runtime = Runtime {
+            Core: SimulationCore::compile(input()).unwrap(),
+            Origin: (0, 0),
+            Id: 1,
+            Sequence: 0,
+            Running: false,
+            Rate: 1.,
+            Pending: None,
+            Timeline: VecDeque::new(),
+            Bytes: 0,
+            Tps: 0.,
+            Capacity: 0.,
+            ComputeSeconds: 0.,
+            Sample: now,
+            SampleTicks: 0,
+            Accumulator: 0.,
+            Last: now,
+        };
+        runtime.handle(Action::Run(1, rate)).unwrap();
+        runtime
+    }
+    #[test]
+    fn limitedRatesKeepFractionalTickProgress() {
+        for rate in [0.5, 1., 2., 3., 4., 7., 60.] {
+            let mut runtime = running(rate);
+            let start = runtime.Last;
+            for step in 1..=100 {
+                let elapsed = Duration::from_millis(step * 100 + 1);
+                runtime.advance(start + elapsed);
+                assert_eq!(
+                    runtime.Core.Tick,
+                    (elapsed.as_secs_f64() * rate).floor() as u64,
+                    "rate {rate} TPS after {elapsed:?}"
+                );
+            }
+        }
+    }
+    #[test]
+    fn lowRateThroughputStaysVisibleBetweenTicks() {
+        let mut runtime = running(1.);
+        let start = runtime.Last;
+        runtime.advance(start + Duration::from_millis(999));
+        assert_eq!(runtime.Core.Tick, 0);
+        runtime.advance(start + Duration::from_millis(1001));
+        assert_eq!(runtime.Core.Tick, 1);
+        for elapsed in [1001, 1251, 1501, 1751, 2001, 2251] {
+            runtime.advance(start + Duration::from_millis(elapsed));
+            assert!(
+                (runtime.Tps - 1.).abs() < 0.01,
+                "{} TPS after {elapsed} ms",
+                runtime.Tps
+            );
+        }
+        assert_eq!(runtime.Core.Tick, 2);
+    }
+    #[test]
+    fn limitedRateCatchUpRemainsBounded() {
+        for rate in [0.5, 1., 3., 4., 60.] {
+            let mut runtime = running(rate);
+            runtime.advance(runtime.Last + Duration::from_secs(30));
+            assert!(runtime.Core.Tick > 0, "rate {rate} TPS must advance");
+            assert!(runtime.Core.Tick as f64 <= (0.25 * rate + 1.).floor());
+            assert!(runtime.Accumulator <= 0.25 + 1. / rate);
+        }
+    }
+    #[test]
+    fn runResetsTimingAndThroughputSamples() {
+        let mut runtime = running(1.);
+        runtime.Sample -= Duration::from_secs(30);
+        runtime.SampleTicks = 120;
+        runtime.ComputeSeconds = 1.;
+        runtime.Tps = 120.;
+        runtime.Accumulator = 0.125;
+        for paused in [false, true] {
+            if paused {
+                runtime.handle(Action::Pause(1)).unwrap();
+            }
+            runtime.handle(Action::Run(1, 2.)).unwrap();
+            assert_eq!(runtime.Sample, runtime.Last);
+            assert_eq!(runtime.SampleTicks, 0);
+            assert_eq!(runtime.ComputeSeconds, 0.);
+            assert_eq!(runtime.Tps, 0.);
+            assert_eq!(runtime.Accumulator, 0.);
+            runtime.advance(runtime.Last + Duration::from_millis(501));
+            assert!((runtime.Tps - 2.).abs() < 0.01);
+        }
     }
     #[test]
     fn sessionFramesAndTimeline() {

@@ -30,6 +30,35 @@ describe('Native circuit workspace', () => {
         await $('button=Back to design').click();
         await expect($('.workspace-status')).toHaveText(expect.stringContaining('Ready'));
     });
+    it('advances at 1-4 TPS and keeps measured throughput visible between ticks', async () => {
+        await $('.command-trigger').click();
+        await $('input[aria-label="Search commands"]').setValue('new circuit');
+        await $('.command-options button').click();
+        await $('button[aria-label="Clock"]').click();
+        await $('[data-testid="board"]').click();
+        const tickSelector = '.simulation-summary .metric-grid > div:nth-child(1) strong';
+        const throughputSelector = '.simulation-summary .metric-grid > div:nth-child(2) strong';
+        for (const rate of [1, 2, 3, 4]) {
+            await $('input[aria-label="Ticks per second"]').setValue(String(rate));
+            await browser.keys('Tab');
+            await $('button=Run circuit').click();
+            await browser.waitUntil(async () => Number(await $(tickSelector).getText()) >= 2 &&
+                await $(throughputSelector).getText() === `${rate} TPS`,
+                { timeout: 6000, interval: 100, timeoutMsg: `${rate} TPS did not advance with measured throughput` });
+            const readings = await browser.execute(async (selector: string) => {
+                const values: string[] = [];
+                for (let sample = 0; sample < 6; sample++) {
+                    values.push(document.querySelector(selector)!.textContent!.trim());
+                    await new Promise(resolve => setTimeout(resolve, 100));
+                }
+                return values;
+            }, throughputSelector);
+            expect(readings).toEqual(Array(6).fill(`${rate} TPS`));
+            await browser.saveScreenshot(buildPath(`DesktopLowSpeed${rate}Capture.png`));
+            await $('button[aria-label="Pause simulation"]').click();
+            await $('button=Back to design').click();
+        }
+    });
     it('updates the rendered latch state through native simulation IPC', async () => {
         await $('.command-trigger').click();
         await $('input[aria-label="Search commands"]').setValue('new circuit');
