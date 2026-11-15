@@ -1,4 +1,4 @@
 interface:
   display_name: "Platform Shell"
-  short_description: "Run make with Windows MSVC or native Linux tools"
-  default_prompt: "Use $platform-shell to run make in native Windows PowerShell/MSVC or native Linux Bash and validate the selected target."
+  short_description: "Run native make workflows with output under build/"
+  default_prompt: "Use $platform-shell to select native PowerShell/MSVC or Linux Bash, run the required make targets, and keep generated files under build/."

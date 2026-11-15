@@ -1,4 +1,4 @@
 interface:
   display_name: "Frontend Tests"
-  short_description: "Test the React workspace and native PixiJS canvas"
-  default_prompt: "Use $frontend-tests to run the workspace behavior and rendering tests with make and inspect the relevant browser and native captures."
+  short_description: "Check editor, LOD rendering, and native simulation"
+  default_prompt: "Use $frontend-tests to choose and run the relevant core, browser, and native desktop tests and inspect captures for the changed behavior."
