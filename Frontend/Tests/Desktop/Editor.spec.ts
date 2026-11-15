@@ -74,4 +74,38 @@ describe('Native circuit workspace', () => {
         }, file, board);
         expect(result).toEqual(board);
     });
+    it('renders joined sides and gradients in the real WebView', async () => {
+        await $('.command-trigger').click();
+        await $('input[aria-label="Search commands"]').setValue('new circuit');
+        await $('.command-options button').click();
+        await $('button[aria-label="Or"]').click();
+        const center = await browser.execute(() => {
+            const rectangle = document.querySelector('[data-testid="board"]')!.getBoundingClientRect();
+            return { x: rectangle.x + rectangle.width / 2, y: rectangle.y + rectangle.height / 2 };
+        });
+        for (const [x, y] of [[0, 0], [1, 0], [0, 1], [1, 1]])
+            await browser.action('pointer').move({ x: Math.round(center.x + x * 32 + 12), y: Math.round(center.y + y * 32 + 12) }).down().up().perform();
+        await browser.action('pointer').move({ x: 100, y: 25 }).perform();
+        await expect($('.workspace-status')).toHaveText(expect.stringContaining('4 cells'));
+        await browser.execute(() => new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
+        const colors = await browser.execute(() => {
+            const canvas = document.querySelector('canvas[aria-label="Circuit board"]') as HTMLCanvasElement;
+            const gl = canvas.getContext('webgl2') || canvas.getContext('webgl');
+            if (!gl) throw Error('WebGL context unavailable');
+            const scale = canvas.width / canvas.getBoundingClientRect().width;
+            return [[8, 138], [24, 138], [48, 138], [72, 138], [88, 138], [112, 138], [16, 132], [16, 146]].map(([x, y]) => {
+                const data = new Uint8Array(4);
+                gl.readPixels(Math.floor(canvas.width / 2 + x * .5 * scale), canvas.height - 1 - Math.floor(canvas.height / 2 + y * .5 * scale), 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, data);
+                return [...data].slice(0, 3);
+            });
+        });
+        for (const channel of [0, 1, 2]) {
+            const values = colors.slice(0, 6).map(color => color[channel]);
+            expect(Math.max(...values) - Math.min(...values)).toBeLessThanOrEqual(3);
+        }
+        const sum = (color: number[]) => color.reduce((total, value) => total + value, 0);
+        expect(sum(colors[6]) - sum(colors[7])).toBeGreaterThan(15);
+        await browser.saveScreenshot(buildPath('DesktopJoinedTilesCapture.png'));
+    });
+
 });

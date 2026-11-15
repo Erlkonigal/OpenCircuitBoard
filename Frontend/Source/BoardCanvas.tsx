@@ -1,7 +1,9 @@
 import { useEffect, useRef } from 'react';
-import { Application, Assets, Container, Graphics, Rectangle, Sprite, Texture } from 'pixi.js';
+import { Application, Container, Graphics } from 'pixi.js';
+import { TileRenderer } from './TileRenderer';
+import { CellSize as Size, ShadowMargin } from './TileGeometry';
 import { useEditor } from './EditorStore';
-import { cellKey, contains, iconUrl, inkColor, lineCells, parseKey, type Grid, type Point, type Tile } from './Model';
+import { cellKey, contains, lineCells, parseKey, type Grid, type Point, type Tile } from './Model';
 export interface CameraCommand {
     action: 'none' | 'in' | 'out' | 'fit';
     sequence: number;
@@ -13,7 +15,6 @@ interface Props {
     onSettings: (x: number, y: number) => void;
     onCursor: (point: Point) => void;
 }
-const Size = 64;
 interface View {
     x: number;
     y: number;
@@ -42,6 +43,7 @@ export function BoardCanvas({ onLatch, onSettings, onCursor, onZoom, cameraComma
         let unsubscribe = () => { };
         let observer: ResizeObserver | undefined;
         let frame = 0;
+        let tileRenderer: TileRenderer | undefined;
         void (async () => {
             await app.init({ background: '#0c1219', antialias: true, resolution: window.devicePixelRatio || 1, autoDensity: true, autoStart: false, preference: 'webgl', preserveDrawingBuffer: true });
             if (disposed) {
@@ -50,45 +52,11 @@ export function BoardCanvas({ onLatch, onSettings, onCursor, onZoom, cameraComma
             }
             element.appendChild(app.canvas);
             app.canvas.setAttribute('aria-label', 'Circuit board');
-            const world = new Container(), board = new Graphics(), shadows = new Container(), tiles = new Container(), overlay = new Graphics();
-            tiles.sortableChildren = true;
+            const world = new Container(), board = new Graphics(), overlay = new Graphics();
+            tileRenderer = new TileRenderer(app.renderer);
             app.stage.addChild(world);
-            world.addChild(board, shadows, tiles, overlay);
-            const textures = new Map<string, Texture>(), icons = new Map<string, Texture>(), visible = new Map<string, {
-                sprite: Sprite;
-                shadow: Sprite;
-                id: string;
-            }>();
-            const shadowGraphics = new Graphics().roundRect(-35, 2, 103, 102, 7).fill({ color: 0x000000, alpha: .12 });
-            const shadowTexture = app.renderer.generateTexture({ target: shadowGraphics, resolution: 2 });
-            shadowGraphics.destroy();
+            world.addChild(board, tileRenderer.Layer, overlay);
             let bucketRevision = -1, buckets = new Map<string, Tile[]>();
-            let activeRuntime = useEditor.getState().Runtime;
-            const makeTexture = (tile: Tile, on: boolean) => {
-                const id = `${tile.toolId}:${on}`;
-                if (textures.has(id))
-                    return textures.get(id)!;
-                const color = inkColor(tile.toolId);
-                const container = new Container();
-                const g = new Graphics();
-                g.poly([-24, 24, 0, 0, 0, 64, -24, 88]).fill({ color, alpha: on ? .48 : .18 });
-                g.poly([-24, 88, 0, 64, 64, 64, 40, 88]).fill({ color, alpha: on ? .4 : .16 });
-                g.rect(0, 0, 64, 64).fill({ color, alpha: on ? 1 : .28 });
-                container.addChild(g);
-                const icon = icons.get(`${tile.toolId}:${on}`);
-                if (icon) {
-                    const sprite = new Sprite(icon);
-                    sprite.width = 64;
-                    sprite.height = 64;
-                    sprite.tint = on ? 0x425766 : 0x7b8997;
-                    sprite.alpha = on ? .65 : .5;
-                    container.addChild(sprite);
-                }
-                const texture = app.renderer.generateTexture({ target: container, frame: new Rectangle(-24, 0, 88, 88), resolution: 2 });
-                container.destroy({ children: true });
-                textures.set(id, texture);
-                return texture;
-            };
             const draw = () => {
                 frame = 0;
                 if (disposed)
@@ -123,55 +91,18 @@ export function BoardCanvas({ onLatch, onSettings, onCursor, onZoom, cameraComma
                     }
                     bucketRevision = s.Revision;
                 }
-                if (activeRuntime !== s.Runtime) {
-                    activeRuntime = s.Runtime;
-                }
                 const desired = new Map<string, Tile>();
                 for (let cy = Math.floor(top / Size / 32) - 1; cy <= Math.floor(bottom / Size / 32) + 1; cy++) {
                     for (let cx = Math.floor(left / Size / 32) - 1; cx <= Math.floor(right / Size / 32) + 1; cx++) {
                         for (const t of buckets.get(`${cx},${cy}`) ?? []) {
-                            if (t.x * Size < right + Size && t.x * Size > left - Size * 2 && t.y * Size < bottom + Size && t.y * Size > top - Size * 2)
+                            if (t.x * Size < right + Size + ShadowMargin && t.x * Size > left - Size * 2 - ShadowMargin && t.y * Size < bottom + Size + ShadowMargin && t.y * Size > top - Size * 2 - ShadowMargin)
                                 desired.set(cellKey(t), t);
                         }
                     }
                 }
-                const previewKeys = new Set(s.Preview.map(cellKey));
-                for (const t of s.Preview) {
-                    if (t.x * Size < right + Size && t.x * Size > left - Size * 2 && t.y * Size < bottom + Size && t.y * Size > top - Size * 2)
-                        desired.set(`preview:${cellKey(t)}`, t);
-                }
-                for (const [key, item] of visible) {
-                    if (!desired.has(key)) {
-                        item.sprite.destroy();
-                        item.shadow.destroy();
-                        visible.delete(key);
-                    }
-                }
-                for (const [key, tile] of desired) {
-                    const preview = key.startsWith('preview:');
-                    const runtime = s.RuntimeGrid;
-                    const index = runtime ? (tile.y - runtime.originY) * runtime.width + tile.x - runtime.originX : -1;
-                    const on = s.Simulating && runtime && tile.x >= runtime.originX && tile.x < runtime.originX + runtime.width && index >= 0 && index < runtime.states.length ? !!runtime.states[index] : tile.isOn;
-                    const id = `${tile.toolId}:${on}`;
-                    let item = visible.get(key);
-                    if (!item) {
-                        const sprite = new Sprite(makeTexture(tile, on)), shadow = new Sprite(shadowTexture);
-                        item = { sprite, shadow, id };
-                        tiles.addChild(sprite);
-                        shadows.addChild(shadow);
-                        visible.set(key, item);
-                    }
-                    else if (item.id !== id) {
-                        item.sprite.texture = makeTexture(tile, on);
-                        item.id = id;
-                    }
-                    item.sprite.position.set(tile.x * Size - 24, tile.y * Size);
-                    item.shadow.position.set(tile.x * Size - 35, tile.y * Size + 2);
-                    item.sprite.zIndex = (preview ? 100000 : 0) - tile.x;
-                    item.sprite.alpha = preview ? .5 : (!s.PasteAnchor && previewKeys.has(key) ? .2 : 1);
-                    item.sprite.tint = preview && !s.PreviewValid ? 0xff657e : 0xffffff;
-                    item.shadow.alpha = preview ? .25 : 1;
-                }
+                tileRenderer!.draw({ occupied: s.Tiles, visible: desired, preview: s.Preview,
+                    moving: s.Preview.length && !s.PasteAnchor ? s.Selection?.cells ?? null : null,
+                    previewValid: s.PreviewValid, simulating: s.Simulating, runtime: s.RuntimeGrid }, v);
                 overlay.clear();
                 const rectangle = (bounds: Grid, color: string, fill = false) => { overlay.rect(bounds.originX * Size, bounds.originY * Size, bounds.width * Size, bounds.height * Size); if (fill)
                     overlay.fill({ color, alpha: .08 }); overlay.stroke({ color, width: 2 / v.zoom }); };
@@ -205,21 +136,14 @@ export function BoardCanvas({ onLatch, onSettings, onCursor, onZoom, cameraComma
             const ids = new Set([...useEditor.getState().Tiles.values()].map(t => t.toolId));
             for (const id of ['cross', 'mesh', 'bus', 'busRed', 'busGreen', 'busYellow', 'busCyan', 'busMagenta', 'read', 'write', 'trace', 'traceRed', 'traceGreen', 'traceBlue', 'traceCyan', 'traceMagenta', 'buffer', 'and', 'or', 'xor', 'not', 'nand', 'nor', 'xnor', 'latch', 'clock', 'led'])
                 ids.add(id);
-            await Promise.all([...ids].flatMap(id => [true, false].map(async (on) => { try {
-                icons.set(`${id}:${on}`, await Assets.load<Texture>(iconUrl(id, on)));
-            }
-            catch { /* The colored face remains available if an asset fails. */ } })));
+            await tileRenderer.loadIcons(ids);
             if (disposed)
                 return;
-            for (const texture of textures.values())
-                texture.destroy();
-            textures.clear();
-            for (const item of visible.values())
-                item.id = '';
+            element.dataset.renderReady = 'true';
             requestDraw.current();
         })().catch(error => { element.dataset.renderError = String(error); useEditor.getState().log(String(error)); });
-        return () => { disposed = true; unsubscribe(); observer?.disconnect(); cancelAnimationFrame(frame); requestDraw.current = () => { }; if (app.renderer)
-            app.destroy(true, { children: true, texture: true }); };
+        return () => { disposed = true; unsubscribe(); observer?.disconnect(); cancelAnimationFrame(frame); requestDraw.current = () => { }; tileRenderer?.destroy(); if (app.renderer)
+            app.destroy(true, { children: true }); };
     }, []);
     useEffect(() => { if (!cameraCommand || cameraCommand.action === 'none')
         return; const v = view.current, g = useEditor.getState().Board.grid, min = minimumZoom(g, v.width, v.height); if (cameraCommand.action === 'fit') {
