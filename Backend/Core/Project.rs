@@ -108,7 +108,56 @@ impl Default for Board {
 #[serde(rename_all = "camelCase")]
 struct Archive {
     FormatVersion: u32,
-    Board: Board,
+    #[serde(flatten)]
+    Project: ProjectDocument,
+}
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct Blueprint {
+    pub Id: String,
+    pub Name: String,
+    pub Width: i32,
+    pub Height: i32,
+    pub Tiles: Vec<Tile>,
+}
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct ProjectDocument {
+    pub Board: Board,
+    #[serde(default)]
+    pub Blueprints: Vec<Blueprint>,
+}
+impl ProjectDocument {
+    pub fn validate(&self) -> Result<(), String> {
+        self.Board.validate()?;
+        let mut ids = std::collections::HashSet::new();
+        for blueprint in &self.Blueprints {
+            let mut cells = std::collections::HashSet::new();
+            if blueprint.Id.trim().is_empty()
+                || !ids.insert(&blueprint.Id)
+                || blueprint.Name.trim().is_empty()
+                || blueprint.Width < 1
+                || blueprint.Height < 1
+                || blueprint.Tiles.is_empty()
+            {
+                return Err("ProjectBlueprintInvalid".into());
+            }
+            for tile in &blueprint.Tiles {
+                if tile.X < 0
+                    || tile.Y < 0
+                    || tile.X >= blueprint.Width
+                    || tile.Y >= blueprint.Height
+                    || !cells.insert((tile.X, tile.Y))
+                    || !ToolIds[1..].contains(&tile.ToolId.as_str())
+                    || (tile.ToolId == "clock" && tile.ClockHoldTicks.is_none_or(|v| v < 1))
+                    || (tile.ToolId == "mesh" && tile.MeshId.is_none_or(|v| v < 1))
+                {
+                    return Err("ProjectBlueprintInvalid".into());
+                }
+            }
+        }
+        Ok(())
+    }
 }
 impl Board {
     pub fn validate(&self) -> Result<(), String> {
@@ -193,7 +242,7 @@ pub fn normalizePath(path: &Path) -> PathBuf {
         PathBuf::from(format!("{}.ocb", path.display()))
     }
 }
-pub fn load(path: &Path) -> Result<Board, String> {
+pub fn load(path: &Path) -> Result<ProjectDocument, String> {
     let file = File::open(path).map_err(|_| "ProjectFileMissing")?;
     let mut zip = ZipArchive::new(file).map_err(|_| "ProjectOpenFailed")?;
     let entry = zip
@@ -231,11 +280,21 @@ pub fn load(path: &Path) -> Result<Board, String> {
             tile.MeshId = Some(board.MeshId);
         }
     }
-    board.validate()?;
-    Ok(board)
+    let blueprints = match value.get("blueprints") {
+        Some(value) => {
+            serde_json::from_value(value.clone()).map_err(|_| "ProjectBlueprintInvalid")?
+        }
+        None => vec![],
+    };
+    let project = ProjectDocument {
+        Board: board,
+        Blueprints: blueprints,
+    };
+    project.validate()?;
+    Ok(project)
 }
-pub fn save(path: &Path, board: &Board) -> Result<PathBuf, String> {
-    board.validate()?;
+pub fn save(path: &Path, project: &ProjectDocument) -> Result<PathBuf, String> {
+    project.validate()?;
     let path = normalizePath(path);
     let parent = path.parent().unwrap_or(Path::new("."));
     let name = path
@@ -259,16 +318,20 @@ pub fn save(path: &Path, board: &Board) -> Result<PathBuf, String> {
             SimpleFileOptions::default().compression_method(zip::CompressionMethod::Deflated),
         )
         .map_err(|_| "ProjectSaveWriteFailed")?;
-        let mut canonical = board.clone();
-        canonical.Tiles.sort_by_key(|t| (t.Y, t.X));
-        zip.write_all(
-            &serde_json::to_vec_pretty(&Archive {
-                FormatVersion: 2,
-                Board: canonical,
-            })
-            .map_err(|_| "ProjectFormatInvalid")?,
-        )
-        .map_err(|_| "ProjectSaveWriteFailed")?;
+        let mut canonical = project.clone();
+        canonical.Board.Tiles.sort_by_key(|t| (t.Y, t.X));
+        for blueprint in &mut canonical.Blueprints {
+            blueprint.Tiles.sort_by_key(|t| (t.Y, t.X));
+        }
+        let text = serde_json::to_vec(&Archive {
+            FormatVersion: 2,
+            Project: canonical,
+        })
+        .map_err(|_| "ProjectFormatInvalid")?;
+        if text.len() > 128 * 1024 * 1024 {
+            return Err("ProjectFormatInvalid".into());
+        }
+        zip.write_all(&text).map_err(|_| "ProjectSaveWriteFailed")?;
         zip.finish()
             .map_err(|_| "ProjectSaveWriteFailed")?
             .sync_all()

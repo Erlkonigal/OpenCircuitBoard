@@ -21,7 +21,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
         with:
-          workspaces: Backend -> target
+          workspaces: Backend -> ../build/Backend
       - name: Windows tools
         if: runner.os == 'Windows'
         shell: pwsh
@@ -38,7 +38,7 @@ jobs:
       - name: Chromium
         if: runner.os == 'Linux'
         working-directory: Frontend
-        run: npx playwright install --with-deps chromium
+        run: node Tools/Command.mjs browser-install
       - run: make test TARGET_PLATFORM=${{ matrix.platform }}
       - run: make test-tools TARGET_PLATFORM=${{ matrix.platform }}
       - name: Windows native tests
@@ -53,5 +53,5 @@ jobs:
         with:
           name: desktop-${{ matrix.platform }}
           path: |
-            Backend/target/release/bundle/
+            build/Backend/release/bundle/
             build/*Capture.png

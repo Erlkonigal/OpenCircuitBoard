@@ -1,4 +1,5 @@
-import { defineConfig } from '@playwright/test';
+import { createRequire } from 'node:module';
+const { defineConfig } = createRequire(new URL('../build/Dependencies/package.json', import.meta.url))('@playwright/test') as typeof import('@playwright/test');
 import { buildPath } from './Tests/Paths';
 
 export default defineConfig({

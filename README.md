@@ -6,6 +6,10 @@ The workspace has a searchable component library, a central canvas, and an inspe
 
 Click or drag to draw. Right-drag erases; Shift-drag selects. Drag within a selection to move it. Ctrl+C/X/V copies, cuts, and previews a paste. Click to place; Esc cancels. Middle-drag pans and the wheel zooms. Ctrl+Z undoes, Ctrl+U or Ctrl+Shift+Z redoes. The inspector edits selected components, or the defaults for the active tool. Runtime states never overwrite the editable circuit.
 
+Blueprints are flat ink snapshots saved with the current project. Save a selection in the inspector or save a clipboard item; the Blueprints panel supports search, rename, and delete. Clicking a blueprint copies its snapshot into clipboard history while keeping the panel open. Each Ctrl+V starts an ordinary paste preview, and each placement becomes independent editable cells. Blueprint management and placement support undo/redo.
+
+The toolbar's 2D / 2.5D control applies to the board and both preview libraries and remembers the choice on this device. At 12 CSS pixels per cell and above, previews show ink symbols. Between 2 and 12 pixels they use color chunks with batched depth in 2.5D. Below 2 pixels both modes use area-weighted color and coverage maps. The sparse 64-cell chunk index and worker-built color pyramid update affected chunks and ancestors; a shared 64 MiB LRU bounds color raster and thumbnail caches. Zoom uses proportional steps around the pointer.
+
 ## Repository layout
 
 - `Frontend/Source`: React editor, PixiJS renderer, and TypeScript state and IPC clients.
@@ -15,7 +19,7 @@ Click or drag to draw. Right-drag erases; Shift-drag selects. Drag within a sele
 - `Backend/Desktop`: Tauri host, native commands, application icons, and desktop configuration; the Cargo workspace and lockfile live in `Backend/`.
 - `scripts/` and `Makefile`: shared build entrypoints. Shared test tools and inspected captures are generated in `build/`.
 
-Frontend dependencies and output are `Frontend/node_modules/` and `Frontend/dist/`. Rust binaries and installers are generated under `Backend/target/`.
+All build results live under root `build/`: frontend assets in `build/Frontend/`, Rust intermediates, binaries and installers in `build/Backend/`, Vite/Vitest caches in `build/Cache/`, Tauri schemas in `build/Backend/TauriSchemas/`, and test captures/reports in their existing `build/` locations. npm installs locked frontend dependencies in `build/Dependencies/node_modules/`; the frontend command runner, TypeScript and Vite resolve them from there without links inside source folders. Use `make init` after a full clean. Cargo uses the root `.cargo/config.toml` so direct Cargo and Tauri commands use the same output directory.
 
 ## Build and run
 
@@ -75,4 +79,4 @@ The core tests replay 682 recorded C++ state/delta comparisons, plus snapshots, 
 
 ## Project format
 
-Existing `.ocb` v2 files remain ZIP archives with `project.json` and `formatVersion: 2`. Grid bounds, per-cell clock/mesh settings, latch initial states, and editor defaults are preserved. Loading completes validation before replacing the open board. Recent projects are stored in `RecentProjects.json` in the native application data directory.
+Existing `.ocb` v2 files remain ZIP archives with `project.json` and `formatVersion: 2`. Grid bounds, per-cell clock/mesh settings, latch initial states, and editor defaults are preserved. Loading completes validation before replacing the open board. The optional top-level `blueprints` array contains `{ id, name, width, height, tiles }` snapshots using relative cell coordinates and explicit clock/mesh parameters. Earlier v2 files default to an empty blueprint list. Native project IPC exchanges `{ board, blueprints }`; simulation still receives the board alone. Display mode is stored in application-origin localStorage and stays outside project files. Recent projects are stored in `RecentProjects.json` in the native application data directory.

@@ -35,12 +35,26 @@ fn roundTripAndAtomicOverwrite() {
             MeshId: Some(17),
         },
     ];
-    save(&file, &board).unwrap();
+    save(
+        &file,
+        &ProjectDocument {
+            Board: board.clone(),
+            Blueprints: vec![],
+        },
+    )
+    .unwrap();
     board.Tiles.sort_by_key(|t| (t.Y, t.X));
-    assert_eq!(load(&file).unwrap(), board);
+    assert_eq!(load(&file).unwrap().Board, board);
     board.LatchInitialState = false;
-    save(&file, &board).unwrap();
-    assert_eq!(load(&file).unwrap(), board);
+    save(
+        &file,
+        &ProjectDocument {
+            Board: board.clone(),
+            Blueprints: vec![],
+        },
+    )
+    .unwrap();
+    assert_eq!(load(&file).unwrap().Board, board);
     fs::remove_file(file).unwrap();
 }
 #[test]
@@ -50,7 +64,7 @@ fn versionAndLegacyDefaults() {
         &file,
         &serde_json::json!({"formatVersion":2,"board":{"selectedTool":"or","clockHoldTicks":4,"meshId":7,"tiles":[{"x":0,"y":0,"toolId":"clock"}]}}),
     );
-    let board = load(&file).unwrap();
+    let board = load(&file).unwrap().Board;
     assert_eq!(board.Grid, Grid::default());
     assert_eq!(board.Tiles[0].ClockHoldTicks, Some(4));
     archive(&file, &serde_json::json!({"formatVersion":1,"board":{}}));
@@ -61,7 +75,14 @@ fn versionAndLegacyDefaults() {
 fn invalidBoardDoesNotReplaceExistingFile() {
     let file = path("invalid");
     let mut board = Board::default();
-    save(&file, &board).unwrap();
+    save(
+        &file,
+        &ProjectDocument {
+            Board: board.clone(),
+            Blueprints: vec![],
+        },
+    )
+    .unwrap();
     let before = fs::read(&file).unwrap();
     board.Tiles = vec![Tile {
         X: 100,
@@ -71,7 +92,16 @@ fn invalidBoardDoesNotReplaceExistingFile() {
         ClockHoldTicks: None,
         MeshId: None,
     }];
-    assert!(save(&file, &board).is_err());
+    assert!(
+        save(
+            &file,
+            &ProjectDocument {
+                Board: board.clone(),
+                Blueprints: vec![]
+            }
+        )
+        .is_err()
+    );
     assert_eq!(fs::read(&file).unwrap(), before);
     fs::remove_file(file).unwrap();
 }
@@ -120,8 +150,62 @@ fn missingTileStatesInheritLegacyDefaults() {
         &file,
         &serde_json::json!({"formatVersion":2,"board":{"latchInitialState":false,"tiles":[{"x":0,"y":0,"toolId":"latch"},{"x":1,"y":0,"toolId":"mesh"}]}}),
     );
-    let board = load(&file).unwrap();
+    let board = load(&file).unwrap().Board;
     assert!(!board.Tiles[0].IsOn);
     assert!(!board.Tiles[1].IsOn);
+    fs::remove_file(file).unwrap();
+}
+
+#[test]
+fn blueprintsRoundTripAndRejectInvalidSnapshots() {
+    let file = path("blueprints");
+    let mut project = ProjectDocument::default();
+    project.Blueprints.push(Blueprint {
+        Id: "clock-pair".into(),
+        Name: "Clock pair".into(),
+        Width: 3,
+        Height: 2,
+        Tiles: vec![
+            Tile {
+                X: 0,
+                Y: 0,
+                ToolId: "clock".into(),
+                IsOn: false,
+                ClockHoldTicks: Some(9),
+                MeshId: None,
+            },
+            Tile {
+                X: 2,
+                Y: 1,
+                ToolId: "mesh".into(),
+                IsOn: false,
+                ClockHoldTicks: None,
+                MeshId: Some(17),
+            },
+        ],
+    });
+    save(&file, &project).unwrap();
+    assert_eq!(load(&file).unwrap(), project);
+    let original = fs::read(&file).unwrap();
+    for invalid in 0..5 {
+        let mut bad = project.clone();
+        match invalid {
+            0 => bad.Blueprints[0].Tiles[0].ClockHoldTicks = None,
+            1 => bad.Blueprints[0].Tiles[0].X = -1,
+            2 => bad.Blueprints[0].Name = " ".into(),
+            3 => bad.Blueprints.push(bad.Blueprints[0].clone()),
+            _ => {
+                let tile = bad.Blueprints[0].Tiles[0].clone();
+                bad.Blueprints[0].Tiles.push(tile);
+            }
+        }
+        assert_eq!(save(&file, &bad).unwrap_err(), "ProjectBlueprintInvalid");
+        assert_eq!(fs::read(&file).unwrap(), original);
+    }
+    archive(
+        &file,
+        &serde_json::json!({"formatVersion":2,"board":{},"blueprints":[{"id":"x","name":"Invalid","width":1,"height":1,"tiles":[]}]}),
+    );
+    assert_eq!(load(&file).unwrap_err(), "ProjectBlueprintInvalid");
     fs::remove_file(file).unwrap();
 }

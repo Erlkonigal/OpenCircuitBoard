@@ -18,7 +18,7 @@ fn run() -> Result<(), String> {
     };
     let ticks = value("--ticks", 1024)?.clamp(1, i32::MAX as u32);
     let samples = value("--samples", 5)?.clamp(1, 100);
-    let board = Project::load(Path::new(file))?;
+    let board = Project::load(Path::new(file))?.Board;
     let (input, origin) = board.compileInput()?;
     let start = Instant::now();
     let mut core = SimulationCore::compile(input.clone()).map_err(|e| e.ErrorReason)?;

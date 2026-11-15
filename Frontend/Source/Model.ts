@@ -31,6 +31,15 @@ export interface ClipboardItem {
     height: number;
     tiles: Tile[];
 }
+export interface Blueprint extends ClipboardItem {
+    id: string;
+    name: string;
+}
+export interface ProjectDocument {
+    board: Board;
+    blueprints: Blueprint[];
+}
+export type RenderMode = '2d' | '2.5d';
 export interface Ink {
     id: string;
     title: string;
@@ -82,4 +91,33 @@ export function validateBoard(value: unknown): Board {
         }
     } return value; });
     return result;
+}
+
+export function validateProject(value: unknown): ProjectDocument {
+    const project = value as ProjectDocument;
+    const board = validateBoard(project?.board);
+    if (project.blueprints !== undefined && !Array.isArray(project.blueprints))
+        throw Error('ProjectBlueprintInvalid');
+    const ids = new Set<string>();
+    const blueprints = (project.blueprints ?? []).map(blueprint => {
+        if (!blueprint || typeof blueprint.id !== 'string' || !blueprint.id.trim() || ids.has(blueprint.id)
+            || typeof blueprint.name !== 'string' || !blueprint.name.trim()
+            || ![blueprint.width, blueprint.height].every(n => Number.isInteger(n) && n > 0 && n <= 2147483647)
+            || !Array.isArray(blueprint.tiles) || !blueprint.tiles.length)
+            throw Error('ProjectBlueprintInvalid');
+        ids.add(blueprint.id);
+        const cells = new Set<string>();
+        const tiles = blueprint.tiles.map(tile => {
+            if (!tile || !Number.isInteger(tile.x) || !Number.isInteger(tile.y) || tile.x < 0 || tile.y < 0
+                || tile.x >= blueprint.width || tile.y >= blueprint.height || cells.has(cellKey(tile))
+                || !ToolIds.slice(1).includes(tile.toolId) || typeof tile.isOn !== 'boolean'
+                || (tile.toolId === 'clock' && (!Number.isInteger(tile.clockHoldTicks) || tile.clockHoldTicks! < 1 || tile.clockHoldTicks! > 2147483647))
+                || (tile.toolId === 'mesh' && (!Number.isInteger(tile.meshId) || tile.meshId! < 1 || tile.meshId! > 2147483647)))
+                throw Error('ProjectBlueprintInvalid');
+            cells.add(cellKey(tile));
+            return { ...tile };
+        });
+        return { id: blueprint.id, name: blueprint.name.trim(), width: blueprint.width, height: blueprint.height, tiles };
+    });
+    return { board, blueprints };
 }

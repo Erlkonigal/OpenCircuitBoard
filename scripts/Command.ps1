@@ -24,7 +24,7 @@ function invokeCargo([string[]]$arguments) {
 }
 function invokeTauri([string[]]$arguments) {
     Push-Location -LiteralPath (Join-Path $ocbRoot 'Backend/Desktop')
-    try { invokeChecked 'node.exe' (@((Join-Path $ocbRoot 'Frontend/node_modules/@tauri-apps/cli/tauri.js')) + $arguments) }
+    try { invokeChecked 'node.exe' (@((Join-Path $ocbRoot 'build/Dependencies/node_modules/@tauri-apps/cli/tauri.js')) + $arguments) }
     finally { Pop-Location }
 }
 function splitArguments([string]$value) {
@@ -43,13 +43,13 @@ switch ($Action) {
     'format' { invokeCargo @('fmt', '--all') }
     'test-tools' { & (Join-Path $PSScriptRoot 'TestTools.ps1') }
     'frontend-build' { invokeFrontend @('run', 'build') }
-    'init' { invokeFrontend @('ci'); invokeCargo @('fetch', '--locked', '--target', 'x86_64-pc-windows-msvc') }
+    'init' { invokeFrontend @('run', 'init'); invokeCargo @('fetch', '--locked', '--target', 'x86_64-pc-windows-msvc') }
     'build' { invokeTauri $ocbBuildArgs }
     'run' {
         if ($BuildType -eq 'Debug') { invokeTauri @('dev') }
         else {
             invokeTauri $ocbBuildArgs
-            invokeChecked (Join-Path $ocbRoot 'Backend/target/release/OpenCircuitBoard.exe') @()
+            invokeChecked (Join-Path $ocbRoot 'build/Backend/release/OpenCircuitBoard.exe') @()
         }
     }
     'package' { invokeTauri @('build', '--bundles', 'nsis') }
@@ -69,7 +69,7 @@ switch ($Action) {
     }
     'browser-test' { invokeFrontend @('run','build'); invokeFrontend (@('run', 'test:browser', '--', '--config', 'Playwright.config.ts') + @(splitArguments $env:FRONTEND_TEST)) }
     'native-ui-test' {
-        if (-not (Test-Path -LiteralPath (Join-Path $ocbRoot 'Backend/target/release/OpenCircuitBoard.exe'))) { throw 'Build the release app before testing an existing binary.' }
+        if (-not (Test-Path -LiteralPath (Join-Path $ocbRoot 'build/Backend/release/OpenCircuitBoard.exe'))) { throw 'Build the release app before testing an existing binary.' }
         invokeFrontend @('run', 'test:desktop')
     }
     'native-test' {
@@ -85,7 +85,7 @@ switch ($Action) {
     }
     'clean' {
         invokeCargo @('clean')
-        foreach ($ocbDirectory in @('build', 'Frontend/dist', 'Frontend/test-results', 'Frontend/playwright-report')) {
+        foreach ($ocbDirectory in @('build')) {
             $ocbTarget = [IO.Path]::GetFullPath((Join-Path $ocbRoot $ocbDirectory))
             if (-not $ocbTarget.StartsWith($ocbRoot + [IO.Path]::DirectorySeparatorChar, [StringComparison]::OrdinalIgnoreCase)) { throw 'Clean target is outside the workspace.' }
             if (Test-Path -LiteralPath $ocbTarget) { Remove-Item -LiteralPath $ocbTarget -Recurse -Force }

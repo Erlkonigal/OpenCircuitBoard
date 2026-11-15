@@ -1,4 +1,4 @@
-import { test, expect, type Page } from '@playwright/test';
+import { test, expect, type Page } from '../BrowserTest';
 import { buildPath } from '../Paths';
 async function ready(page: Page) {
     await page.goto('/');

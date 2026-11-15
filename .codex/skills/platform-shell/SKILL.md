@@ -18,7 +18,7 @@ make core-test TARGET_PLATFORM=windows
 make frontend-test TARGET_PLATFORM=windows
 ```
 
-Native Windows `make.exe` dispatches recipes to `scripts/Command.ps1`. The dispatcher runs npm from `Frontend/`, Cargo from `Backend/`, and Tauri from `Backend/Desktop/`; dependencies and generated output stay with their workspace. That entrypoint loads `scripts/Platform.ps1`, discovers Visual Studio Build Tools through `vswhere`, and imports the x64 Developer PowerShell environment without changing the working directory or opening a window. A complete Visual Studio IDE is unnecessary.
+Native Windows `make.exe` dispatches recipes to `scripts/Command.ps1`. The dispatcher runs npm from `Frontend/`, Cargo from `Backend/`, and Tauri from `Backend/Desktop/`; npm dependencies go to `build/Dependencies/node_modules/` through the frontend command runner and build output goes to root `build/Frontend/` and `build/Backend/` through Vite and the root Cargo configuration. That entrypoint loads `scripts/Platform.ps1`, discovers Visual Studio Build Tools through `vswhere`, and imports the x64 Developer PowerShell environment without changing the working directory or opening a window. A complete Visual Studio IDE is unnecessary.
 
 Before native work, the platform helper must confirm:
 

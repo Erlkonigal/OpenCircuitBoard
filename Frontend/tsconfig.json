@@ -18,8 +18,21 @@
     "types": [
       "vite/client",
       "node",
+      "react",
+      "react-dom",
+      "mocha",
       "@wdio/globals/types",
       "@wdio/mocha-framework"
+    ],
+    "paths": {
+      "*": [
+        "../build/Dependencies/node_modules/@types/*",
+        "../build/Dependencies/node_modules/*"
+      ]
+    },
+    "typeRoots": [
+      "../build/Dependencies/node_modules/@types",
+      "../build/Dependencies/node_modules"
     ]
   },
   "include": [

@@ -175,3 +175,15 @@ kbd { font: 10px "Cascadia Code", Consolas, monospace; color: var(--muted); whit
 @media (max-width: 1190px) { .mode-detail, .brand-beta, .rate-label { display: none; } .command-trigger { min-width: 155px; } .library-panel { width: 220px; } .inspector-panel { width: 225px; } .workspace-mode { margin-left: 0; } }
 
 .workspace-toolbar > .mantine-Button-root[data-variant="filled"] { color: #10382c; }
+
+.blueprint-list { position: relative; margin: 10px; }
+.blueprint-entry { left: 0; right: 0; border: 1px solid #29404c; border-radius: 6px; background: #14212b; overflow: hidden; }
+.blueprint-use { border: 0; background: transparent; color: #abc3d1; padding: 9px 10px; width: 100%; text-align: left; cursor: pointer; }
+.blueprint-use:hover { background: #20332f; }
+.blueprint-use strong { display: block; max-width: calc(100% - 46px); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; }
+.blueprint-use span { font-size: 10px; color: #7997a5; }
+.blueprint-actions { position: absolute; top: 6px; right: 6px; display: flex; gap: 2px; }
+.clipboard-thumbnail { width: 100%; height: 92px; object-fit: contain; }
+.render-mode { flex-shrink: 0; }
+
+.blueprint-use[aria-pressed="true"] { background: #1d342e; box-shadow: inset 2px 0 #7edfc0; }

@@ -1,4 +1,4 @@
-import { test, expect, type Page } from '@playwright/test';
+import { test, expect, type Page } from '../BrowserTest';
 import { buildPath } from '../Paths';
 
 type Point = { x: number; y: number };

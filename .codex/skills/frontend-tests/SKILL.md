@@ -19,7 +19,7 @@ make frontend-test TARGET_PLATFORM=windows
 make frontend-test TARGET_PLATFORM=linux
 ```
 
-This builds the production frontend and runs unit and rendered browser workflows. Frontend manifests, configuration, source, assets, and UI tests live under `Frontend/`; the make dispatcher selects that working directory automatically. Native tests launch `Backend/target/release/OpenCircuitBoard` (with `.exe` on Windows). Capture paths resolve against the repository root and stay in `build/`. Windows uses installed Edge; Linux uses Playwright Chromium. Unit assertions do not validate the canvas.
+This builds the production frontend and runs unit and rendered browser workflows. Frontend manifests, configuration, source, assets, and UI tests live under `Frontend/`; the make dispatcher selects that working directory automatically. Native tests launch `build/Backend/release/OpenCircuitBoard` (with `.exe` on Windows). Run `make init` to install locked npm dependencies into `build/Dependencies/node_modules/`; keep source directories free of dependency folders and links. Build output stays under root `build/`: frontend assets in `build/Frontend/` and Cargo/Tauri output in `build/Backend/`. Capture paths also resolve against the repository root and stay in `build/`. Windows uses installed Edge; Linux uses Playwright Chromium. Unit assertions do not validate the canvas.
 
 For IPC, native project services, runtime rendering, or simulation controls, also run:
 

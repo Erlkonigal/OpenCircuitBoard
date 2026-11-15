@@ -1,7 +1,7 @@
 #![allow(non_snake_case)]
 use ocb_core::{
     CompileInput,
-    Project::{self, Board},
+    Project::{self, ProjectDocument},
     Session::{Action, Session},
 };
 use std::{
@@ -39,7 +39,10 @@ fn recentProjects(services: State<'_, Services>) -> Vec<String> {
         .unwrap_or_default()
 }
 #[tauri::command]
-async fn openProject(path: String, services: State<'_, Services>) -> Result<Board, String> {
+async fn openProject(
+    path: String,
+    services: State<'_, Services>,
+) -> Result<ProjectDocument, String> {
     let file = PathBuf::from(&path);
     let board = tauri::async_runtime::spawn_blocking(move || Project::load(&file))
         .await
@@ -50,11 +53,11 @@ async fn openProject(path: String, services: State<'_, Services>) -> Result<Boar
 #[tauri::command]
 async fn saveProject(
     path: String,
-    board: Board,
+    project: ProjectDocument,
     services: State<'_, Services>,
 ) -> Result<String, String> {
     let path =
-        tauri::async_runtime::spawn_blocking(move || Project::save(&PathBuf::from(path), &board))
+        tauri::async_runtime::spawn_blocking(move || Project::save(&PathBuf::from(path), &project))
             .await
             .map_err(|e| e.to_string())??
             .to_string_lossy()

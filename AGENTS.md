@@ -6,6 +6,8 @@
 - Implement the editor in React and TypeScript, UI controls in Mantine, and the board renderer in PixiJS. Tauri hosts the desktop app; Rust owns simulation, project archives, and native services.
 - Keep frontend source, assets, npm manifests, configuration, and UI tests in `Frontend/`. Keep the Cargo workspace, simulation core, native services, and backend fixtures in `Backend/`. Root build scripts coordinate both workspaces.
 - Keep the simulation core independent of Tauri. Preserve `.ocb` formatVersion 2 and the stable tool IDs. Keep runtime state separate from editable project data.
+- Keep installed npm dependencies in `build/Dependencies/node_modules/`; do not create dependency directories or links inside `Frontend/` or `Backend/`.
+- Put frontend build assets in `build/Frontend/`, Cargo/Tauri build output in `build/Backend/`, and generated test reports/captures under root `build/`. Keep the configured output paths aligned across scripts, tests, and CI.
 - Use locked npm and Cargo dependencies. Do not vendor dependency source or generated bindings.
 
 ## Build And Validation

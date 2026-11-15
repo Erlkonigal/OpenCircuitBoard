@@ -4,13 +4,14 @@
   "version": "0.1.0",
   "type": "module",
   "scripts": {
-    "dev": "vite --config Vite.config.ts --host 127.0.0.1",
-    "build": "tsc --noEmit && vite build --config Vite.config.ts",
-    "test": "vitest run --config Vite.config.ts",
-    "tauri": "cd ../Backend/Desktop && tauri",
-    "test:desktop": "wdio run Tests/Wdio.conf.ts",
-    "test:browser": "playwright test",
-    "preview": "vite preview --config Vite.config.ts --host 127.0.0.1 --port 1421 --strictPort"
+    "init": "node Tools/Command.mjs init",
+    "dev": "node Tools/Command.mjs dev",
+    "build": "node Tools/Command.mjs build",
+    "test": "node Tools/Command.mjs test",
+    "tauri": "node Tools/Command.mjs tauri",
+    "test:desktop": "node Tools/Command.mjs desktop",
+    "test:browser": "node Tools/Command.mjs browser",
+    "preview": "node Tools/Command.mjs preview"
   },
   "dependencies": {
     "@mantine/core": "^8.3.0",

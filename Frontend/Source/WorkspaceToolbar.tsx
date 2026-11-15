@@ -1,5 +1,6 @@
 import type { ReactNode } from 'react';
-import { ActionIcon, Button, Menu, NumberInput, Slider, Tooltip } from '@mantine/core';
+import { useShallow } from 'zustand/react/shallow';
+import { ActionIcon, Button, Menu, NumberInput, SegmentedControl, Slider, Tooltip } from '@mantine/core';
 import { ChevronDown, Command, FilePlus2, FolderOpen, History, Layers3, PanelLeftClose, PanelLeftOpen, PanelRightClose, PanelRightOpen, Pause, Play, Redo2, RotateCcw, Save, Settings2, SkipBack, SkipForward, Undo2, Zap } from 'lucide-react';
 import { useEditor } from './EditorStore';
 import type { Frame } from './Native';
@@ -29,7 +30,7 @@ interface Props {
     onSearch: () => void;
 }
 export function WorkspaceToolbar(props: Props) {
-    const state = useEditor();
+    const state = useEditor(useShallow(s => ({ Path: s.Path, Recent: s.Recent, LeftOpen: s.LeftOpen, RightOpen: s.RightOpen, Undo: s.Undo, Redo: s.Redo, undo: s.undo, redo: s.redo, Simulating: s.Simulating, Tiles: s.Tiles, RenderMode: s.RenderMode, setRenderMode: s.setRenderMode })));
     const name = state.Path.split(/[\\/]/).at(-1) || 'Untitled circuit';
     const capacity = Math.max(2, Math.floor(props.frame?.capacity ?? 1000000));
     return <>
@@ -46,6 +47,8 @@ export function WorkspaceToolbar(props: Props) {
       <div className="toolbar-cluster"><IconControl label="Toggle component library" onClick={() => useEditor.setState({ LeftOpen: !state.LeftOpen })}>{state.LeftOpen ? <PanelLeftClose size={16}/> : <PanelLeftOpen size={16}/>}</IconControl><span className="toolbar-divider"/><IconControl label="Undo (Ctrl+Z)" disabled={!state.Undo.length || state.Simulating} onClick={state.undo}><Undo2 size={15}/></IconControl><IconControl label="Redo (Ctrl+U)" disabled={!state.Redo.length || state.Simulating} onClick={state.redo}><Redo2 size={15}/></IconControl></div>
       <div className="workspace-mode"><span className={state.Simulating ? 'mode-dot running' : 'mode-dot'}/>{state.Simulating ? 'Simulation' : 'Design'}<span className="mode-detail">{state.Simulating ? 'Circuit is read-only' : `${state.Tiles.size.toLocaleString()} components`}</span></div>
       <div className="toolbar-space"/>
+      <SegmentedControl className="render-mode" aria-label="Render mode" size="xs" value={state.RenderMode} data={[{ value: '2d', label: '2D' }, { value: '2.5d', label: '2.5D' }]} onChange={value => state.setRenderMode(value as '2d' | '2.5d')}/>
+      <span className="toolbar-divider"/>
       <div className="simulation-transport"><IconControl label="Previous tick" disabled={!props.frame || props.frame.running || props.frame.tick <= props.frame.first} onClick={() => props.onCommand('seek', Math.max(props.frame!.first, props.frame!.tick - props.step))}><SkipBack size={15}/></IconControl><IconControl label={props.frame?.running ? 'Pause simulation' : 'Run simulation'} disabled={!state.Simulating || props.starting} onClick={() => props.onCommand(props.frame?.running ? 'pause' : 'run', props.fullSpeed ? 0 : props.rate)}>{props.frame?.running ? <Pause size={15}/> : <Play size={15}/>}</IconControl><IconControl label="Next tick" disabled={!props.frame || props.frame.running} onClick={() => props.onCommand('step', props.step)}><SkipForward size={15}/></IconControl><NumberInput aria-label="Step length" size="xs" value={props.step} min={1} max={16} allowDecimal={false} className="step-count" disabled={!state.Simulating || !!props.frame?.running} onChange={value => { if (typeof value === 'number')
         props.onStep(value); }}/><IconControl label="Reset simulation" disabled={!state.Simulating} onClick={() => props.onCommand('reset')}><RotateCcw size={14}/></IconControl></div>
       <span className="toolbar-divider"/>

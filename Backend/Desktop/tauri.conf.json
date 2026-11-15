@@ -13,7 +13,7 @@
       "cwd": "../../Frontend",
       "script": "npm run build"
     },
-    "frontendDist": "../../Frontend/dist"
+    "frontendDist": "../../build/Frontend"
   },
   "app": {
     "windows": [

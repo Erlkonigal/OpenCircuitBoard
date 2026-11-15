@@ -1,7 +1,7 @@
 import { invoke } from '@tauri-apps/api/core';
 import { open, save } from '@tauri-apps/plugin-dialog';
 import { useEditor } from './EditorStore';
-import { ToolIds, type Board } from './Model';
+import { ToolIds, type Board, type ProjectDocument } from './Model';
 export const isDesktop = () => !!(window as Window & {
     __TAURI_INTERNALS__?: unknown;
 }).__TAURI_INTERNALS__;
@@ -57,23 +57,34 @@ export function encodeBoard(board: Board) { const tiles = board.tiles; let minX 
 export async function compile(board: Board) { if (!isDesktop())
     throw Error('Simulation requires the Tauri desktop app. Start it with make run.'); return decodeFrame(await invoke<ArrayBuffer>('compileGrid', encodeBoard(board))); }
 export async function simulation(action: string, session: number, value = 0) { const bytes = await invoke<ArrayBuffer>('simulationCommand', { action, session, value }); return action === 'release' ? null : decodeFrame(bytes); }
+let runtimeGeneration = 0;
 export function applyFrame(frame: Frame) {
     if (frame.full) {
-        useEditor.setState({ RuntimeGrid: { width: frame.width, height: frame.height, originX: frame.originX, originY: frame.originY, states: frame.data as Uint8Array } });
+        const chunksWide = Math.floor((frame.originX + frame.width - 1) / 64) - Math.floor(frame.originX / 64) + 1;
+        const chunksHigh = Math.floor((frame.originY + frame.height - 1) / 64) - Math.floor(frame.originY / 64) + 1;
+        useEditor.setState({ RuntimeGrid: { width: frame.width, height: frame.height, originX: frame.originX, originY: frame.originY, states: frame.data as Uint8Array, dirtyChunks: null, chunkVersions: new Uint32Array(chunksWide * chunksHigh).fill(1), generation: ++runtimeGeneration } });
         return;
     }
     const grid = useEditor.getState().RuntimeGrid;
     if (!grid || grid.width !== frame.width || grid.height !== frame.height || grid.originX !== frame.originX || grid.originY !== frame.originY)
         throw Error('SimulationFrameInvalid');
-    for (let i = 0; i < frame.data.length; i += 2)
-        grid.states[frame.data[i]] = frame.data[i + 1];
-    useEditor.setState({ RuntimeGrid: { ...grid } });
+    const dirty = new Map<string, { x: number; y: number }>();
+    for (let i = 0; i < frame.data.length; i += 2) {
+        const index = frame.data[i];
+        grid.states[index] = frame.data[i + 1];
+        const x = Math.floor((grid.originX + index % grid.width) / 64), y = Math.floor((grid.originY + Math.floor(index / grid.width)) / 64);
+        dirty.set(`${x},${y}`, { x, y });
+    }
+    const versions = grid.chunkVersions?.slice();
+    const cx = Math.floor(grid.originX / 64), cy = Math.floor(grid.originY / 64), wide = Math.floor((grid.originX + grid.width - 1) / 64) - cx + 1;
+    if (versions) for (const point of dirty.values()) versions[(point.y - cy) * wide + point.x - cx]++;
+    useEditor.setState({ RuntimeGrid: { ...grid, dirtyChunks: [...dirty.values()], chunkVersions: versions } });
 }
 export async function chooseOpen(path?: string) { if (!isDesktop())
     throw Error('Open projects in the Tauri desktop app.'); path ??= (await open({ multiple: false, filters: [{ name: 'OpenCircuitBoard', extensions: ['ocb'] }] })) ?? undefined; if (!path)
-    return; const board = await invoke<Board>('openProject', { path }); useEditor.getState().load(board, path); useEditor.getState().log(`Opened ${path}`); await refreshRecent(); }
+    return; const board = await invoke<ProjectDocument>('openProject', { path }); useEditor.getState().load(board, path); useEditor.getState().log(`Opened ${path}`); await refreshRecent(); }
 export async function chooseSave(as = false) { if (!isDesktop())
     throw Error('Save projects in the Tauri desktop app.'); const s = useEditor.getState(); const path = as || !s.Path ? await save({ defaultPath: s.Path || 'Untitled.ocb', filters: [{ name: 'OpenCircuitBoard', extensions: ['ocb'] }] }) : s.Path; if (!path)
-    return; const saved = await invoke<string>('saveProject', { path, board: s.export() }); useEditor.setState({ Path: saved }); s.log(`Saved ${saved}`); await refreshRecent(); }
+    return; const saved = await invoke<string>('saveProject', { path, project: s.exportProject() }); useEditor.setState({ Path: saved }); s.log(`Saved ${saved}`); await refreshRecent(); }
 export async function refreshRecent() { if (isDesktop())
     useEditor.setState({ Recent: await invoke<string[]>('recentProjects') }); }

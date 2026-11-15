@@ -65,14 +65,14 @@ describe('Native circuit workspace', () => {
                         invoke: (command: string, args: unknown) => Promise<unknown>;
                     };
                 }).__TAURI_INTERNALS__.invoke;
-                await invoke('saveProject', { path: file, board: project });
+                await invoke('saveProject', { path: file, project: { board: project, blueprints: [{ id: 'clock', name: 'Clock', width: 1, height: 1, tiles: [{ x: 0, y: 0, toolId: 'clock', isOn: true, clockHoldTicks: 3 }] }] } });
                 return await invoke('openProject', { path: file });
             }
             catch (error) {
                 return { error: String(error) };
             }
         }, file, board);
-        expect(result).toEqual(board);
+        expect(result).toEqual({ board, blueprints: [{ id: 'clock', name: 'Clock', width: 1, height: 1, tiles: [{ x: 0, y: 0, toolId: 'clock', isOn: true, clockHoldTicks: 3 }] }] });
     });
     it('renders joined sides and gradients in the real WebView', async () => {
         await $('.command-trigger').click();
@@ -106,6 +106,52 @@ describe('Native circuit workspace', () => {
         const sum = (color: number[]) => color.reduce((total, value) => total + value, 0);
         expect(sum(colors[6]) - sum(colors[7])).toBeGreaterThan(15);
         await browser.saveScreenshot(buildPath('DesktopJoinedTilesCapture.png'));
+    });
+
+    it('remembers the display mode after reopening the native webview', async () => {
+        await $('label=2D').click();
+        await browser.refresh();
+        await browser.waitUntil(async () => await $('[data-testid="board"]').getAttribute('data-render-ready') === 'true');
+        expect(await browser.execute(() => (document.querySelector('input[value="2d"]') as HTMLInputElement).checked)).toBe(true);
+        await browser.saveScreenshot(buildPath('DesktopFlatCapture.png'));
+        await $('label=2.5D').click();
+    });
+    it('updates aggregate color textures from native runtime frames and restores editable colors', async () => {
+        const file = buildPath('DesktopLodProject.ocb');
+        const result = await browser.execute(async (file: string) => {
+            const tiles: { x: number; y: number; toolId: string; isOn: boolean; clockHoldTicks: number }[] = [];
+            for (let y = 0; y < 64; y++) for (let x = 0; x < 64; x++) tiles.push({ x, y, toolId: 'clock', isOn: true, clockHoldTicks: 1 });
+            const invoke = (window as unknown as { __TAURI_INTERNALS__: { invoke: (command: string, args: unknown) => Promise<unknown> } }).__TAURI_INTERNALS__.invoke;
+            return invoke('saveProject', { path: file, project: { board: { selectedTool: 'clock', clockHoldTicks: 1, meshId: 1, latchInitialState: true,
+                grid: { originX: -512, originY: -512, width: 1024, height: 1024 }, tiles },
+                blueprints: [{ id: 'clocks', name: 'Clock array', width: 64, height: 64, tiles }] } });
+        }, file);
+        expect(result).toBe(file);
+        await browser.refresh();
+        await $('.project-switcher').click();
+        await $('button=DesktopLodProject.ocb').click();
+        await expect($('.workspace-status')).toHaveText(expect.stringContaining('4,096 cells'));
+        await $('button[aria-label="Fit board in view"]').click();
+        await browser.waitUntil(async () => await $('[data-testid="board"]').getAttribute('data-color-ready') === 'true');
+        await expect($('[data-testid="board"]')).toHaveAttribute('data-lod', 'aggregate');
+        const pixel = () => browser.execute(() => {
+            const canvas = document.querySelector('canvas[aria-label="Circuit board"]') as HTMLCanvasElement;
+            const gl = canvas.getContext('webgl2') || canvas.getContext('webgl'); if (!gl) throw Error('No WebGL');
+            const scale = canvas.width / canvas.getBoundingClientRect().width, data = new Uint8Array(4);
+            gl.readPixels(Math.floor(canvas.width / 2 + 10 * scale), canvas.height - 1 - Math.floor(canvas.height / 2 + 10 * scale), 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, data);
+            return [...data];
+        });
+        const design = await pixel();
+        await $('button=Run circuit').click(); await $('button[aria-label="Pause simulation"]').click();
+        await $('button[aria-label="Reset simulation"]').click();
+        await browser.waitUntil(async () => await $('[data-testid="board"]').getAttribute('data-color-ready') === 'true');
+        const initial = await pixel();
+        await $('button[aria-label="Next tick"]').click();
+        await browser.waitUntil(async () => JSON.stringify(await pixel()) !== JSON.stringify(initial));
+        await browser.saveScreenshot(buildPath('DesktopLodSimulationCapture.png'));
+        await $('button=Back to design').click();
+        await browser.waitUntil(async () => JSON.stringify(await pixel()) === JSON.stringify(design));
+        await browser.saveScreenshot(buildPath('DesktopLodDesignCapture.png'));
     });
 
 });

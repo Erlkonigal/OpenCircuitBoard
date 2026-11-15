@@ -1,5 +1,5 @@
 import { useEffect, useRef } from 'react';
-import { Application, Container, Graphics } from 'pixi.js';
+import { Application, Container, Graphics, Rectangle, TilingSprite, type Texture } from 'pixi.js';
 import { TileRenderer } from './TileRenderer';
 import { CellSize as Size, ShadowMargin } from './TileGeometry';
 import { useEditor } from './EditorStore';
@@ -44,6 +44,7 @@ export function BoardCanvas({ onLatch, onSettings, onCursor, onZoom, cameraComma
         let observer: ResizeObserver | undefined;
         let frame = 0;
         let tileRenderer: TileRenderer | undefined;
+        let patternTexture: Texture | undefined;
         void (async () => {
             await app.init({ background: '#0c1219', antialias: true, resolution: window.devicePixelRatio || 1, autoDensity: true, autoStart: false, preference: 'webgl', preserveDrawingBuffer: true });
             if (disposed) {
@@ -53,10 +54,13 @@ export function BoardCanvas({ onLatch, onSettings, onCursor, onZoom, cameraComma
             element.appendChild(app.canvas);
             app.canvas.setAttribute('aria-label', 'Circuit board');
             const world = new Container(), board = new Graphics(), overlay = new Graphics();
-            tileRenderer = new TileRenderer(app.renderer);
+            tileRenderer = new TileRenderer(app.renderer, () => requestDraw.current());
             app.stage.addChild(world);
-            world.addChild(board, tileRenderer.Layer, overlay);
-            let bucketRevision = -1, buckets = new Map<string, Tile[]>();
+            const motif = new Graphics().poly([0, 64, 96, 8, 192, 64, 192, 176, 96, 232, 0, 176]).stroke({ color: '#304638', alpha: .15, width: 2 });
+            patternTexture = app.renderer.generateTexture({ target: motif, frame: new Rectangle(0, 0, 256, 256), resolution: 1 });
+            motif.destroy();
+            const pattern = new TilingSprite({ texture: patternTexture, width: 256, height: 256 });
+            world.addChild(board, pattern, tileRenderer.Layer, overlay);
             const draw = () => {
                 frame = 0;
                 if (disposed)
@@ -68,52 +72,29 @@ export function BoardCanvas({ onLatch, onSettings, onCursor, onZoom, cameraComma
                 v.y = Math.min((g.originY + g.height) * Size, Math.max(g.originY * Size, v.y));
                 world.position.set(v.width / 2 - v.x * v.zoom, v.height / 2 - v.y * v.zoom);
                 world.scale.set(v.zoom);
-                board.clear();
-                board.roundRect(g.originX * Size, g.originY * Size, g.width * Size, g.height * Size, Size).fill('#101a23');
-                const left = v.x - v.width / (2 * v.zoom), top = v.y - v.height / (2 * v.zoom), right = v.x + v.width / (2 * v.zoom), bottom = v.y + v.height / (2 * v.zoom);
-                const step = 256;
-                for (let y = Math.floor(Math.max(top, g.originY * Size) / step) * step; y < Math.min(bottom, (g.originY + g.height) * Size); y += step) {
-                    for (let x = Math.floor(Math.max(left, g.originX * Size) / step) * step; x < Math.min(right, (g.originX + g.width) * Size); x += step) {
-                        if (x < g.originX * Size || y < g.originY * Size)
-                            continue;
-                        board.poly([x, y + 64, x + 96, y + 8, x + 192, y + 64, x + 192, y + 176, x + 96, y + 232, x, y + 176]).stroke({ color: '#304638', alpha: .15, width: 1 / v.zoom });
-                    }
+                board.clear(); board.position.set(g.originX * Size, g.originY * Size);
+                board.roundRect(0, 0, g.width * Size, g.height * Size, Size).fill('#101a23');
+                pattern.visible = v.zoom * Size >= 12;
+                if (pattern.visible) {
+                    pattern.position.set(g.originX * Size, g.originY * Size);
+                    pattern.width = g.width * Size; pattern.height = g.height * Size;
+                    pattern.tilePosition.set(-(g.originX * Size % 256), -(g.originY * Size % 256));
                 }
-                board.roundRect(g.originX * Size, g.originY * Size, g.width * Size, g.height * Size, Size).stroke({ color: '#31483f', width: 1.5 / v.zoom });
-                if (bucketRevision !== s.Revision) {
-                    buckets = new Map();
-                    for (const tile of s.Tiles.values()) {
-                        const key = `${Math.floor(tile.x / 32)},${Math.floor(tile.y / 32)}`;
-                        let bucket = buckets.get(key);
-                        if (!bucket)
-                            buckets.set(key, bucket = []);
-                        bucket.push(tile);
-                    }
-                    bucketRevision = s.Revision;
-                }
-                const desired = new Map<string, Tile>();
-                for (let cy = Math.floor(top / Size / 32) - 1; cy <= Math.floor(bottom / Size / 32) + 1; cy++) {
-                    for (let cx = Math.floor(left / Size / 32) - 1; cx <= Math.floor(right / Size / 32) + 1; cx++) {
-                        for (const t of buckets.get(`${cx},${cy}`) ?? []) {
-                            if (t.x * Size < right + Size + ShadowMargin && t.x * Size > left - Size * 2 - ShadowMargin && t.y * Size < bottom + Size + ShadowMargin && t.y * Size > top - Size * 2 - ShadowMargin)
-                                desired.set(cellKey(t), t);
-                        }
-                    }
-                }
-                tileRenderer!.draw({ occupied: s.Tiles, visible: desired, preview: s.Preview,
-                    moving: s.Preview.length && !s.PasteAnchor ? s.Selection?.cells ?? null : null,
-                    previewValid: s.PreviewValid, simulating: s.Simulating, runtime: s.RuntimeGrid }, v);
-                overlay.clear();
-                const rectangle = (bounds: Grid, color: string, fill = false) => { overlay.rect(bounds.originX * Size, bounds.originY * Size, bounds.width * Size, bounds.height * Size); if (fill)
+                board.roundRect(0, 0, g.width * Size, g.height * Size, Size).stroke({ color: '#31483f', width: 1.5 / v.zoom });
+                tileRenderer!.draw({ occupied: s.Tiles, preview: s.Preview, previewValid: s.PreviewValid,
+                    simulating: s.Simulating, runtime: s.RuntimeGrid, mode: s.RenderMode }, v);
+                element.dataset.lod = tileRenderer!.Lod;
+                element.dataset.renderObjects = String(tileRenderer!.Count);
+                element.dataset.colorReady = String(tileRenderer!.Ready);
+                overlay.clear(); overlay.position.set(v.x, v.y);
+                const rectangle = (bounds: Grid, color: string, fill = false) => { overlay.rect(bounds.originX * Size - v.x, bounds.originY * Size - v.y, bounds.width * Size, bounds.height * Size); if (fill)
                     overlay.fill({ color, alpha: .08 }); overlay.stroke({ color, width: 2 / v.zoom }); };
                 if (hover.current && !s.Simulating && !s.PasteAnchor && !s.Selection && contains(g, hover.current))
                     rectangle({ originX: hover.current.x, originY: hover.current.y, width: 1, height: 1 }, '#f2c94c', true);
                 if (s.Selection)
                     rectangle(s.Selection.bounds, '#82baff', true);
                 if (s.PasteAnchor) {
-                    const clip = s.Clipboard[s.ClipboardIndex];
-                    if (clip)
-                        rectangle({ originX: s.PasteAnchor.x, originY: s.PasteAnchor.y, width: clip.width, height: clip.height }, s.PreviewValid ? '#69e6a6' : '#ff657e', true);
+                    if (s.Preview) rectangle(s.Preview.Bounds, s.PreviewValid ? '#69e6a6' : '#ff657e', true);
                 }
                 const d = drag.current;
                 if (d?.kind === 'select') {
@@ -122,14 +103,23 @@ export function BoardCanvas({ onLatch, onSettings, onCursor, onZoom, cameraComma
                 }
                 if (!s.Simulating) {
                     for (const [x, y] of [[g.originX, g.originY], [g.originX + g.width, g.originY], [g.originX, g.originY + g.height], [g.originX + g.width, g.originY + g.height]])
-                        overlay.circle(x * Size, y * Size, 5 / v.zoom).fill('#7093b6').stroke({ color: '#111720', width: 2 / v.zoom });
+                        overlay.circle(x * Size - v.x, y * Size - v.y, 5 / v.zoom).fill('#7093b6').stroke({ color: '#111720', width: 2 / v.zoom });
                 }
                 app.render();
                 onZoom?.(v.zoom);
             };
-            requestDraw.current = () => { if (!frame)
-                frame = requestAnimationFrame(draw); };
-            unsubscribe = useEditor.subscribe(requestDraw.current);
+            requestDraw.current = () => { if (!frame) frame = requestAnimationFrame(() => {
+                try { draw(); }
+                catch (error) {
+                    frame = 0;
+                    if (element.dataset.renderError !== String(error)) { element.dataset.renderError = String(error); useEditor.getState().log(String(error)); }
+                }
+            }); };
+            unsubscribe = useEditor.subscribe((next, previous) => {
+                if (next.Tiles !== previous.Tiles || next.Preview !== previous.Preview || next.RenderMode !== previous.RenderMode || next.RuntimeGrid !== previous.RuntimeGrid)
+                    element.dataset.colorReady = 'false';
+                requestDraw.current();
+            });
             observer = new ResizeObserver(() => { const r = element.getBoundingClientRect(); view.current.width = r.width; view.current.height = r.height; app.renderer.resize(r.width, r.height); requestDraw.current(); });
             observer.observe(element);
             // Resolve shared SVG textures once, then reuse generated faces for all cells.
@@ -143,7 +133,7 @@ export function BoardCanvas({ onLatch, onSettings, onCursor, onZoom, cameraComma
             requestDraw.current();
         })().catch(error => { element.dataset.renderError = String(error); useEditor.getState().log(String(error)); });
         return () => { disposed = true; unsubscribe(); observer?.disconnect(); cancelAnimationFrame(frame); requestDraw.current = () => { }; tileRenderer?.destroy(); if (app.renderer)
-            app.destroy(true, { children: true }); };
+            app.destroy(true, { children: true }); patternTexture?.destroy(true); };
     }, []);
     useEffect(() => { if (!cameraCommand || cameraCommand.action === 'none')
         return; const v = view.current, g = useEditor.getState().Board.grid, min = minimumZoom(g, v.width, v.height); if (cameraCommand.action === 'fit') {
@@ -152,7 +142,7 @@ export function BoardCanvas({ onLatch, onSettings, onCursor, onZoom, cameraComma
         v.y = (g.originY + g.height / 2) * Size;
     }
     else {
-        v.zoom = Math.max(min, Math.min(1.25, v.zoom + (cameraCommand.action === 'in' ? .05 : -.05)));
+        v.zoom = Math.max(min, Math.min(1.25, v.zoom * (cameraCommand.action === 'in' ? 1.1 : 1 / 1.1)));
     } onZoom?.(v.zoom); requestDraw.current(); }, [cameraCommand]);
     const screen = (event: {
         clientX: number;
@@ -160,7 +150,7 @@ export function BoardCanvas({ onLatch, onSettings, onCursor, onZoom, cameraComma
     }) => { const r = host.current!.getBoundingClientRect(); return { x: event.clientX - r.left, y: event.clientY - r.top }; };
     const world = (p: Point) => { const v = view.current; return { x: v.x + (p.x - v.width / 2) / v.zoom, y: v.y + (p.y - v.height / 2) / v.zoom }; };
     const cell = (p: Point) => { const w = world(p); return { x: Math.floor(w.x / Size), y: Math.floor(w.y / Size) }; };
-    return <div ref={host} className="board-canvas" data-testid="board" onContextMenu={e => e.preventDefault()} onWheel={event => { event.preventDefault(); const p = screen(event), anchor = world(p), v = view.current; const min = minimumZoom(useEditor.getState().Board.grid, v.width, v.height); const zoom = Math.max(min, Math.min(1.25, v.zoom + (event.deltaY < 0 ? .05 : -.05))); v.zoom = zoom; onZoom?.(zoom); if (zoom === min) {
+    return <div ref={host} className="board-canvas" data-testid="board" onContextMenu={e => e.preventDefault()} onWheel={event => { event.preventDefault(); const p = screen(event), anchor = world(p), v = view.current; const min = minimumZoom(useEditor.getState().Board.grid, v.width, v.height); const zoom = Math.max(min, Math.min(1.25, v.zoom * (event.deltaY < 0 ? 1.1 : 1 / 1.1))); v.zoom = zoom; onZoom?.(zoom); if (zoom === min) {
         const g = useEditor.getState().Board.grid;
         v.x = (g.originX + g.width / 2) * Size;
         v.y = (g.originY + g.height / 2) * Size;
