@@ -56,7 +56,7 @@ test('blueprints save snapshots, stay selected and support repeated ordinary pas
     await page.getByRole('button', { name: 'Clock', exact: true }).click();
     await page.getByRole('textbox', { name: 'Clock hold', exact: true }).fill('9');
     await page.mouse.click(origin.x + 12, origin.y + 12);
-    await page.keyboard.down('Shift'); await page.mouse.move(origin.x + 1, origin.y + 1); await page.mouse.down();
+    await page.keyboard.press('v'); await page.keyboard.down('Shift'); await page.mouse.move(origin.x + 1, origin.y + 1); await page.mouse.down();
     await page.mouse.move(origin.x + 60, origin.y + 30); await page.mouse.up(); await page.keyboard.up('Shift');
     await page.getByRole('button', { name: 'Save blueprint', exact: true }).click();
     await page.getByRole('textbox', { name: 'Blueprint name' }).fill('Pulse');
@@ -88,7 +88,7 @@ test('blueprints save snapshots, stay selected and support repeated ordinary pas
 test('2D switches all previews and persists after reload while preserving a paste', async ({ page }) => {
     await ready(page); const origin = await center(page);
     await page.getByRole('button', { name: 'Or', exact: true }).click(); await page.mouse.click(origin.x + 12, origin.y + 12);
-    await page.keyboard.down('Shift'); await page.mouse.move(origin.x + 1, origin.y + 1); await page.mouse.down();
+    await page.keyboard.press('v'); await page.keyboard.down('Shift'); await page.mouse.move(origin.x + 1, origin.y + 1); await page.mouse.down();
     await page.mouse.move(origin.x + 30, origin.y + 30); await page.mouse.up(); await page.keyboard.up('Shift');
     await page.keyboard.press('Control+c');
     await expect(page.locator('.clipboard-thumbnail')).toHaveAttribute('data-ready', 'true');

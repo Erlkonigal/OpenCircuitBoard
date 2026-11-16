@@ -44,7 +44,7 @@ export const ComponentLibrary = memo(function ComponentLibrary() {
         {!matching.length && !matchingTools.length && <div className="panel-empty"><Search size={22}/><p>No matching components</p><small>Try a name such as clock or trace.</small></div>}
       </div>
     </ScrollArea>
-    <div className="library-note"><MousePointer2 size={14}/><span>{({pointer:'Click to inspect. Shift-click toggles; Shift-drag adds.',draw:'Left-drag to draw. Right-click returns to pointer.',merge:'Click adjacent regions, then press G.',split:'Drag along grid edges. Release to split.'})[editTool]}</span></div>
+    <div className="library-note"><MousePointer2 size={14}/><span>{({pointer:'Drag to select; drag selected components to move. Shift adds.',draw:'Drag to draw; Shift-drag fills a rectangle. Right-click for Pointer.',merge:'Click adjacent regions, then press G.',split:'Drag along grid edges. Release to split.'})[editTool]}</span></div>
   </>;
 });
 export function ClipboardLibrary({ cursor, onSaveBlueprint }: {
@@ -139,7 +139,7 @@ export function Inspector({frame,onSaveBlueprint}:{onSaveBlueprint:()=>void;fram
           </>:componentSelection||state.EditTool==='draw'?<>
             <div className="active-component"><div className="active-component-symbol"><ToolGlyph id={id} size={23}/></div><div><strong>{componentSelection&&!homogeneous?'Mixed components':title}</strong><small>{componentSelection?`${samples.length} whole components`:'Settings for new strokes'}</small></div></div>
             {!componentSelection||homogeneous?<ToolSettings key={`${id}:${componentSelection}`} id={id} selection={componentSelection}/>:<p className="property-description">Select components of the same type to edit common properties.</p>}
-          </>:<p className="property-description">Click a component to view its properties. Drag on blank space to select components; Shift-click toggles components; Shift-drag adds them.</p>}
+          </>:<p className="property-description">Click a component to view its properties. Drag on blank space or an unselected component to select; drag selected components to move. Shift-click toggles components; Shift-drag adds them.</p>}
           {state.Selection&&!pending&&<Group mt="md" gap={6}><Button size="xs" variant="default" leftSection={<Copy size={12}/>} disabled={state.Simulating} onClick={()=>useEditor.getState().copy()}>Copy</Button><Button size="xs" variant="subtle" disabled={state.Simulating} onClick={onSaveBlueprint}>Save blueprint</Button><ActionIcon ml="auto" size="sm" variant="subtle" color="gray" aria-label="Clear selection" onClick={()=>useEditor.getState().selectComponents([])}><X size={13}/></ActionIcon></Group>}
         </section>
         {frame&&<section className="inspector-section simulation-summary"><h3><Layers3 size={14}/>Live simulation</h3><div className="metric-grid"><div><span>Current tick</span><strong>{frame.tick.toLocaleString()}</strong></div><div><span>Throughput</span><strong>{Math.round(frame.tps).toLocaleString()}<small> TPS</small></strong></div></div><div className="capacity-row"><span>Measured capacity</span><span>{Math.round(frame.capacity).toLocaleString()} TPS</span></div></section>}

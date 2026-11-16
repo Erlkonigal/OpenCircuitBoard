@@ -4,9 +4,9 @@ A desktop circuit workspace built with **Tauri, React, TypeScript, Mantine, and 
 
 The workspace has a searchable component library, a central canvas, and an inspector for component and canvas properties. Clipboard history lives in its own panel; Activity opens below the canvas. Transport, stepping, speed, and full-speed controls stay in the top toolbar. Press Ctrl+K to find commands.
 
-The editor opens in **Pointer** mode. Click a component to inspect its properties. Shift-click toggles a whole component without clearing the others. Drag on blank space to replace the selection; **Shift-drag adds whole components** to the selection, including when started over an occupied cell or from Draw mode. Every marquee tests actual cell intersections and selects complete identities, including cells outside the rectangle. Drag selected components to move them; a four-CSS-pixel threshold separates clicks from moves. Selection follows component IDs and exact membership, including holes. Ctrl and Meta do not modify mouse selection; keyboard shortcuts such as Ctrl+C and Ctrl+Z remain available.
+The editor opens in **Pointer** mode. Click a component to inspect its properties. Shift-click toggles a whole component without clearing the others. Drag from blank space or an unselected component to replace the selection; in Pointer mode, **Shift-drag adds whole components** to the selection, including when started over an occupied cell. Every marquee tests actual cell intersections and selects complete identities, including cells outside the rectangle. Drag selected components to move them; a four-CSS-pixel threshold separates clicks from moves. Selection follows component IDs and exact membership, including holes. Ctrl and Meta do not modify mouse selection; keyboard shortcuts such as Ctrl+C and Ctrl+Z remain available.
 
-Hover brightens the entire component surface; selection applies a stronger surface highlight without a permanent outline. Nearly white materials receive a blue tint so the highlight remains visible. Holes and neighboring independent components keep their original appearance at every rendering LOD. The temporary drag rectangle uses a static dashed edge.
+Hover and selection use the same 25% whole-surface highlight, covering the top and both visible sides in 2.5D, without a permanent outline or extra brightness when both apply. All inks share a moderate-brightness palette (weighted RGB at most 160/255), leaving room for the same light tint on every material. Holes and neighboring independent components keep their original appearance at every rendering LOD. The temporary drag rectangle uses a static dashed edge.
 
 Common editing controls stay near the left hand:
 
@@ -14,7 +14,8 @@ Common editing controls stay near the left hand:
 | --- | --- |
 | Pointer / draw with last ink | V / B |
 | Add or remove a component | Shift+click |
-| Add a component area | Shift+drag |
+| Add a component area (Pointer) | Shift+drag |
+| Draw a filled ink rectangle (Draw) | Shift+drag |
 | Delete the current selection | X |
 | Cancel an unfinished operation and return to Pointer | Right-click or Q |
 | Clear an idle pointer selection | Right-click, Q, or Ctrl+D |
@@ -25,7 +26,7 @@ Common editing controls stay near the left hand:
 | Copy / cut / paste | Ctrl+C / Ctrl+X / Ctrl+V |
 | Select all complete components | Ctrl+A |
 
-Select an ink or the Draw tool to enter drawing mode. Left-click or drag draws; right mouse never erases. Each stroke creates a component, including traces, buses, Cross, and ports. Starting on an existing cell with the same exact ink extends that component and inherits its settings. If that stroke enters another compatible component, its entire region joins the starting component and keeps the starting ID. One stroke can join several targets; the bridge and all merges form one undo step and cancel together. Merely touching a side or corner does not merge, and a stroke started in empty space does not enable whole-component joining. Incompatible targets retain ordinary overwrite behavior. Overwriting splits disconnected leftovers using four-neighbor connectivity; the largest piece keeps its ID, with topmost then leftmost order breaking ties.
+Select an ink or the Draw tool to enter drawing mode. Left-click or drag draws; **Shift+drag fills an inclusive rectangle**, clipped to the board in any direction. The translucent rectangle is only a preview until release, so shrinking or cancelling leaves no cells behind. One rectangle follows the same starting-cell inheritance and merge rules as a freehand stroke, creates one undo step, and stays in Draw mode. Right mouse never erases. Each stroke creates a component, including traces, buses, Cross, and ports. Starting on an existing cell with the same exact ink extends that component and inherits its settings. If that stroke enters another compatible component, its entire region joins the starting component and keeps the starting ID. One stroke can join several targets; the bridge and all merges form one undo step and cancel together. Merely touching a side or corner does not merge, and a stroke started in empty space does not enable whole-component joining. Incompatible targets retain ordinary overwrite behavior. Overwriting splits disconnected leftovers using four-neighbor connectivity; the largest piece keeps its ID, with topmost then leftmost order breaking ties.
 
 **X deletes what is selected, never what is merely hovered.** Deletion, cutting, copying, movement, blueprint capture and property edits always operate on complete components. Snapshots trim outside whitespace while preserving gaps between selected components. Moves preserve IDs; paste and move reject occupied or out-of-bounds destinations.
 

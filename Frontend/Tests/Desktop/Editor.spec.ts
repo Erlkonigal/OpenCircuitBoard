@@ -320,4 +320,44 @@ describe('Native circuit workspace', () => {
         await expect(board).toHaveAttribute('data-component-count','2');await expect($('.workspace-status')).toHaveText(expect.stringContaining('10 cells'));
     });
 
+    it('previews Draw rectangles, shares hover and selection brightness, then marquees occupied cells and moves the group', async () => {
+        await browser.refresh(); await browser.waitUntil(async () => await $('[data-testid="board"]').getAttribute('data-render-ready') === 'true');
+        await $('label=2.5D').click();
+        await $('.command-trigger').click(); await $('input[aria-label="Search commands"]').setValue('new circuit'); await $('.command-options button').click();
+        const c = await browser.execute(() => { const r = document.querySelector('[data-testid="board"]')!.getBoundingClientRect(); return { x: Math.round(r.x + r.width / 2), y: Math.round(r.y + r.height / 2) }; });
+        const board = $('[data-testid="board"]');
+        const move = (x: number, y: number) => browser.performActions([{ type: 'pointer', id: 'rectangle-pen', parameters: { pointerType: 'mouse' }, actions: [{ type: 'pointerMove', origin: 'viewport', duration: 120, x: c.x + x, y: c.y + y }] }]);
+        const down = () => browser.performActions([{ type: 'pointer', id: 'rectangle-pen', parameters: { pointerType: 'mouse' }, actions: [{ type: 'pointerDown', button: 0 }] }]);
+        const up = () => browser.performActions([{ type: 'pointer', id: 'rectangle-pen', parameters: { pointerType: 'mouse' }, actions: [{ type: 'pointerUp', button: 0 }] }]);
+        const pixel = () => browser.execute(() => {
+            const canvas = document.querySelector('canvas[aria-label="Circuit board"]') as HTMLCanvasElement, gl = canvas.getContext('webgl2')!;
+            const scale = canvas.width / canvas.getBoundingClientRect().width;
+            return [[34, 34], [26, 54], [42, 102]].map(([x, y]) => {
+                const p = new Uint8Array(4); gl.readPixels(Math.floor(canvas.width / 2 + x * scale), canvas.height - 1 - Math.floor(canvas.height / 2 + y * scale), 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, p); return [...p];
+            });
+        });
+        await $('button[aria-label="Clock"]').click(); await browser.action('key').down(Key.Shift).perform(true);
+        await move(76, 76); await down(); await move(-20, -20);
+        await expect(board).toHaveAttribute('data-rectangle-cells', '16'); await expect($('.workspace-status')).toHaveText(expect.stringContaining('0 cells'));
+        await browser.saveScreenshot(buildPath('DesktopRectanglePreviewCapture.png'));
+        await move(44, 44); await expect(board).toHaveAttribute('data-rectangle-cells', '4'); await up(); await browser.action('key').up(Key.Shift).perform();
+        await expect(board).toHaveAttribute('data-component-count', '1'); await expect(board).toHaveAttribute('data-edit-tool', 'draw');
+        await move(-120, -120); await expect(board).toHaveAttribute('data-highlight-cells', '0'); const base = await pixel();
+        await move(44, 44); await expect(board).toHaveAttribute('data-highlight-cells', '4'); const hovered = await pixel();
+        for (let i = 0; i < 3; i++) expect(hovered[i]).not.toEqual(base[i]);
+        await browser.keys('v'); await move(44, 44); await down(); await up(); await move(-120, -120);
+        await expect(board).toHaveAttribute('data-selection-cells', '4'); expect(await pixel()).toEqual(hovered);
+        await browser.keys(['Control', 'd']); await browser.keys('b'); await browser.action('key').down(Key.Shift).perform(true);
+        await move(108, 44); await down(); await up(); await browser.action('key').up(Key.Shift).perform();
+        await expect(board).toHaveAttribute('data-component-count', '2'); await browser.keys('v');
+        await move(44, 44); await down(); await move(108, 76); await expect(board).toHaveAttribute('data-gesture', 'marquee');
+        await browser.saveScreenshot(buildPath('DesktopOccupiedMarqueeCapture.png')); await up(); await expect(board).toHaveAttribute('data-selection-cells', '5');
+        await move(44, 44); await down(); await move(-52, 76); await expect(board).toHaveAttribute('data-gesture', 'move'); await up();
+        await expect(board).toHaveAttribute('data-component-count', '2'); await expect(board).toHaveAttribute('data-selection-cells', '5');
+        await browser.saveScreenshot(buildPath('DesktopRectangleGroupCapture.png'));
+        await browser.keys(['Control', 'z']); await expect(board).toHaveAttribute('data-selection-cells', '5');
+        await browser.keys(['Control', 'z']); await expect($('.workspace-status')).toHaveText(expect.stringContaining('4 cells'));
+        await browser.keys(['Control', 'z']); await expect($('.workspace-status')).toHaveText(expect.stringContaining('0 cells')); await browser.releaseActions();
+    });
+
 });

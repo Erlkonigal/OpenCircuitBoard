@@ -29,7 +29,7 @@ interface BaseGesture {
     Screen: Point;
 }
 type Gesture = BaseGesture & ({
-    Kind: 'paint' | 'pendingMove' | 'move';
+    Kind: 'paint' | 'pendingMove' | 'move' | 'rectanglePaint';
 } | {
     Kind: 'marquee';
     Add: boolean;
@@ -147,15 +147,21 @@ export class EditorInput {
             a.redraw();
             return;
         }
-        if (event.shiftKey) {
+        if (event.shiftKey && s.EditTool === 'pointer') {
             s.begin();
             this.start({ ...base, Kind: 'marquee', Add: true, Dragged: false, Toggle: s.Tiles.get(cellKey(cell))?.componentId });
             return;
         }
         if (s.EditTool === 'draw') {
             s.begin();
-            s.paint([cell]);
-            this.start({ ...base, Kind: 'paint' });
+            if (event.shiftKey) {
+                s.previewRectangle(cell, cell);
+                this.start({ ...base, Kind: 'rectanglePaint' });
+            }
+            else {
+                s.paint([cell]);
+                this.start({ ...base, Kind: 'paint' });
+            }
             return;
         }
         const world = a.world(screen), g = s.Board.grid;
@@ -170,14 +176,8 @@ export class EditorInput {
         s.begin();
         if (selectionContains(s, cell))
             this.start({ ...base, Kind: 'pendingMove' });
-        else if (id) {
-            s.selectComponents([id]);
-            this.start({ ...base, Kind: 'pendingMove' });
-        }
-        else {
-            s.selectComponents([]);
-            this.start({ ...base, Kind: 'marquee', Add: false, Dragged: false });
-        }
+        else
+            this.start({ ...base, Kind: 'marquee', Add: false, Dragged: false, Toggle: id });
     }
     move(screen: Point) {
         const a = this.Adapter;
@@ -203,6 +203,9 @@ export class EditorInput {
                 break;
             case 'paint':
                 s.paint(lineCells(g.Last, cell));
+                break;
+            case 'rectanglePaint':
+                s.previewRectangle(g.Start, cell);
                 break;
             case 'pendingMove':
                 if (Math.hypot(screen.x - g.Screen.x, screen.y - g.Screen.y) < 4)
@@ -245,6 +248,8 @@ export class EditorInput {
         if (!a || !g || button !== (g.Kind === 'pan' ? g.Button : 0))
             return;
         const s = useEditor.getState(), cell = a.cell(screen);
+        if (g.Kind === 'rectanglePaint')
+            s.paintRectangle(g.Start, cell);
         if (g.Kind === 'move')
             s.confirmMove({ x: cell.x - g.Start.x, y: cell.y - g.Start.y });
         if (g.Kind === 'split') {
@@ -252,10 +257,13 @@ export class EditorInput {
             s.splitAlong(g.Path);
         }
         if (g.Kind === 'marquee') {
-            if (g.Add && !g.Dragged) {
+            g.Dragged ||= Math.hypot(screen.x - g.Screen.x, screen.y - g.Screen.y) >= 4;
+            if (!g.Dragged) {
                 const ids = s.Selection?.ids ?? [], id = g.Toggle;
-                if (id)
-                    s.selectComponents(ids.includes(id) ? ids.filter(n => n !== id) : [...ids, id]);
+                if (g.Add) {
+                    if (id) s.selectComponents(ids.includes(id) ? ids.filter(n => n !== id) : [...ids, id]);
+                }
+                else s.selectComponents(id ? [id] : []);
             }
             else
                 s.selectRegionComponents(boundsBetween(g.Start, cell), g.Add ? 'add' : 'replace');

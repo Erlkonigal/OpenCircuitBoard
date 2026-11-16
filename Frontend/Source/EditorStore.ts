@@ -37,6 +37,11 @@ export interface PlacementPreview {
     Bounds: Grid;
     Kind: 'paste' | 'move';
 }
+export interface RectanglePaintPreview {
+    Bounds: Grid;
+    Anchor: Point;
+    Material: Pick<Tile, 'toolId' | 'isOn' | 'clockHoldTicks'>;
+}
 interface State {
     Board: Board;
     Tiles: CellStore;
@@ -50,7 +55,8 @@ interface State {
         Targets: Set<number>;
     } | null;
     EditTool: EditorTool;
-    Gesture: 'idle' | 'pendingMove' | 'marquee' | 'move' | 'paint' | 'resize' | 'pan' | 'split';
+    Gesture: 'idle' | 'pendingMove' | 'marquee' | 'move' | 'paint' | 'resize' | 'pan' | 'split' | 'rectanglePaint';
+    RectanglePaint: RectanglePaintPreview | null;
     Marquee: {
         Bounds: Grid;
         Add: boolean;
@@ -99,7 +105,9 @@ interface State {
     mergeSelection: () => boolean;
     splitAlong: (path: SplitPath) => boolean;
     begin: () => void;
-    paint: (points: Point[], remove?: boolean) => void;
+    paint: (points: Iterable<Point>, remove?: boolean) => void;
+    previewRectangle: (start: Point, end: Point) => void;
+    paintRectangle: (start: Point, end: Point) => void;
     commit: () => void;
     cancel: () => void;
     undo: () => void;
@@ -120,7 +128,7 @@ interface State {
     log: (text: string) => void;
     setRuntime: (states: Map<string, boolean>) => void;
 }
-const EmptyPreview = { Preview: null, PreviewValid: false, PasteAnchor: null };
+const EmptyPreview = { RectanglePaint: null, Preview: null, PreviewValid: false, PasteAnchor: null };
 const EmptyMerge = { MergeIds: [] as number[], MergeError: '' };
 const EmptySplit = { SplitPath: null, SplitNotice: '' };
 function allocate(s: State) {
@@ -311,19 +319,17 @@ export const useEditor = create<State>((set, get) => ({
         s.begin();
         s = get();
         const changes = new Map<string, Tile | undefined>();
-        if (!remove && !s.Stroke) {
-            const point = points.find(p => contains(s.Board.grid, p));
-            if (!point)
-                return;
-            const existing = s.Tiles.get(cellKey(point)), id = s.Board.selectedTool, fromExisting = existing?.toolId === id;
-            const tile = fromExisting ? existing : { ...point, toolId: id, componentId: allocate(s), isOn: id === 'latch' ? s.Board.latchInitialState : true, ...(id === 'clock' ? { clockHoldTicks: s.Board.clockHoldTicks } : {}) };
-            set({ Stroke: { Tile: tile, FromExisting: fromExisting, Targets: new Set() } });
-            s = get();
-        }
-        const stroke = s.Stroke;
+        let stroke = s.Stroke;
         for (const point of points) {
             if (!contains(s.Board.grid, point))
                 continue;
+            if (!remove && !stroke) {
+                const existing = s.Tiles.get(cellKey(point)), id = s.Board.selectedTool, fromExisting = existing?.toolId === id;
+                const tile = fromExisting ? existing : { ...point, toolId: id, componentId: allocate(s), isOn: id === 'latch' ? s.Board.latchInitialState : true, ...(id === 'clock' ? { clockHoldTicks: s.Board.clockHoldTicks } : {}) };
+                stroke = { Tile: tile, FromExisting: fromExisting, Targets: new Set() };
+                set({ Stroke: stroke });
+                s = get();
+            }
             const key = cellKey(point), before = s.Tiles.get(key);
             if (remove) {
                 if (before)
@@ -361,6 +367,31 @@ export const useEditor = create<State>((set, get) => ({
             }
         }
     },
+    previewRectangle: (start, end) => {
+        const s = get();
+        if (s.Simulating || s.EditTool !== 'draw') return;
+        s.begin();
+        const g = s.Board.grid, left = Math.max(g.originX, Math.min(start.x, end.x)), top = Math.max(g.originY, Math.min(start.y, end.y));
+        const right = Math.min(g.originX + g.width - 1, Math.max(start.x, end.x)), bottom = Math.min(g.originY + g.height - 1, Math.max(start.y, end.y));
+        if (left > right || top > bottom) { set({ RectanglePaint: null }); return; }
+        const anchor = { x: Math.max(left, Math.min(right, start.x)), y: Math.max(top, Math.min(bottom, start.y)) };
+        const existing = s.Tiles.get(cellKey(anchor)), id = s.Board.selectedTool;
+        const material = existing?.toolId === id ? existing : { toolId: id, isOn: id === 'latch' ? s.Board.latchInitialState : true, ...(id === 'clock' ? { clockHoldTicks: s.Board.clockHoldTicks } : {}) };
+        set({ RectanglePaint: { Bounds: { originX: left, originY: top, width: right - left + 1, height: bottom - top + 1 }, Anchor: anchor, Material: material } });
+    },
+    paintRectangle: (start, end) => {
+        get().previewRectangle(start, end);
+        const s = get(), p = s.RectanglePaint;
+        if (s.Simulating || s.EditTool !== 'draw' || !p) return;
+        const b = p.Bounds, dx = start.x <= end.x ? 1 : -1, dy = start.y <= end.y ? 1 : -1;
+        // Iterate from the actual anchor; reversing a drag must not change inheritance.
+        s.paint((function* () {
+            for (let row = 0; row < b.height; row++)
+                for (let column = 0; column < b.width; column++)
+                    yield { x: p.Anchor.x + column * dx, y: p.Anchor.y + row * dy };
+        })());
+        set({ RectanglePaint: null });
+    },
     commit: () => {
         let s = get();
         const before = s.Active;
@@ -385,7 +416,7 @@ export const useEditor = create<State>((set, get) => ({
             selection = ids.length ? { ...selection, ids } : null;
         }
         const command = { changes, beforeGrid: before.grid, afterGrid: s.Board.grid, beforeSelection: before.selection, afterSelection: selection, beforeBlueprints: before.blueprints, afterBlueprints: s.Blueprints };
-        set({ Active: null, Stroke: null, Selection: selection, ...((changes.length || JSON.stringify(before.grid) !== JSON.stringify(s.Board.grid) || before.blueprints !== s.Blueprints) ? { Undo: [...s.Undo, command], Redo: [] } : {}) });
+        set({ Active: null, Stroke: null, RectanglePaint: null, Selection: selection, ...((changes.length || JSON.stringify(before.grid) !== JSON.stringify(s.Board.grid) || before.blueprints !== s.Blueprints) ? { Undo: [...s.Undo, command], Redo: [] } : {}) });
     },
     cancel: () => {
         const s = get(), selection = s.EditTool === 'merge' || s.EditTool === 'split' ? s.ToolSelection : s.Active ? s.Active.selection : s.Selection;

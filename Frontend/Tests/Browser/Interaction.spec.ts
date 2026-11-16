@@ -42,7 +42,7 @@ test('Shift clicks preserve multiselection, every marquee selects whole componen
     await page.screenshot({path:buildPath('ComponentMarqueeCapture.png')});await page.keyboard.press('x');await expect(page.locator('.workspace-status')).toContainText('0 cells');
     await page.keyboard.press('Control+z');await page.keyboard.press('Control+d');
     await drag(page,c.x-18,c.y-18,c.x+61,c.y+60);await count(page,10);await expect(board).toHaveAttribute('data-selection-kind','components');
-    await page.getByRole('button',{name:'Clock',exact:true}).click();await additive(page,c.x+66,c.y+2,c.x+92,c.y+60);await count(page,10);
+    await page.keyboard.press('v');await additive(page,c.x+66,c.y+2,c.x+92,c.y+60);await count(page,10);
     await expect(board).toHaveAttribute('data-edit-tool','pointer');await expect(page.getByTestId('right-dock')).toContainText('Selected components');
 });
 

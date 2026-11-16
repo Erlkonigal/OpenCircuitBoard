@@ -4,6 +4,7 @@ import { TileRenderer } from './TileRenderer';
 import { CellSize as Size } from './TileGeometry';
 import { useEditor } from './EditorStore';
 import { cellKey, contains, ToolIds, type Grid, type Point } from './Model';
+import { tileColor } from './ColorPyramid';
 import { editorInput } from './EditorInput';
 import { selectionCount } from './Selection';
 import { ComponentHighlight, drawMarquee } from './ComponentHighlight';
@@ -40,7 +41,7 @@ export function BoardCanvas({ onLatch, onCursor, onZoom, cameraCommand }: Props)
         let frame = 0;
         let tileRenderer: TileRenderer | undefined;
         let patternTexture: Texture | undefined;
-        let selectedHighlight: ComponentHighlight | undefined, hoverHighlight: ComponentHighlight | undefined;
+        let highlight: ComponentHighlight | undefined;
         const disconnect=editorInput.connect({View:view.current,world:worldPoint,cell:cellPoint,
             redraw:()=>requestDraw.current(),cursor:p=>callbacks.current.onCursor(p),latch:p=>callbacks.current.onLatch(p)});
         void (async () => {
@@ -53,14 +54,13 @@ export function BoardCanvas({ onLatch, onCursor, onZoom, cameraCommand }: Props)
             app.canvas.setAttribute('aria-label', 'Circuit board');
             const world = new Container(), board = new Graphics(), overlay = new Graphics();
             tileRenderer = new TileRenderer(app.renderer, () => requestDraw.current());
-            selectedHighlight = new ComponentHighlight('selected');
-            hoverHighlight = new ComponentHighlight('hover');
+            highlight = new ComponentHighlight();
             app.stage.addChild(world);
             const motif = new Graphics().poly([0, 64, 96, 8, 192, 64, 192, 176, 96, 232, 0, 176]).stroke({ color: '#304638', alpha: .15, width: 2 });
             patternTexture = app.renderer.generateTexture({ target: motif, frame: new Rectangle(0, 0, 256, 256), resolution: 1 });
             motif.destroy();
             const pattern = new TilingSprite({ texture: patternTexture, width: 256, height: 256 });
-            world.addChild(board, pattern, tileRenderer.Layer, selectedHighlight.Layer, hoverHighlight.Layer, overlay);
+            world.addChild(board, pattern, tileRenderer.Layer, highlight.Layer, overlay);
             const draw = () => {
                 frame = 0;
                 if (disposed)
@@ -81,16 +81,17 @@ export function BoardCanvas({ onLatch, onCursor, onZoom, cameraCommand }: Props)
                     pattern.tilePosition.set(-(g.originX * Size % 256), -(g.originY * Size % 256));
                 }
                 board.roundRect(0, 0, g.width * Size, g.height * Size, Size).stroke({ color: '#31483f', width: 1.5 / v.zoom });
-                tileRenderer!.draw({ occupied: s.Tiles, preview: s.Preview, previewValid: s.PreviewValid,
-                    simulating: s.Simulating, runtime: s.RuntimeGrid, mode: s.RenderMode }, v);
                 const ids=[...new Set([...(s.Selection?.ids??[]),...s.MergeIds])];
                 const hover=editorInput.Hover,hovered=hover?s.Tiles.get(cellKey(hover))?.componentId:undefined;
-                const hoverIds=hovered&&!ids.includes(hovered)&&!s.Preview&&s.EditTool!=='split'?[hovered]:[];
-                selectedHighlight!.draw(s.Tiles,s.Components,ids,v,s.Simulating?s.RuntimeGrid:null);hoverHighlight!.draw(s.Tiles,s.Components,hoverIds,v,s.Simulating?s.RuntimeGrid:null);
+                const hoverIds=hovered&&!ids.includes(hovered)&&!s.Preview&&s.Gesture!=='rectanglePaint'&&s.EditTool!=='split'?[hovered]:[];
+                const highlighted=[...ids,...hoverIds];
+                tileRenderer!.draw({ occupied: s.Tiles, preview: s.Preview, previewValid: s.PreviewValid, highlighted,
+                    simulating: s.Simulating, runtime: s.RuntimeGrid, mode: s.RenderMode }, v);
+                highlight!.draw(s.Tiles,s.Components,highlighted,v);
                 element.style.cursor=editorInput.cursor;
                 element.dataset.highlightComponents=[...ids,...hoverIds].join(',');
                 element.dataset.highlightCells=String([...ids,...hoverIds].reduce((count,id)=>count+s.Components.count(id),0));
-                element.dataset.highlightObjects=String(selectedHighlight!.Count+hoverHighlight!.Count);
+                element.dataset.highlightObjects=String(highlight!.Count);
                 element.dataset.mergeCount=String(s.MergeIds.length);
                 element.dataset.componentCount=String(s.Components.size);
                 element.dataset.selectionKind=s.Selection?.kind??'none';
@@ -104,14 +105,17 @@ export function BoardCanvas({ onLatch, onCursor, onZoom, cameraCommand }: Props)
                 overlay.clear(); overlay.position.set(v.x, v.y);
                 const rectangle = (bounds: Grid, color: string, fill = false) => { overlay.rect(bounds.originX * Size - v.x, bounds.originY * Size - v.y, bounds.width * Size, bounds.height * Size); if (fill)
                     overlay.fill({ color, alpha: .04 }); overlay.stroke({ color, width: 2 / v.zoom }); };
-                if(s.EditTool==='draw'&&hover&&!hovered&&!s.Simulating&&!s.Preview&&contains(g,hover))
+                if(s.EditTool==='draw'&&hover&&!hovered&&!s.Simulating&&!s.Preview&&s.Gesture!=='rectanglePaint'&&contains(g,hover))
                     overlay.rect(hover.x*Size-v.x,hover.y*Size-v.y,Size,Size).fill({color:'#f0f8ff',alpha:.10});
                 if(s.Preview)rectangle(s.Preview.Bounds,s.PreviewValid?'#69e6a6':'#ff657e',true);
+                if(s.RectanglePaint) {
+                    const p=s.RectanglePaint,b=p.Bounds,[r,g,bColor]=tileColor({...p.Material,...p.Anchor,componentId:0});
+                    overlay.rect(b.originX*Size-v.x,b.originY*Size-v.y,b.width*Size,b.height*Size).fill({color:(r<<16)|(g<<8)|bColor,alpha:.5});
+                }
+                element.dataset.rectangleCells=String(s.RectanglePaint?s.RectanglePaint.Bounds.width*s.RectanglePaint.Bounds.height:0);
                 if(s.Marquee)drawMarquee(overlay,s.Marquee.Bounds,v);
                 if(s.EditTool==='split'&&!s.Simulating) {
                     if(s.SplitPath?.Edges.size) {
-                        for(const edge of s.SplitPath.Edges.values())overlay.moveTo(edge.Start.x*Size-v.x,edge.Start.y*Size-v.y).lineTo(edge.End.x*Size-v.x,edge.End.y*Size-v.y);
-                        overlay.stroke({color:'#111720',width:5/v.zoom});
                         for(const edge of s.SplitPath.Edges.values())overlay.moveTo(edge.Start.x*Size-v.x,edge.Start.y*Size-v.y).lineTo(edge.End.x*Size-v.x,edge.End.y*Size-v.y);
                         overlay.stroke({color:'#f2c94c',width:2/v.zoom});
                     }
@@ -147,7 +151,7 @@ export function BoardCanvas({ onLatch, onCursor, onZoom, cameraCommand }: Props)
             element.dataset.renderReady = 'true';
             requestDraw.current();
         })().catch(error => { element.dataset.renderError = String(error); useEditor.getState().log(String(error)); });
-        return () => { disposed = true; disconnect(); unsubscribe(); observer?.disconnect(); cancelAnimationFrame(frame); requestDraw.current = () => { }; selectedHighlight?.destroy(); hoverHighlight?.destroy(); tileRenderer?.destroy(); if (app.renderer)
+        return () => { disposed = true; disconnect(); unsubscribe(); observer?.disconnect(); cancelAnimationFrame(frame); requestDraw.current = () => { }; highlight?.destroy(); tileRenderer?.destroy(); if (app.renderer)
             app.destroy(true, { children: true }); patternTexture?.destroy(true); };
     }, []);
     useEffect(() => { if (!cameraCommand || cameraCommand.action === 'none')

@@ -41,7 +41,7 @@ for (const lod of ['detail', 'color', 'aggregate'] as const) for (const isOn of 
         await expect(board).toHaveAttribute('data-lod', lod);
         const half = size / 2, quarter = size / 4, middle = (half + quarter) / 2;
         const points = [[-middle * px, 0], [0, 0], [(half + quarter * .75) * px, 0], [-half * px + 1.5, 0],
-            [0, -middle * px], [-half * px - 3, 0]];
+            [0, -middle * px], [-half * px - .375 * px - 3, 0]];
         for (const mode of ['2D', '2.5D']) {
             await page.getByText(mode, { exact: true }).click(); await board.focus(); await page.keyboard.press('Control+d'); await page.mouse.move(100, 25);
             await expect(board).toHaveAttribute('data-color-ready', 'true');
@@ -56,9 +56,10 @@ for (const lod of ['detail', 'color', 'aggregate'] as const) for (const isOn of 
             await expect(board).toHaveAttribute('data-selection-cells', String(size * size * .75));
             const selected = await pixels(page, points);
             expect(selected[0]).not.toEqual(before[0]); expect(selected[1]).toEqual(before[1]); expect(selected[2]).toEqual(before[2]);
-            expect(selected[3]).not.toEqual(hovered[3]); expect(selected[5]).toEqual(before[5]);
-            expect(selected[0]).not.toEqual(hovered[0]);
-            for (let channel = 0; channel < 3; channel++) expect(Math.abs(selected[0][channel] - before[0][channel])).toBeLessThanOrEqual(80);
+            expect(selected[3]).toEqual(hovered[3]); expect(selected[5]).toEqual(before[5]);
+            expect(selected[0]).toEqual(hovered[0]);
+            await page.mouse.move(center.x - middle * px, center.y);
+            expect(await pixels(page, points)).toEqual(selected); // Selection + hover is one pass, including aggregate coverage.
             expect(Number(await board.getAttribute('data-highlight-objects'))).toBeLessThan(200);
             await page.screenshot({ path: buildPath(`Highlight${lod}${mode === '2D' ? 'Flat' : 'Depth'}${isOn ? 'Bright' : 'Dark'}SelectedCapture.png`) });
             await page.keyboard.down('Shift'); await page.mouse.move(center.x - half * px - 12, center.y - half * px - 12);
@@ -71,36 +72,89 @@ for (const lod of ['detail', 'color', 'aggregate'] as const) for (const isOn of 
     });
 }
 
-test('whole-surface emphasis stays visible across the ink palette including nearly white LEDs', async ({ page }) => {
-    const inks = ['trace', 'traceRed', 'traceGreen', 'traceBlue', 'traceCyan', 'traceMagenta', 'led'];
-    await page.addInitScript(inks => {
+const PaletteInks = ['trace', 'traceRed', 'traceGreen', 'traceBlue', 'traceCyan', 'traceMagenta', 'bus', 'busRed', 'busGreen', 'busYellow', 'busCyan', 'busMagenta', 'cross', 'read', 'write', 'buffer', 'and', 'or', 'xor', 'not', 'nand', 'nor', 'xnor', 'latch', 'clock', 'led'];
+const brightness = (pixel: number[]) => pixel[0] * .2126 + pixel[1] * .7152 + pixel[2] * .0722;
+for (const isOn of [true, false]) test(`every ink reserves visible highlight headroom on ${isOn ? 'active' : 'inactive'} surfaces`, async ({ page }) => {
+    await page.addInitScript(({ inks, isOn }) => {
         (window as unknown as { __TAURI_INTERNALS__: unknown }).__TAURI_INTERNALS__ = { invoke: async (command: string) => {
             if (command === 'recentProjects') return ['Palette.ocb'];
             if (command !== 'openProject') throw Error(command);
             return { board: { selectedTool: 'led', clockHoldTicks: 1, latchInitialState: true,
                 grid: { originX: -20, originY: -14, width: 40, height: 28 },
-                tiles: inks.map((toolId, i) => ({ x: i - 3, y: 0, componentId: i + 1, toolId, isOn: true })) }, blueprints: [] };
+                tiles: inks.map((toolId, i) => ({ x: i % 7 - 3, y: Math.floor(i / 7) - 2, componentId: i + 1, toolId, isOn })) }, blueprints: [] };
         } };
-    }, inks);
+    }, { inks: PaletteInks, isOn });
     await page.goto('/'); await expect(page.getByTestId('board')).toHaveAttribute('data-render-ready', 'true');
     await page.locator('.project-switcher').click(); await page.getByRole('menuitem', { name: 'Palette.ocb', exact: true }).click();
     const board = page.getByTestId('board'), box = (await board.boundingBox())!;
     const center = { x: box.x + box.width / 2, y: box.y + box.height / 2 };
-    const points = inks.map((_, i) => [(i - 3) * 32 + 4, 4]);
+    const points = PaletteInks.map((_, i) => [(i % 7 - 3) * 32 + 2, (Math.floor(i / 7) - 2) * 32 + 2]);
     for (const mode of ['2D', '2.5D']) {
         await page.getByText(mode, { exact: true }).click(); await board.focus(); await page.keyboard.press('Control+d'); await page.mouse.move(100, 25);
-        const before = await pixels(page, points);
-        for (let i = 0; i < inks.length; i++) {
-            await page.mouse.move(center.x + points[i][0], center.y + points[i][1]); await settle(page);
+        await expect(board).toHaveAttribute('data-color-ready', 'true');
+        const before = await pixels(page, points), individual: number[][] = [];
+        for (let i = 0; i < PaletteInks.length; i++) {
+            expect(brightness(before[i])).toBeLessThanOrEqual(160);
+            await page.mouse.move(center.x + points[i][0], center.y + points[i][1]);
+            await expect(board).toHaveAttribute('data-highlight-components', String(i + 1));
             const hovered = await pixels(page, points);
-            expect(Math.max(...hovered[i].slice(0, 3).map((value, channel) => Math.abs(value - before[i][channel])))).toBeGreaterThan(10);
-            for (let other = 0; other < inks.length; other++) if (i !== other) expect(hovered[other]).toEqual(before[other]);
+            expect(brightness(hovered[i]) - brightness(before[i]), PaletteInks[i]).toBeGreaterThanOrEqual(21);
+            individual.push(hovered[i]);
+            for (let other = 0; other < PaletteInks.length; other++) if (i !== other) expect(hovered[other]).toEqual(before[other]);
         }
-        await page.screenshot({ path: buildPath(`HighlightPalette${mode === '2D' ? 'Flat' : 'Depth'}HoverCapture.png`) });
+        await page.screenshot({ path: buildPath(`HighlightPalette${mode === '2D' ? 'Flat' : 'Depth'}${isOn ? 'Active' : 'Inactive'}HoverCapture.png`) });
         await board.focus(); await page.keyboard.press('Control+a'); await page.mouse.move(100, 25);
         const selected = await pixels(page, points);
-        for (let i = 0; i < inks.length; i++)
-            expect(Math.max(...selected[i].slice(0, 3).map((value, channel) => Math.abs(value - before[i][channel])))).toBeGreaterThan(20);
-        await page.screenshot({ path: buildPath(`HighlightPalette${mode === '2D' ? 'Flat' : 'Depth'}SelectedCapture.png`) });
+        expect(selected).toEqual(individual);
+        await page.mouse.move(center.x + points[0][0], center.y + points[0][1]);
+        expect(await pixels(page, points)).toEqual(selected);
+        await page.screenshot({ path: buildPath(`HighlightPalette${mode === '2D' ? 'Flat' : 'Depth'}${isOn ? 'Active' : 'Inactive'}SelectedCapture.png`) });
     }
 });
+
+for (const lod of ['detail', 'color'] as const) for (const isOn of [true, false])
+    test(`${lod} highlights both depth faces with correct diagonal occlusion on ${isOn ? 'active' : 'inactive'} ink`, async ({ page }) => {
+        const extent = lod === 'detail' ? 40 : 96;
+        await page.addInitScript(({ extent, isOn }) => {
+            (window as unknown as { __TAURI_INTERNALS__: unknown }).__TAURI_INTERNALS__ = { invoke: async (command: string) => {
+                if (command === 'recentProjects') return ['DepthHighlight.ocb']; if (command !== 'openProject') throw Error(command);
+                const tiles = [];
+                for (let y = -4; y < 4; y++) for (let x = -4; x < 5; x++) {
+                    if (x >= -2 && x < 2 && y >= -2 && y < 2) continue;
+                    tiles.push({ x, y, toolId: 'traceCyan', componentId: x < 4 ? 1 : 2, isOn });
+                }
+                tiles.push({ x: -5, y: 4, toolId: 'traceRed', componentId: 3, isOn });
+                return { board: { selectedTool: 'traceCyan', clockHoldTicks: 1, latchInitialState: true,
+                    grid: { originX: -extent / 2, originY: -extent / 2, width: extent, height: extent }, tiles }, blueprints: [] };
+            } };
+        }, { extent, isOn });
+        await page.goto('/'); const board = page.getByTestId('board'); await expect(board).toHaveAttribute('data-render-ready', 'true');
+        await page.locator('.project-switcher').click(); await page.getByRole('menuitem', { name: 'DepthHighlight.ocb', exact: true }).click();
+        await expect(page.getByRole('menu')).toBeHidden();
+        const box = (await board.boundingBox())!, center = { x: box.x + box.width / 2, y: box.y + box.height / 2 };
+        const px = lod === 'detail' ? 32 : Math.min(box.width, box.height) / extent;
+        if (lod === 'color') await page.getByRole('button', { name: 'Fit board in view', exact: true }).click();
+        await expect(board).toHaveAttribute('data-lod', lod);
+        // Top, left face, bottom face, hole wall, diagonal occluder, adjacent top, empty exterior, hole center.
+        const points = [[-3, 0], [-4.1875, .6875], [-2.6875, 4.1875], [1.8125, .6875], [-4.1875, 4.1875], [4.5, .5], [-4.6, .6875], [0, 0]].map(p => p.map(v => v * px));
+        for (const mode of ['2D', '2.5D']) {
+            await page.getByText(mode, { exact: true }).click(); await board.focus(); await page.keyboard.press('Control+d'); await page.mouse.move(100, 25);
+            await expect(board).toHaveAttribute('data-color-ready', 'true'); const before = await pixels(page, points);
+            await page.mouse.move(center.x - 3 * px, center.y); await expect(board).toHaveAttribute('data-highlight-components', '1');
+            const hovered = await pixels(page, points);
+            expect(hovered[0]).not.toEqual(before[0]);
+            for (const i of [1, 2, 3]) {
+                if (mode === '2.5D') {
+                    expect(brightness(hovered[i]) - brightness(before[i])).toBeGreaterThan(15);
+                    expect(brightness(hovered[0]) - brightness(hovered[i])).toBeGreaterThan(5);
+                }
+                else expect(hovered[i]).toEqual(before[i]);
+            }
+            for (const i of [4, 5, 6, 7]) expect(hovered[i]).toEqual(before[i]);
+            await page.screenshot({ path: buildPath(`HighlightSides${lod}${mode === '2D' ? 'Flat' : 'Depth'}${isOn ? 'Active' : 'Inactive'}HoverCapture.png`) });
+            await page.mouse.click(center.x - 3 * px, center.y); await page.mouse.move(100, 25); await expect(board).toHaveAttribute('data-selection-cells', '48');
+            expect(await pixels(page, points)).toEqual(hovered);
+            await page.mouse.move(center.x - 3 * px, center.y); expect(await pixels(page, points)).toEqual(hovered);
+            await expect(board).not.toHaveAttribute('data-render-error');
+        }
+    });

@@ -29,14 +29,13 @@ describe('Pointer-first interaction state machine',()=>{
         click(1,1);expect(selectionCount(s())).toBe(1);
         click(8,8);expect(s().Selection).toBeNull();expect(s().Tiles.size).toBe(9);
     });
-    it('uses Shift clicks and additive marquees for complete components, including from Draw',()=>{
+    it('uses Shift clicks and additive marquees for complete components, in Pointer mode',()=>{
         stroke(0,0,4);stroke(0,1,4);stroke(0,3,4);click(0);
         input.down(pointer(0,true),point(2,1));expect(selectionCount(s())).toBe(5);input.up(0,point(2,1));expect(selectionCount(s())).toBe(10);expect(canMergeSelection(s())).toBe(true);
         click(4,1,pointer(0,true));expect(selectionCount(s())).toBe(5);click(8,8,pointer(0,true));expect(selectionCount(s())).toBe(5);
         input.down(pointer(0,true),point(2,1));input.move(point(2,3));input.up(0,point(2,3));expect(selectionCount(s())).toBe(15);
         input.execute('delete',{x:0,y:0});expect(s().Tiles.size).toBe(0);s().undo();expect(selectionCount(s())).toBe(15);
-        s().selectTool('clock');input.down(pointer(0,true),point(2,1));input.move(point(3,3));input.up(0,point(3,3));
-        expect(selectionCount(s())).toBe(10);expect(s().EditTool).toBe('pointer');expect(s().Tiles.size).toBe(15);
+
     });
     it('shows merge eligibility only for compatible connected selections and merges in one undo',()=>{
         stroke(0,0,2);stroke(0,1,2);stroke(0,3,2);click(0);click(0,3,pointer(0,true));expect(canMergeSelection(s())).toBe(false);

@@ -2,6 +2,7 @@ import { AlphaFilter, Assets, BlurFilter, Container, FillGradient, Graphics, Gra
 import { cellKey, hasGlyph, iconUrl, inkColor, type Tile, type RenderMode, type Grid } from './Model';
 import { CellStore } from './CellStore';
 import { ColorCache } from './ColorCache';
+import { HighlightTint, HighlightStrength } from './HighlightStyle';
 import { colorKey, colorLevel, detailLevel } from './ColorPyramid';
 import type { RuntimeGrid } from './EditorStore';
 import { BottomFace, CellSize, exposedFaces, Extrusion, LeftFace, ShadowMargin } from './TileGeometry';
@@ -15,6 +16,7 @@ export interface TileView {
 }
 export interface TileScene {
     occupied: CellStore;
+    highlighted?: readonly number[];
     preview: import('./EditorStore').PlacementPreview | null;
     previewValid: boolean;
     simulating: boolean;
@@ -138,7 +140,7 @@ class TileGroup {
     private readonly Raster = new Container();
     private readonly RasterSides = new Container();
     private readonly Rasters = new Map<string, Sprite>();
-    private readonly BlockSides = new Map<string, { Source: unknown; Left: unknown; Bottom: unknown; Runtime: unknown; Graphics: Graphics }>();
+    private readonly BlockSides = new Map<string, { Source: unknown; Left: unknown; Bottom: unknown; Runtime: unknown; Highlight: string; Graphics: Graphics }>();
     private readonly Colors: ColorCache;
     private readonly BatchedShadow: TileShadow;
     Count = 0;
@@ -193,7 +195,7 @@ class TileGroup {
         if (mode === '2.5d') this.Shadow.update(tiles, geometry, transient, view);
         else this.Shadow.Layer.visible = false;
     }
-    draw(source: CellStore, materialFor: (tile: Tile) => Material, view: TileView, mode: RenderMode, runtime: RuntimeGrid | null, tint = 0xffffff) {
+    draw(source: CellStore, materialFor: (tile: Tile) => Material, view: TileView, mode: RenderMode, runtime: RuntimeGrid | null, tint = 0xffffff, highlightStamp = '') {
         if (!source.size) { this.clear(); return; }
         this.Source = source; this.Layer.visible = true;
         this.Colors.sync(source, runtime);
@@ -234,7 +236,7 @@ class TileGroup {
                 const left = source.chunk(block.x - 1, block.y), bottom = source.chunk(block.x, block.y + 1);
                 let entry = this.BlockSides.get(key);
                 const runtimeKey = runtimeStamp(runtime, block.x, block.y);
-                if (!entry || entry.Source !== chunk || entry.Left !== left || entry.Bottom !== bottom || entry.Runtime !== runtimeKey) {
+                if (!entry || entry.Source !== chunk || entry.Left !== left || entry.Bottom !== bottom || entry.Runtime !== runtimeKey || entry.Highlight !== highlightStamp) {
                     if (entry) entry.Graphics.destroy();
                     const graphics = new Graphics();
                     graphics.position.set(block.x * 64 * CellSize, block.y * 64 * CellSize);
@@ -246,7 +248,7 @@ class TileGroup {
                         if (faces & BottomFace) graphics.poly([-Extrusion, CellSize + Extrusion, 0, CellSize, CellSize, CellSize, CellSize - Extrusion, CellSize + Extrusion]).fill(material.Gradients[1]);
                     }
                     this.RasterSides.addChild(graphics);
-                    entry = { Source: chunk, Left: left, Bottom: bottom, Runtime: runtimeKey, Graphics: graphics };
+                    entry = { Source: chunk, Left: left, Bottom: bottom, Runtime: runtimeKey, Highlight: highlightStamp, Graphics: graphics };
                     this.BlockSides.set(key, entry);
                 }
                 entry.Graphics.tint = tint; sidesWanted.add(key);
@@ -337,15 +339,21 @@ export class TileRenderer {
         face.destroy({ children: true });
         return texture;
     }
-    private material(tool: string, on: boolean): Material {
-        const id = `${tool}:${on}`;
+    private material(tool: string, on: boolean, highlighted = false): Material {
+        const id = `${tool}:${on}:${highlighted}`;
         let material = this.Materials.get(id);
         if (material)
             return material;
         const color = parseInt(inkColor(tool).slice(1), 16);
         const base = on ? color : mixColor(BoardColor, color, .28);
-        const left = new FillGradient({ type: 'linear', textureSpace: 'global', start: { x: 0, y: 0 }, end: { x: -Extrusion, y: 0 }, colorStops: [{ offset: 0, color: mixColor(0, base, .56) }, { offset: 1, color: mixColor(0, base, .36) }] });
-        const bottom = new FillGradient({ type: 'linear', textureSpace: 'global', start: { x: 0, y: CellSize }, end: { x: 0, y: CellSize + Extrusion }, colorStops: [{ offset: 0, color: mixColor(0, base, .46) }, { offset: 1, color: mixColor(0, base, .28) }] });
+        // Blend the side materials inside their normal layer, below all top faces.
+        // This preserves gradients and diagonal occlusion without stacking surface overlays.
+        const sideColor = (shade: number) => {
+            const color = mixColor(0, base, shade);
+            return highlighted ? mixColor(color, HighlightTint, HighlightStrength) : color;
+        };
+        const left = new FillGradient({ type: 'linear', textureSpace: 'global', start: { x: 0, y: 0 }, end: { x: -Extrusion, y: 0 }, colorStops: [{ offset: 0, color: sideColor(.56) }, { offset: 1, color: sideColor(.36) }] });
+        const bottom = new FillGradient({ type: 'linear', textureSpace: 'global', start: { x: 0, y: CellSize }, end: { x: 0, y: CellSize + Extrusion }, colorStops: [{ offset: 0, color: sideColor(.46) }, { offset: 1, color: sideColor(.28) }] });
         const sides = Array.from({ length: 4 }, (_, mask) => {
             const context = new GraphicsContext();
             if (mask & LeftFace)
@@ -367,14 +375,15 @@ export class TileRenderer {
             this.SolidSource = moving ? scene.occupied.update((function* () { for (const key of moving.keys()) yield [key, undefined] as const; })()) : scene.occupied;
             this.BoardSource = scene.occupied; this.MovingSource = moving;
         }
+        const highlighted = new Set(scene.highlighted ?? []), highlightStamp = [...highlighted].sort((a,b)=>a-b).join(',');
         const materialFor = (tile: Tile) => {
             const runtime = scene.runtime;
             const x = runtime ? tile.x - runtime.originX : -1, y = runtime ? tile.y - runtime.originY : -1;
             const on = scene.simulating && runtime && x >= 0 && x < runtime.width && y >= 0 && y < runtime.height ? !!runtime.states[y * runtime.width + x] : tile.isOn;
-            return this.material(tile.toolId, on);
+            return this.material(tile.toolId, on, highlighted.has(tile.componentId));
         };
-        this.Solid.draw(this.SolidSource, materialFor, view, scene.mode, scene.simulating ? scene.runtime : null);
-        if (moving) this.Moving.draw(moving, materialFor, view, scene.mode, null); else this.Moving.clear();
+        this.Solid.draw(this.SolidSource, materialFor, view, scene.mode, scene.simulating ? scene.runtime : null, 0xffffff, highlightStamp);
+        if (moving) this.Moving.draw(moving, materialFor, view, scene.mode, null, 0xffffff, highlightStamp); else this.Moving.clear();
         if (scene.preview) {
             const offset = scene.preview.Offset;
             this.Preview.Layer.position.set(offset.x * CellSize, offset.y * CellSize);

@@ -12,7 +12,7 @@ async function hoverId(page:Page,x:number,y:number,cells:number) {
     return (await page.getByTestId('board').getAttribute('data-highlight-components'))!;
 }
 async function select(page:Page,x:number,y:number,ex:number,ey:number) {
-    await page.keyboard.down('Shift');await drag(page,x,y,ex,ey);await page.keyboard.up('Shift');
+    await page.keyboard.press('v');await page.keyboard.down('Shift');await drag(page,x,y,ex,ey);await page.keyboard.up('Shift');
 }
 async function settle(page:Page) {await page.evaluate(()=>new Promise<void>(resolve=>requestAnimationFrame(()=>requestAnimationFrame(()=>resolve()))));}
 
@@ -93,7 +93,8 @@ test('whole-region highlights preserve holes and leave touching independent comp
     await expect(page.locator('.workspace-status')).toContainText('11 cells');
     const pixels=()=>page.locator('canvas[aria-label="Circuit board"]').evaluate(element=>{
         const canvas=element as HTMLCanvasElement,gl=canvas.getContext('webgl2')!,scale=canvas.width/canvas.getBoundingClientRect().width;
-        return [[0,0],[1,1],[3,1],[0,-.25]].map(([x,y])=>{const p=new Uint8Array(4);gl.readPixels(Math.floor(canvas.width/2+(x*32+8)*scale),canvas.height-1-Math.floor(canvas.height/2+(y*32+8)*scale),1,1,gl.RGBA,gl.UNSIGNED_BYTE,p);return [...p];});
+        // Sample the hole center, beyond the actual extruded inner walls.
+        return [[0,0],[1.25,1.25],[3,1],[0,-.25]].map(([x,y])=>{const p=new Uint8Array(4);gl.readPixels(Math.floor(canvas.width/2+(x*32+8)*scale),canvas.height-1-Math.floor(canvas.height/2+(y*32+8)*scale),1,1,gl.RGBA,gl.UNSIGNED_BYTE,p);return [...p];});
     });
     for(const mode of ['2D','2.5D']) {
         await page.getByText(mode,{exact:true}).click();await page.mouse.move(100,25);await settle(page);const before=await pixels();

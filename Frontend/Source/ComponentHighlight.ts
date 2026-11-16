@@ -1,15 +1,13 @@
 import { BufferImageSource, Container, Graphics, Sprite, Texture } from 'pixi.js';
 import { CellStore } from './CellStore';
 import { ComponentIndex } from './ComponentIndex';
-import { colorKey, colorLevel, tileColor } from './ColorPyramid';
+import { colorKey, colorLevel } from './ColorPyramid';
 import { CellSize } from './TileGeometry';
+import { HighlightTint, HighlightStrength } from './HighlightStyle';
 import type { Grid } from './Model';
-import type { RuntimeGrid } from './EditorStore';
 import type { TileView } from './TileRenderer';
 const UnderlayColor = 0x0b1220;
 const SelectionColor = 0x8bdcff;
-const LightTint = 0xf0f8ff;
-const PaleTint = 0x5a9fd8;
 function strokeEdges(graphics: Graphics, edges: readonly number[], color: number, width: number) {
     for (let i = 0; i < edges.length; i += 4)
         graphics.moveTo(edges[i], edges[i + 1]).lineTo(edges[i + 2], edges[i + 3]);
@@ -23,24 +21,12 @@ export class ComponentHighlight {
     private Source?: CellStore;
     private Signature = '';
     private Camera = '';
-    private readonly Strength: number;
     Count = 0;
-    constructor(kind: 'hover' | 'selected') {
-        this.Strength = kind === 'hover' ? .16 : .32;
+    constructor() {
         this.Layer.addChild(this.Detail);
     }
-    draw(source: CellStore, index: ComponentIndex, ids: readonly number[], view: TileView, runtime: RuntimeGrid | null = null) {
-        const paleIds = new Set<number>();
-        for (const id of ids) {
-            const tile = index.sample(id);
-            if (!tile) continue;
-            const x = runtime ? tile.x - runtime.originX : -1, y = runtime ? tile.y - runtime.originY : -1;
-            const on = runtime && x >= 0 && x < runtime.width && y >= 0 && y < runtime.height ? !!runtime.states[y * runtime.width + x] : tile.isOn;
-            const [r, g, b] = tileColor(tile, on);
-            // Near-white surfaces need a blue tint; white-on-white would disappear.
-            if (r * .2126 + g * .7152 + b * .0722 > 220) paleIds.add(id);
-        }
-        const signature = `${ids.slice().sort((a, b) => a - b).join(',')}:${[...paleIds].sort((a, b) => a - b).join(',')}`;
+    draw(source: CellStore, index: ComponentIndex, ids: readonly number[], view: TileView) {
+        const signature = ids.slice().sort((a, b) => a - b).join(',');
         if (source !== this.Source || signature !== this.Signature) {
             this.clear(); this.Source = source; this.Signature = signature;
         }
@@ -56,12 +42,9 @@ export class ComponentHighlight {
         this.Detail.clear(); this.Detail.visible = px >= 12;
         if (px >= 12) {
             for (const sprite of this.Rasters.values()) sprite.visible = false;
-            const tiles = [...source.query(bounds)].filter(tile => wantedIds.has(tile.componentId));
-            for (const pale of [false, true]) {
-                for (const tile of tiles) if (paleIds.has(tile.componentId) === pale)
-                    this.Detail.rect(tile.x * CellSize, tile.y * CellSize, CellSize, CellSize);
-                this.Detail.fill({ color: pale ? PaleTint : LightTint, alpha: this.Strength });
-            }
+            for (const tile of source.query(bounds)) if (wantedIds.has(tile.componentId))
+                this.Detail.rect(tile.x * CellSize, tile.y * CellSize, CellSize, CellSize);
+            this.Detail.fill({ color: HighlightTint, alpha: HighlightStrength });
             this.Count = 1;
             return;
         }
@@ -71,37 +54,33 @@ export class ComponentHighlight {
             wanted.add(key);
             let sprite = this.Rasters.get(key);
             if (!sprite) {
-                const sums = new Float64Array(4096), pales = new Float64Array(4096), left = block.x * span, top = block.y * span;
+                const sums = new Float64Array(4096), left = block.x * span, top = block.y * span;
                 for (const chunk of source.chunks({ originX: left, originY: top, width: span, height: span })) {
                     const chunkKey = `${chunk.X},${chunk.Y}`;
-                    let coverage = 0, paleCount = 0;
+                    let coverage = 0;
                     if (wantedIds.size === index.size) coverage = chunk.Tiles.size;
                     else if (wantedIds.size > chunk.Tiles.size) {
                         for (const tile of chunk.Tiles.values()) if (wantedIds.has(tile.componentId)) coverage++;
                     }
                     else for (const id of wantedIds) coverage += index.chunkCount(id, chunkKey);
                     if (!coverage) continue;
-                    for (const id of paleIds) paleCount += index.chunkCount(id, chunkKey);
-                    if (coverage === 4096 && (paleCount === 0 || paleCount === 4096)) {
+                    if (coverage === 4096) {
                         const x = chunk.X * 64 - left, y = chunk.Y * 64 - top;
                         for (let py = Math.floor(y / step); py < Math.ceil((y + 64) / step); py++)
                             for (let px = Math.floor(x / step); px < Math.ceil((x + 64) / step); px++) {
                                 sums[py * 64 + px] += Math.min(step, 64) ** 2;
-                                if (paleCount) pales[py * 64 + px] += Math.min(step, 64) ** 2;
                             }
                     }
                     else for (const tile of chunk.Tiles.values()) if (wantedIds.has(tile.componentId)) {
                         const offset = Math.floor((tile.y - top) / step) * 64 + Math.floor((tile.x - left) / step);
                         sums[offset]++;
-                        if (paleIds.has(tile.componentId)) pales[offset]++;
                     }
                 }
                 const pixels = new Uint8Array(16384);
                 for (let i = 0; i < 4096; i++) if (sums[i]) {
-                    const pale = pales[i] / sums[i];
                     for (const [channel, shift] of [16, 8, 0].entries())
-                        pixels[i * 4 + channel] = Math.round(((LightTint >> shift) & 255) * (1 - pale) + ((PaleTint >> shift) & 255) * pale);
-                    pixels[i * 4 + 3] = Math.round(255 * this.Strength * Math.min(1, sums[i] / (step * step)));
+                        pixels[i * 4 + channel] = (HighlightTint >> shift) & 255;
+                    pixels[i * 4 + 3] = Math.round(255 * HighlightStrength * Math.min(1, sums[i] / (step * step)));
                 }
                 const texture = new Texture({ source: new BufferImageSource({ resource: pixels, width: 64, height: 64, format: 'rgba8unorm', alphaMode: 'no-premultiply-alpha', scaleMode: 'nearest' }) });
                 sprite = new Sprite(texture);

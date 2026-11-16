@@ -117,6 +117,7 @@ test('mixed off materials and clipboard ghosts stay opaque within each group and
     expectUniform(await pixels(page, [-1, 0].flatMap(x => [8, 24, 48].map(offset => ({ x: x * 64 + offset, y: 74 })))));
     await page.screenshot({ path: buildPath('MixedTileStatesCapture.png') });
     const origin = await center(page);
+    await page.keyboard.press('v');
     await page.keyboard.down('Shift');
     await page.mouse.move(origin.x - 63, origin.y + 1);
     await page.mouse.down();
@@ -143,6 +144,7 @@ test('mixed off materials and clipboard ghosts stay opaque within each group and
     await cleanCursor(page);
     expectUniform(await pixels(page, [-1, 0].flatMap(x => [8, 24, 48].map(offset => ({ x: x * 64 + offset, y: 138 })))));
     await page.screenshot({ path: buildPath('JoinedTilesCapture.png') });
+    await page.keyboard.press('v');
     await page.keyboard.down('Shift');
     await page.mouse.move(origin.x - 63, origin.y + 1);
     await page.mouse.down();
