@@ -1,4 +1,4 @@
-﻿import { browser, $, expect } from '@wdio/globals';
+import { browser, $, expect } from '@wdio/globals';
 import path from 'node:path';
 import { WorkspaceRoot, buildPath } from '../Paths';
 
@@ -70,6 +70,14 @@ describe('Hello World 5x8 example', () => {
             await browser.waitUntil(async () => await displayBits() === frame.bits, { timeoutMsg: `Incorrect native LED glyph: ${frame.name}` });
             await browser.saveScreenshot(buildPath(`DesktopHelloWorld${frame.name}Capture.png`));
         }
+        await $('button[aria-label="Fit board in view"]').click();
+        await expect($('[data-testid="board"]')).toHaveAttribute('data-lod', 'aggregate');
+        await browser.waitUntil(async () => await $('[data-testid="board"]').getAttribute('data-color-ready') === 'true', { timeout: 30000 });
+        const overview = await browser.execute(() => (document.querySelector('canvas[aria-label="Circuit board"]') as HTMLCanvasElement).toDataURL());
+        await $('input[aria-label="Step length"]').setValue('8'); await browser.keys('Tab');
+        await $('button[aria-label="Next tick"]').click(); tick += 8;
+        await browser.waitUntil(async () => await browser.execute(() => (document.querySelector('canvas[aria-label="Circuit board"]') as HTMLCanvasElement).toDataURL()) !== overview, { timeoutMsg: 'Hello World overview did not refresh after a native step' });
+        await browser.saveScreenshot(buildPath('DesktopHelloWorldOverviewCapture.png'));
         await $('button[aria-label="Run simulation"]').click();
         await browser.waitUntil(async () => !(await $('.workspace-status').getText()).includes(`Tick ${tick}`));
         await $('button[aria-label="Pause simulation"]').click();

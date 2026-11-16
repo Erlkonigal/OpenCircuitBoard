@@ -140,7 +140,7 @@ class TileGroup {
     private readonly Raster = new Container();
     private readonly RasterSides = new Container();
     private readonly Rasters = new Map<string, Sprite>();
-    private readonly BlockSides = new Map<string, { Source: unknown; Left: unknown; Bottom: unknown; Runtime: unknown; Highlight: string; Graphics: Graphics }>();
+    private readonly BlockSides = new Map<string, { Source: unknown; Left: unknown; Bottom: unknown; Runtime: unknown; Highlight: string; Faces: { Tile: Tile; Mask: number }[]; Graphics: Graphics }>();
     private readonly Colors: ColorCache;
     private readonly BatchedShadow: TileShadow;
     Count = 0;
@@ -195,10 +195,12 @@ class TileGroup {
         if (mode === '2.5d') this.Shadow.update(tiles, geometry, transient, view);
         else this.Shadow.Layer.visible = false;
     }
+    prepareRuntime(runtime: RuntimeGrid | null) { if (this.Source && this.Lod === 'aggregate') this.Colors.prepare(this.Source, runtime); }
     draw(source: CellStore, materialFor: (tile: Tile) => Material, view: TileView, mode: RenderMode, runtime: RuntimeGrid | null, tint = 0xffffff, highlightStamp = '') {
         if (!source.size) { this.clear(); return; }
         this.Source = source; this.Layer.visible = true;
         this.Colors.sync(source, runtime);
+        this.Colors.begin();
         this.Lod = detailLevel(view.zoom * CellSize);
         const bounds = { originX: Math.floor((view.x - view.width / (2 * view.zoom) - CellSize - ShadowMargin) / CellSize),
             originY: Math.floor((view.y - view.height / (2 * view.zoom) - CellSize - ShadowMargin) / CellSize),
@@ -236,22 +238,23 @@ class TileGroup {
                 const left = source.chunk(block.x - 1, block.y), bottom = source.chunk(block.x, block.y + 1);
                 let entry = this.BlockSides.get(key);
                 const runtimeKey = runtimeStamp(runtime, block.x, block.y);
-                if (!entry || entry.Source !== chunk || entry.Left !== left || entry.Bottom !== bottom || entry.Runtime !== runtimeKey || entry.Highlight !== highlightStamp) {
+                const geometryChanged = !entry || entry.Source !== chunk || entry.Left !== left || entry.Bottom !== bottom;
+                const faces = geometryChanged ? [...chunk.Tiles.values()].map(tile => ({ Tile: tile, Mask: exposedFaces(tile, source) })).filter(face => face.Mask !== 0) : entry!.Faces;
+                if (geometryChanged || faces.length && (entry!.Runtime !== runtimeKey || entry!.Highlight !== highlightStamp)) {
                     if (entry) entry.Graphics.destroy();
                     const graphics = new Graphics();
                     graphics.position.set(block.x * 64 * CellSize, block.y * 64 * CellSize);
-                    for (const tile of chunk.Tiles.values()) {
-                        const faces = exposedFaces(tile, source); if (!faces) continue;
+                    for (const { Tile: tile, Mask: mask } of faces) {
                         const material = materialFor(tile), x = (tile.x - block.x * 64) * CellSize, y = (tile.y - block.y * 64) * CellSize;
                         graphics.setTransform(new Matrix(1, 0, 0, 1, x, y));
-                        if (faces & LeftFace) graphics.poly([-Extrusion, Extrusion, 0, 0, 0, CellSize, -Extrusion, CellSize + Extrusion]).fill(material.Gradients[0]);
-                        if (faces & BottomFace) graphics.poly([-Extrusion, CellSize + Extrusion, 0, CellSize, CellSize, CellSize, CellSize - Extrusion, CellSize + Extrusion]).fill(material.Gradients[1]);
+                        if (mask & LeftFace) graphics.poly([-Extrusion, Extrusion, 0, 0, 0, CellSize, -Extrusion, CellSize + Extrusion]).fill(material.Gradients[0]);
+                        if (mask & BottomFace) graphics.poly([-Extrusion, CellSize + Extrusion, 0, CellSize, CellSize, CellSize, CellSize - Extrusion, CellSize + Extrusion]).fill(material.Gradients[1]);
                     }
                     this.RasterSides.addChild(graphics);
-                    entry = { Source: chunk, Left: left, Bottom: bottom, Runtime: runtimeKey, Highlight: highlightStamp, Graphics: graphics };
+                    entry = { Source: chunk, Left: left, Bottom: bottom, Runtime: runtimeKey, Highlight: highlightStamp, Faces: faces, Graphics: graphics };
                     this.BlockSides.set(key, entry);
                 }
-                entry.Graphics.tint = tint; sidesWanted.add(key);
+                entry!.Runtime = runtimeKey; entry!.Highlight = highlightStamp; entry!.Graphics.tint = tint; sidesWanted.add(key);
                 if (updateShadow && chunk.Tiles.size === 4096) shadowBlocks.push({ originX: block.x * 64, originY: block.y * 64, width: 64, height: 64 });
                 else if (updateShadow) shadowTiles.push(...chunk.Tiles.values());
             }
@@ -369,6 +372,7 @@ export class TileRenderer {
     get Ready() { return this.Solid.Ready && (!this.Moving.Layer.visible || this.Moving.Ready) && (!this.Preview.Layer.visible || this.Preview.Ready); }
     get Count() { return this.Solid.Count + (this.Moving.Layer.visible ? this.Moving.Count : 0) + (this.Preview.Layer.visible ? this.Preview.Count : 0); }
     get Lod() { return this.Solid.Lod; }
+    prepareRuntime(runtime: RuntimeGrid | null) { this.Solid.prepareRuntime(runtime); }
     draw(scene: TileScene, view: TileView) {
         const moving = scene.preview?.Kind === 'move' ? scene.preview.Source : undefined;
         if (this.BoardSource !== scene.occupied || this.MovingSource !== moving) {

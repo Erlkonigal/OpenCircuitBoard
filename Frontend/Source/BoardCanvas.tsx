@@ -137,6 +137,7 @@ export function BoardCanvas({ onLatch, onCursor, onZoom, cameraCommand }: Props)
                 }
             }); };
             unsubscribe = useEditor.subscribe((next, previous) => {
+                if (next.RuntimeGrid !== previous.RuntimeGrid) tileRenderer?.prepareRuntime(next.Simulating ? next.RuntimeGrid : null);
                 if (next.Tiles !== previous.Tiles || next.Preview !== previous.Preview || next.RenderMode !== previous.RenderMode || next.RuntimeGrid !== previous.RuntimeGrid)
                     element.dataset.colorReady = 'false';
                 requestDraw.current();

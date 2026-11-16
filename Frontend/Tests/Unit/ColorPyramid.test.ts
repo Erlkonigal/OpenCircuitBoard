@@ -44,4 +44,27 @@ describe('Area weighted color LOD', () => {
         }
     });
 
+    it('applies state-only updates to dense and sparse chunks without stale lazy ancestors', () => {
+        const dense = Array.from({ length: 4096 }, (_, index): Tile => ({ x: index % 64, y: Math.floor(index / 64), toolId: 'traceRed', componentId: 1, isOn: true }));
+        const sparse: Tile[] = [{ x: -1, y: -1, toolId: 'led', componentId: 2, isOn: false }];
+        const pyramid = new ColorPyramid();
+        pyramid.update([{ x: 0, y: 0, tiles: dense }, { x: -1, y: -1, tiles: sparse }]);
+        const requests = [{ x: 0, y: 0, level: 0 }, { x: 0, y: 0, level: 1 }, { x: 0, y: 0, level: 6 }, { x: -1, y: -1, level: 2 }, { x: -1, y: -1, level: 25 }];
+        for (const request of requests) pyramid.raster(request);
+        for (let tick = 0; tick < 4; tick++) {
+            const states = Uint8Array.from(dense, (_, index) => Number((index + tick) % 3 === 0));
+            const sparseStates = new Uint8Array([tick % 2]);
+            pyramid.updateStates([{ x: 0, y: 0, states }, { x: -1, y: -1, states: sparseStates }]);
+            const reference = new ColorPyramid();
+            reference.update([{ x: 0, y: 0, tiles: dense, states }, { x: -1, y: -1, tiles: sparse, states: sparseStates }]);
+            for (const request of requests) {
+                expect(pyramid.raster(request).pixels).toEqual(reference.raster(request).pixels);
+                const version = pyramid.raster(request).version;
+                pyramid.updateStates([{ x: 0, y: 0, states }, { x: -1, y: -1, states: sparseStates }]);
+                expect(pyramid.raster(request).version).toBe(version);
+            }
+        }
+        pyramid.update([{ x: 0, y: 0, tiles: [] }, { x: -1, y: -1, tiles: [] }]);
+        for (const request of requests) expect(pyramid.raster(request).pixels.every(value => value === 0)).toBe(true);
+    });
 });
