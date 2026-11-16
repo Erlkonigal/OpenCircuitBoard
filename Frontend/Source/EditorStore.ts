@@ -2,9 +2,10 @@ import { create } from 'zustand';
 import { cellKey, contains, ToolIds, newBoard, validateBoard, validateProject, type EditorTool, type Board, type Blueprint, type ClipboardItem, type Grid, type Point, type ProjectDocument, type RenderMode, type Selection, type Tile } from './Model';
 import { CellStore, inkSource, type CellChange } from './CellStore';
 import { ComponentIndex } from './ComponentIndex';
-import { connectedRegions, snapshotTiles } from './ComponentTopology';
+import { compatibleComponents, connectedRegions, snapshotTiles } from './ComponentTopology';
 import { selectionSource, selectionIds } from './Selection';
 import { loadRenderMode, saveRenderMode } from './Preferences';
+import { SplitPath } from './SplitPath';
 interface Document {
     tiles: CellStore;
     grid: Grid;
@@ -43,13 +44,19 @@ interface State {
     Ids: {
         Next: number;
     };
-    Stroke: Tile | null;
+    Stroke: {
+        Tile: Tile;
+        FromExisting: boolean;
+        Targets: Set<number>;
+    } | null;
     EditTool: EditorTool;
-    Gesture: 'idle' | 'pendingMove' | 'marquee' | 'move' | 'paint' | 'resize' | 'pan';
+    Gesture: 'idle' | 'pendingMove' | 'marquee' | 'move' | 'paint' | 'resize' | 'pan' | 'split';
     Marquee: {
         Bounds: Grid;
-        Local: boolean;
+        Add: boolean;
     } | null;
+    SplitPath: SplitPath | null;
+    SplitNotice: string;
     ToolSelection: Selection | null;
     MergeIds: number[];
     MergeError: string;
@@ -89,16 +96,16 @@ interface State {
     selectTool: (id: string) => void;
     pickComponent: (point: Point) => void;
     confirmMerge: () => boolean;
-    splitSelection: () => boolean;
+    mergeSelection: () => boolean;
+    splitAlong: (path: SplitPath) => boolean;
     begin: () => void;
     paint: (points: Point[], remove?: boolean) => void;
     commit: () => void;
     cancel: () => void;
     undo: () => void;
     redo: () => void;
-    select: (bounds: Grid | null) => void;
     selectComponents: (ids: number[]) => void;
-    selectRegionComponents: (bounds: Grid) => void;
+    selectRegionComponents: (bounds: Grid, mode?: 'replace' | 'add') => void;
     selectAll: () => void;
     cancelInteraction: () => void;
     movePreview: (offset: Point) => void;
@@ -115,13 +122,17 @@ interface State {
 }
 const EmptyPreview = { Preview: null, PreviewValid: false, PasteAnchor: null };
 const EmptyMerge = { MergeIds: [] as number[], MergeError: '' };
-function allocate(s: State) { if (s.Ids.Next > 2147483647)
-    throw Error('ComponentIdLimit'); return s.Ids.Next++; }
+const EmptySplit = { SplitPath: null, SplitNotice: '' };
+function allocate(s: State) {
+    if (s.Ids.Next > 2147483647)
+        throw Error('ComponentIdLimit');
+    return s.Ids.Next++;
+}
 function setTiles(s: State, tiles: CellStore) { s.Components.sync(tiles); return { Tiles: tiles, Revision: s.Revision + 1 }; }
 function selectionItem(s: State): ClipboardItem | null {
     if (!s.Selection)
         return null;
-    const source = selectionSource(s), b = s.Selection.kind === 'region' ? s.Selection.bounds : source.Bounds;
+    const source = selectionSource(s), b = source.Bounds;
     if (!b)
         return null;
     return { width: b.width, height: b.height, tiles: snapshotTiles([...source.values()]).map(t => ({ ...t, x: t.x - b.originX, y: t.y - b.originY })) };
@@ -139,7 +150,7 @@ function* translated(source: CellStore, offset: Point): IterableIterator<readonl
 }
 export const useEditor = create<State>((set, get) => ({
     Board: newBoard(), Tiles: new CellStore(), Components: new ComponentIndex(), Ids: { Next: 1 }, Stroke: null,
-    EditTool: 'pointer', Gesture: 'idle', Marquee: null, ToolSelection: null, ...EmptyMerge, Blueprints: [], RenderMode: loadRenderMode(), Selection: null,
+    EditTool: 'pointer', Gesture: 'idle', Marquee: null, ToolSelection: null, ...EmptyMerge, ...EmptySplit, Blueprints: [], RenderMode: loadRenderMode(), Selection: null,
     Clipboard: [], ClipboardIndex: -1, ClipboardOrigin: 'copy', Undo: [], Redo: [], Active: null, ...EmptyPreview,
     LeftDock: 'circuitEditor', RightDock: 'eventLog', LeftOpen: true, RightOpen: true, LeftWidth: 272, RightWidth: 272,
     Events: [], Path: '', Recent: [], Revision: 0, Simulating: false, Runtime: new Map(), RuntimeGrid: null,
@@ -150,7 +161,7 @@ export const useEditor = create<State>((set, get) => ({
         for (const tile of project.board.tiles)
             next = Math.max(next, tile.componentId + 1);
         set({ Board: { ...project.board, tiles: [] }, Tiles: tiles, Components: new ComponentIndex(tiles), Ids: { Next: next }, Stroke: null,
-            EditTool: 'pointer', Gesture: 'idle', Marquee: null, ToolSelection: null, ...EmptyMerge, Blueprints: project.blueprints, Selection: null, Clipboard: [], ClipboardIndex: -1, ClipboardOrigin: 'copy',
+            EditTool: 'pointer', Gesture: 'idle', Marquee: null, ToolSelection: null, ...EmptyMerge, ...EmptySplit, Blueprints: project.blueprints, Selection: null, Clipboard: [], ClipboardIndex: -1, ClipboardOrigin: 'copy',
             Undo: [], Redo: [], Active: null, ...EmptyPreview, Path: path, Runtime: new Map(), RuntimeGrid: null, Revision: get().Revision + 1 });
     },
     export: () => { const s = get(); return { ...s.Board, grid: { ...s.Board.grid }, tiles: [...s.Tiles.values()].sort((a, b) => a.y - b.y || a.x - b.x) }; },
@@ -195,7 +206,7 @@ export const useEditor = create<State>((set, get) => ({
         previous.cancel();
         const s = get();
         if (id === 'merge' || id === 'split') {
-            set({ EditTool: id, ToolSelection: restore, Selection: id === 'split' && restore?.kind === 'region' ? restore : null, RightOpen: true });
+            set({ EditTool: id, ToolSelection: restore, Selection: id === 'split' ? restore : null, RightOpen: true });
             return;
         }
         if (id === 'pointer') {
@@ -231,7 +242,7 @@ export const useEditor = create<State>((set, get) => ({
     },
     confirmMerge: () => {
         const s = get();
-        if (s.Simulating || s.MergeIds.length < 2 || !s.Components.connected(s.MergeIds))
+        if (s.Simulating || s.Active || s.Gesture !== 'idle' || !s.Components.canMerge(s.MergeIds))
             return false;
         s.begin();
         const componentId = allocate(s), changes: [string, Tile][] = [];
@@ -242,32 +253,44 @@ export const useEditor = create<State>((set, get) => ({
         get().commit();
         return true;
     },
-    splitSelection: () => {
-        const s = get();
-        if (s.Simulating || s.Selection?.kind !== 'region')
+    mergeSelection: () => {
+        const s = get(), ids = selectionIds(s);
+        if (s.Simulating || s.EditTool !== 'pointer' || s.Active || s.Preview || s.Gesture !== 'idle' || !s.Components.canMerge(ids))
             return false;
-        const groups = new Map<number, Tile[]>(), changes: [string, Tile][] = [];
-        for (const tile of selectionSource(s).values()) {
-            let group = groups.get(tile.componentId);
-            if (!group) {
-                group = [];
-                groups.set(tile.componentId, group);
-            }
-            group.push(tile);
+        set({ MergeIds: ids });
+        return get().confirmMerge();
+    },
+    splitAlong: path => {
+        const s = get();
+        if (s.Simulating || s.EditTool !== 'split')
+            return false;
+        const ids = new Set<number>(), blocked = new Set(path.Edges.keys());
+        for (const { Cells: [a, b] } of path.Edges.values()) {
+            const first = s.Tiles.get(cellKey(a)), second = s.Tiles.get(cellKey(b));
+            if (first && first.componentId === second?.componentId)
+                ids.add(first.componentId);
         }
-        for (const [id, selected] of groups) {
-            if (selected.length === s.Components.count(id))
+        const changes: [string, Tile][] = [], selected: number[] = [];
+        for (const id of ids) {
+            const regions = connectedRegions(s.Components.members(id), blocked);
+            if (regions.length < 2)
                 continue;
-            for (const region of connectedRegions(selected)) {
+            selected.push(id);
+            for (const region of regions.slice(1)) {
                 const componentId = allocate(s);
+                selected.push(componentId);
                 for (const tile of region)
                     changes.push([cellKey(tile), { ...tile, componentId }]);
             }
         }
-        if (!changes.length)
+        if (!changes.length) {
+            set({ SplitPath: null, SplitNotice: 'The line did not cut through a component.' });
+            get().commit();
             return false;
+        }
         s.begin();
-        set({ ...setTiles(s, s.Tiles.update(changes)), EditTool: 'pointer', ToolSelection: null, Selection: { kind: 'components', ids: [...new Set(changes.map(([, tile]) => tile.componentId))] } });
+        const selection: Selection = { kind: 'components', ids: selected };
+        set({ ...setTiles(s, s.Tiles.update(changes)), ...EmptySplit, Selection: selection, ToolSelection: selection });
         get().commit();
         return true;
     },
@@ -287,11 +310,12 @@ export const useEditor = create<State>((set, get) => ({
             const point = points.find(p => contains(s.Board.grid, p));
             if (!point)
                 return;
-            const existing = s.Tiles.get(cellKey(point)), id = s.Board.selectedTool;
-            const stroke = existing?.toolId === id ? existing : { ...point, toolId: id, componentId: allocate(s), isOn: id === 'latch' ? s.Board.latchInitialState : true, ...(id === 'clock' ? { clockHoldTicks: s.Board.clockHoldTicks } : {}) };
-            set({ Stroke: stroke });
+            const existing = s.Tiles.get(cellKey(point)), id = s.Board.selectedTool, fromExisting = existing?.toolId === id;
+            const tile = fromExisting ? existing : { ...point, toolId: id, componentId: allocate(s), isOn: id === 'latch' ? s.Board.latchInitialState : true, ...(id === 'clock' ? { clockHoldTicks: s.Board.clockHoldTicks } : {}) };
+            set({ Stroke: { Tile: tile, FromExisting: fromExisting, Targets: new Set() } });
             s = get();
         }
+        const stroke = s.Stroke;
         for (const point of points) {
             if (!contains(s.Board.grid, point))
                 continue;
@@ -300,14 +324,37 @@ export const useEditor = create<State>((set, get) => ({
                 if (before)
                     changes.set(key, undefined);
             }
+            else if (stroke!.FromExisting && before && before.componentId !== stroke!.Tile.componentId && compatibleComponents(stroke!.Tile, before)) {
+                // Keep the target whole until it is connected to the stroke, including targets reached later in this frame.
+                stroke!.Targets.add(before.componentId);
+            }
             else {
-                const tile = { ...s.Stroke!, ...point };
+                const tile = { ...stroke!.Tile, ...point };
                 if (JSON.stringify(before) !== JSON.stringify(tile))
                     changes.set(key, tile);
             }
         }
-        if (changes.size)
+        if (changes.size) {
             set(setTiles(s, s.Tiles.update(changes)));
+            s = get();
+        }
+        if (!remove && stroke?.FromExisting && stroke.Targets.size) {
+            const joined = new Set([stroke.Tile.componentId]);
+            for (const id of joined)
+                for (const other of s.Components.neighbors(id))
+                    if (stroke.Targets.has(other))
+                        joined.add(other);
+            if (s.Components.canMerge([...joined])) {
+                const merged: [string, Tile][] = [];
+                for (const id of joined)
+                    if (id !== stroke.Tile.componentId) {
+                        for (const tile of s.Components.members(id))
+                            merged.push([cellKey(tile), { ...tile, componentId: stroke.Tile.componentId }]);
+                        stroke.Targets.delete(id);
+                    }
+                set(setTiles(s, s.Tiles.update(merged)));
+            }
+        }
     },
     commit: () => {
         let s = get();
@@ -328,11 +375,7 @@ export const useEditor = create<State>((set, get) => ({
         }
         const changes = [...s.Tiles.changes(before.tiles)];
         let selection = s.Selection;
-        if (selection?.kind === 'region') {
-            const cells = [...s.Tiles.query(selection.bounds)].map(cellKey);
-            selection = cells.length ? { ...selection, cells } : null;
-        }
-        else if (selection) {
+        if (selection) {
             const ids = selection.ids.filter(id => s.Components.count(id));
             selection = ids.length ? { ...selection, ids } : null;
         }
@@ -341,43 +384,61 @@ export const useEditor = create<State>((set, get) => ({
     },
     cancel: () => {
         const s = get(), selection = s.EditTool === 'merge' || s.EditTool === 'split' ? s.ToolSelection : s.Active ? s.Active.selection : s.Selection;
-        set({ ...EmptyPreview, ...EmptyMerge, EditTool: 'pointer', ToolSelection: null, Gesture: 'idle', Marquee: null, Active: null, Stroke: null, Selection: selection,
+        set({ ...EmptyPreview, ...EmptyMerge, ...EmptySplit, EditTool: 'pointer', ToolSelection: null, Gesture: 'idle', Marquee: null, Active: null, Stroke: null, Selection: selection,
             ...(s.Active ? { ...setTiles(s, s.Active.tiles), Board: { ...s.Board, grid: s.Active.grid }, Blueprints: s.Active.blueprints } : {}) });
     },
-    cancelInteraction: () => { const s = get(), clear = s.EditTool === 'pointer' && s.Gesture === 'idle' && !s.Preview && !s.Active; s.cancel(); if (clear)
-        set({ Selection: null }); },
+    cancelInteraction: () => {
+        const s = get(), clear = s.EditTool === 'pointer' && s.Gesture === 'idle' && !s.Preview && !s.Active;
+        s.cancel();
+        if (clear)
+            set({ Selection: null });
+    },
     undo: () => {
         const s = get();
         if (s.Simulating)
             return;
-        if (s.Active || s.Preview || s.Gesture !== 'idle' || s.EditTool === 'merge' || s.EditTool === 'split') {
+        if (s.EditTool === 'split' && s.SplitPath) {
+            const selection = s.Active?.selection ?? s.Selection;
+            set({ Active: null, Stroke: null, Gesture: 'idle', ...EmptySplit, Selection: selection, ToolSelection: selection });
+            return;
+        }
+        if (s.Active || s.Preview || s.Gesture !== 'idle' || s.EditTool === 'merge') {
             s.cancel();
             return;
         }
         const c = s.Undo.at(-1);
         if (!c)
             return;
-        set({ ...setTiles(s, s.Tiles.update(c.changes.map(c => [c.key, c.before]))), EditTool: 'pointer', Board: { ...s.Board, grid: c.beforeGrid }, Selection: c.beforeSelection, Blueprints: c.beforeBlueprints, Undo: s.Undo.slice(0, -1), Redo: [...s.Redo, c] });
+        set({ ...setTiles(s, s.Tiles.update(c.changes.map(c => [c.key, c.before]))), ...EmptySplit, EditTool: s.EditTool === 'split' ? 'split' : 'pointer', ToolSelection: s.EditTool === 'split' ? c.beforeSelection : null,
+            Board: { ...s.Board, grid: c.beforeGrid }, Selection: c.beforeSelection, Blueprints: c.beforeBlueprints, Undo: s.Undo.slice(0, -1), Redo: [...s.Redo, c] });
     },
     redo: () => {
         const s = get();
-        if (s.Simulating || s.Active || s.Preview || s.Gesture !== 'idle' || s.EditTool === 'merge' || s.EditTool === 'split')
+        if (s.Simulating || s.Active || s.Preview || s.Gesture !== 'idle' || s.EditTool === 'merge')
             return;
         const c = s.Redo.at(-1);
         if (!c)
             return;
-        set({ ...setTiles(s, s.Tiles.update(c.changes.map(c => [c.key, c.after]))), EditTool: 'pointer', Board: { ...s.Board, grid: c.afterGrid }, Selection: c.afterSelection, Blueprints: c.afterBlueprints, Redo: s.Redo.slice(0, -1), Undo: [...s.Undo, c] });
+        set({ ...setTiles(s, s.Tiles.update(c.changes.map(c => [c.key, c.after]))), ...EmptySplit, EditTool: s.EditTool === 'split' ? 'split' : 'pointer', ToolSelection: s.EditTool === 'split' ? c.afterSelection : null,
+            Board: { ...s.Board, grid: c.afterGrid }, Selection: c.afterSelection, Blueprints: c.afterBlueprints, Redo: s.Redo.slice(0, -1), Undo: [...s.Undo, c] });
     },
-    select: bounds => { const s = get(), cells = bounds ? [...s.Tiles.query(bounds)].map(cellKey) : []; set({ Selection: bounds && cells.length ? { kind: 'region', bounds, cells } : null }); },
     selectComponents: ids => { const s = get(), valid = [...new Set(ids)].filter(id => s.Components.count(id)); set({ Selection: valid.length ? { kind: 'components', ids: valid } : null, RightOpen: valid.length ? true : s.RightOpen }); },
-    selectRegionComponents: bounds => { const s = get(); s.selectComponents([...new Set([...s.Tiles.query(bounds)].map(t => t.componentId))]); },
-    selectAll: () => { const s = get(); if (!s.Simulating)
-        s.selectComponents([...s.Components.ids()]); },
+    selectRegionComponents: (bounds, mode = 'replace') => {
+        const s = get(), ids = new Set(mode === 'add' ? selectionIds(s) : []);
+        for (const tile of s.Tiles.query(bounds))
+            ids.add(tile.componentId);
+        s.selectComponents([...ids]);
+    },
+    selectAll: () => {
+        const s = get();
+        if (!s.Simulating)
+            s.selectComponents([...s.Components.ids()]);
+    },
     movePreview: offset => {
         const s = get();
         if (!s.Selection || s.Simulating)
             return;
-        const source = s.Preview?.Kind === 'move' ? s.Preview.Source : selectionSource(s), b = s.Selection.kind === 'region' ? s.Selection.bounds : source.Bounds!;
+        const source = s.Preview?.Kind === 'move' ? s.Preview.Source : selectionSource(s), b = source.Bounds!;
         set({ Preview: { Source: source, Offset: offset, Kind: 'move', Bounds: { ...b, originX: b.originX + offset.x, originY: b.originY + offset.y } }, PreviewValid: previewValid(s, source, offset, source), PasteAnchor: null });
     },
     confirmMove: offset => {
@@ -393,27 +454,12 @@ export const useEditor = create<State>((set, get) => ({
             return true;
         }
         s.begin();
-        const changes = new Map<string, Tile | undefined>(), groups = new Map<number, Tile[]>();
-        for (const tile of p.Source.values()) {
+        const changes = new Map<string, Tile | undefined>();
+        for (const tile of p.Source.values())
             changes.set(cellKey(tile), undefined);
-            let group = groups.get(tile.componentId);
-            if (!group) {
-                group = [];
-                groups.set(tile.componentId, group);
-            }
-            group.push(tile);
-        }
-        const cells: string[] = [];
-        for (const [id, tiles] of groups)
-            for (const region of connectedRegions(tiles)) {
-                const componentId = tiles.length === s.Components.count(id) ? id : allocate(s);
-                for (const t of region) {
-                    const tile = { ...t, x: t.x + offset.x, y: t.y + offset.y, componentId }, key = cellKey(tile);
-                    changes.set(key, tile);
-                    cells.push(key);
-                }
-            }
-        set({ ...setTiles(s, s.Tiles.update(changes)), Selection: s.Selection?.kind === 'components' ? s.Selection : { kind: 'region', bounds: p.Bounds, cells }, ...EmptyPreview });
+        for (const [key, tile] of translated(p.Source, offset))
+            changes.set(key, tile);
+        set({ ...setTiles(s, s.Tiles.update(changes)), ...EmptyPreview });
         get().commit();
         return true;
     },
@@ -438,7 +484,7 @@ export const useEditor = create<State>((set, get) => ({
         if (s.Active || s.EditTool === 'merge' || s.EditTool === 'split')
             s.cancel();
         const source = inkSource(item);
-        set({ EditTool: 'pointer', ToolSelection: null, Gesture: 'idle', ...EmptyMerge, Preview: { Source: source, Offset: anchor, Kind: 'paste', Bounds: { originX: anchor.x, originY: anchor.y, width: item.width, height: item.height } }, PasteAnchor: anchor, PreviewValid: previewValid(s, source, anchor) });
+        set({ EditTool: 'pointer', ToolSelection: null, Gesture: 'idle', ...EmptyMerge, ...EmptySplit, Preview: { Source: source, Offset: anchor, Kind: 'paste', Bounds: { originX: anchor.x, originY: anchor.y, width: item.width, height: item.height } }, PasteAnchor: anchor, PreviewValid: previewValid(s, source, anchor) });
     },
     confirmPaste: () => {
         const s = get(), p = s.Preview;
@@ -464,8 +510,10 @@ export const useEditor = create<State>((set, get) => ({
             return;
         const source = selectionSource(s);
         s.begin();
-        set({ ...setTiles(s, s.Tiles.update((function* () { for (const key of source.keys())
-                yield [key, undefined] as const; })())), Selection: null, EditTool: 'pointer' });
+        set({ ...setTiles(s, s.Tiles.update((function* () {
+                for (const key of source.keys())
+                    yield [key, undefined] as const;
+            })())), Selection: null, EditTool: 'pointer' });
         get().commit();
     },
     resize: grid => {

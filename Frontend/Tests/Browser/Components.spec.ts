@@ -37,7 +37,7 @@ test('adjacent strokes stay independent, highlight entire regions and merge by c
     await page.keyboard.press('Control+d');await page.mouse.move(100,25);await expect(page.getByTestId('board')).toHaveAttribute('data-highlight-cells','0');
 });
 
-test('left paint overwrites, splits disconnected remainders and allows explicit partial splits and whole-component settings',async({page})=>{
+test('left paint overwrites, normalizes leftovers and grid-edge cuts allow independent component settings',async({page})=>{
     const c=await ready(page);await page.getByRole('button',{name:'Clock',exact:true}).click();
     await drag(page,c.x+12,c.y+12,c.x+204,c.y+12);const first=await hoverId(page,c.x+12,c.y+12,7);
     await page.keyboard.press('v');await page.mouse.click(c.x+12,c.y+12);
@@ -48,7 +48,7 @@ test('left paint overwrites, splits disconnected remainders and allows explicit 
     await expect(page.locator('.workspace-status')).toContainText('7 cells');await page.screenshot({path:buildPath('ComponentOverwriteCapture.png')});
     await page.keyboard.press('Control+z');await hoverId(page,c.x+12,c.y+12,7);
     await page.getByRole('button',{name:'Split',exact:true}).click();await expect(page.getByTestId('board')).toHaveAttribute('data-edit-tool','split');
-    await drag(page,c.x+65,c.y+2,c.x+125,c.y+30);await page.getByRole('button',{name:'Confirm split',exact:true}).click();
+    await drag(page,c.x+64,c.y,c.x+64,c.y+32);await drag(page,c.x+128,c.y,c.x+128,c.y+32);await page.keyboard.press('q');
     await page.getByRole('button',{name:'Clear selection'}).click();await hoverId(page,c.x+75,c.y+12,2);
     await page.mouse.click(c.x+75,c.y+12);await page.getByLabel('Clock hold',{exact:true}).fill('9');
     await page.mouse.click(c.x+12,c.y+12);await expect(page.getByLabel('Clock hold',{exact:true})).toHaveValue('4');

@@ -217,22 +217,48 @@ describe('Native circuit workspace', () => {
         await browser.saveScreenshot(buildPath('DesktopLodDesignCapture.png'));
     });
 
-    it('uses pointer selection, local selection, nearby deletion and right-click cancellation in the native window',async()=>{
+    it('uses Shift component selection, contextual merge and repeated grid-edge splits in the native window',async()=>{
         await browser.refresh();await browser.waitUntil(async()=>await $('[data-testid="board"]').getAttribute('data-render-ready')==='true');
         await $('.command-trigger').click();await $('input[aria-label="Search commands"]').setValue('new circuit');await $('.command-options button').click();
         const board=$('[data-testid="board"]');await expect(board).toHaveAttribute('data-edit-tool','pointer');
         const c=await browser.execute(()=>{const r=document.querySelector('[data-testid="board"]')!.getBoundingClientRect();return {x:Math.round(r.x+r.width/2),y:Math.round(r.y+r.height/2)};});
         const click=async(x:number,y:number,button:0|2=0)=>browser.action('pointer').move({x:c.x+x,y:c.y+y}).down({button}).up({button}).perform();
-        await $('button[aria-label="Clock"]').click();
-        await browser.action('pointer').move({x:c.x+12,y:c.y+12}).down().move({x:c.x+140,y:c.y+12,duration:250}).up().perform();
-        await browser.keys('q');await expect(board).toHaveAttribute('data-edit-tool','pointer');await click(12,12);await expect(board).toHaveAttribute('data-selection-cells','5');
-        await $('input[aria-label="Clock hold"]').setValue('7');await click(12,12);await browser.keys('x');await expect($('.workspace-status')).toHaveText(expect.stringContaining('0 cells'));
-        await browser.keys(['Control','z']);await expect($('.workspace-status')).toHaveText(expect.stringContaining('5 cells'));await expect(board).toHaveAttribute('data-selection-cells','5');
-        await click(12,12,2);await expect(board).toHaveAttribute('data-selection-cells','0');await expect($('.workspace-status')).toHaveText(expect.stringContaining('5 cells'));
-        await browser.action('key').down(Key.Shift).perform(true);await click(76,12);await browser.action('key').up(Key.Shift).perform();
-        await expect(board).toHaveAttribute('data-selection-kind','region');await expect(board).toHaveAttribute('data-selection-cells','1');await browser.keys('x');
-        await expect($('.workspace-status')).toHaveText(expect.stringContaining('4 cells'));await expect(board).toHaveAttribute('data-component-count','2');
+        const drag=async(x:number,y:number,tx:number,ty:number)=>browser.action('pointer').move({x:c.x+x,y:c.y+y}).down().move({x:c.x+tx,y:c.y+ty,duration:250}).up().perform();
+        await $('button[aria-label="Clock"]').click();await drag(12,12,140,12);await drag(12,44,140,44);
+        await browser.keys('q');await click(12,12);await expect(board).toHaveAttribute('data-selection-cells','5');
+        await browser.action('key').down(Key.Shift).perform(true);await click(76,44);await browser.action('key').up(Key.Shift).perform();
+        await expect(board).toHaveAttribute('data-selection-cells','10');await $('button[aria-label="Merge selected components"]').click();await expect(board).toHaveAttribute('data-component-count','1');
+        await browser.keys(['Control','z']);await expect(board).toHaveAttribute('data-component-count','2');await expect(board).toHaveAttribute('data-selection-cells','10');
+        await $('button[aria-label="Merge selected components"]').click();await $('button[aria-label="Split"]').click();
+        await drag(64,0,64,64);await expect(board).toHaveAttribute('data-component-count','2');await expect(board).toHaveAttribute('data-edit-tool','split');
+        await drag(128,0,128,64);await expect(board).toHaveAttribute('data-component-count','3');
+        await browser.keys(['Control','z']);await expect(board).toHaveAttribute('data-component-count','2');await expect(board).toHaveAttribute('data-edit-tool','split');
+        await browser.keys('q');await browser.keys(['Control','d']);await click(12,12);await expect(board).toHaveAttribute('data-selection-cells','4');
+        await $('input[aria-label="Clock hold"]').setValue('7');await click(12,12);await browser.keys('x');await expect($('.workspace-status')).toHaveText(expect.stringContaining('6 cells'));
+        await browser.keys(['Control','z']);await expect($('.workspace-status')).toHaveText(expect.stringContaining('10 cells'));
+        await click(12,12,2);await expect(board).toHaveAttribute('data-selection-cells','0');await expect($('.workspace-status')).toHaveText(expect.stringContaining('10 cells'));
         await browser.saveScreenshot(buildPath('DesktopPointerInteractionCapture.png'));
+    });
+
+    it('draw-connects whole latches and keeps grid-edge split results independent in native simulation',async()=>{
+        await browser.refresh();await browser.waitUntil(async()=>await $('[data-testid="board"]').getAttribute('data-render-ready')==='true');
+        await $('.command-trigger').click();await $('input[aria-label="Search commands"]').setValue('new circuit');await $('.command-options button').click();
+        const c=await browser.execute(()=>{const r=document.querySelector('[data-testid="board"]')!.getBoundingClientRect();return {x:Math.round(r.x+r.width/2),y:Math.round(r.y+r.height/2)};});
+        const drag=async(x:number,y:number,tx:number,ty:number)=>browser.action('pointer').move({x:c.x+x,y:c.y+y}).down().move({x:c.x+tx,y:c.y+ty,duration:250}).up().perform();
+        const board=$('[data-testid="board"]');await $('button[aria-label="Latch"]').click();await $('label=Off').click();
+        await drag(12,12,76,12);await drag(12,44,76,44);await expect(board).toHaveAttribute('data-component-count','2');
+        await drag(12,12,12,44);await expect(board).toHaveAttribute('data-component-count','1');await expect($('.workspace-status')).toHaveText(expect.stringContaining('6 cells'));
+        const pixels=()=>browser.execute(()=>{
+            const canvas=document.querySelector('canvas[aria-label="Circuit board"]') as HTMLCanvasElement,gl=canvas.getContext('webgl2')!,scale=canvas.width/canvas.getBoundingClientRect().width;
+            return [0,1].map(row=>{const data=new Uint8Array(4);gl.readPixels(Math.floor(canvas.width/2+3*scale),canvas.height-1-Math.floor(canvas.height/2+(row*32+3)*scale),1,1,gl.RGBA,gl.UNSIGNED_BYTE,data);return [...data];});
+        });
+        const toggle=()=>browser.action('pointer').move({x:c.x+12,y:c.y+12}).down().up().perform();
+        await $('button=Run circuit').click();await $('button[aria-label="Pause simulation"]').click();const joined=await pixels();await toggle();
+        await browser.waitUntil(async()=>{const now=await pixels();return JSON.stringify(now[0])!==JSON.stringify(joined[0])&&JSON.stringify(now[1])!==JSON.stringify(joined[1]);});
+        await $('button=Back to design').click();await $('button[aria-label="Split"]').click();await drag(0,32,96,32);await expect(board).toHaveAttribute('data-component-count','2');await browser.keys('q');
+        await $('button=Run circuit').click();await $('button[aria-label="Pause simulation"]').click();const split=await pixels();await toggle();
+        await browser.waitUntil(async()=>JSON.stringify((await pixels())[0])!==JSON.stringify(split[0]));expect((await pixels())[1]).toEqual(split[1]);
+        await browser.saveScreenshot(buildPath('DesktopDrawMergeSplitCapture.png'));await $('button=Back to design').click();
     });
 
 });

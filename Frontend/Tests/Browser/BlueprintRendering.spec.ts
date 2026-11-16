@@ -65,7 +65,7 @@ test('blueprints save snapshots, stay selected and support repeated ordinary pas
     await page.getByRole('button', { name: 'Copy blueprint Pulse' }).click();
     await expect(page.getByRole('heading', { name: 'Blueprints', exact: true })).toBeVisible();
     await expect(page.locator('.blueprint-entry canvas')).toHaveAttribute('data-ready', 'true');
-    await expect(page.locator('.blueprint-use span')).toContainText('2 x 1 | 1 cells');
+    await expect(page.locator('.blueprint-use span')).toContainText('1 x 1 | 1 cells');
     await page.screenshot({ path: buildPath('BlueprintLibraryCapture.png') });
     for (const [x, y, count] of [[3, 1, 2], [6, 3, 3]]) {
         await page.mouse.move(origin.x + x * 32 + 12, origin.y + y * 32 + 12); await page.keyboard.press('Control+v');
@@ -140,7 +140,7 @@ test('million-cell overview uses bounded aggregate objects and updates after edi
     await expect(page.locator('.workspace-status')).toContainText('1,048,576 cells');
     await page.keyboard.down('Shift');await page.mouse.click(origin.x+12,origin.y+12);await page.keyboard.up('Shift');
     await page.keyboard.press('x');
-    await expect(page.locator('.workspace-status')).toContainText('1,048,575 cells');
+    await expect(page.locator('.workspace-status')).toContainText('1,015,808 cells');
     await page.keyboard.press('Control+z'); await expect(page.locator('.workspace-status')).toContainText('1,048,576 cells');
     await page.keyboard.press('Control+d');await page.getByText('2D', { exact: true }).click();
     await expect(page.getByTestId('board')).toHaveAttribute('data-color-ready', 'true');

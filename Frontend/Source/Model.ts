@@ -22,7 +22,7 @@ export interface Board {
     grid: Grid;
     tiles: Tile[];
 }
-export type Selection = { kind: 'components'; ids: number[] } | { kind: 'region'; bounds: Grid; cells: string[] };
+export interface Selection { kind: 'components'; ids: number[] }
 export type EditorTool = 'pointer' | 'draw' | 'merge' | 'split';
 export interface ClipboardItem {
     width: number;

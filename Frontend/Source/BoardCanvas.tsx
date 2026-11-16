@@ -81,9 +81,9 @@ export function BoardCanvas({ onLatch, onCursor, onZoom, cameraCommand }: Props)
                 board.roundRect(0, 0, g.width * Size, g.height * Size, Size).stroke({ color: '#31483f', width: 1.5 / v.zoom });
                 tileRenderer!.draw({ occupied: s.Tiles, preview: s.Preview, previewValid: s.PreviewValid,
                     simulating: s.Simulating, runtime: s.RuntimeGrid, mode: s.RenderMode }, v);
-                const ids=[...new Set([...(s.Selection?.kind==='components'?s.Selection.ids:[]),...s.MergeIds])];
+                const ids=[...new Set([...(s.Selection?.ids??[]),...s.MergeIds])];
                 const hover=editorInput.Hover,hovered=hover?s.Tiles.get(cellKey(hover))?.componentId:undefined;
-                const hoverIds=hovered&&!ids.includes(hovered)&&!s.Preview&&s.Selection?.kind!=='region'?[hovered]:[];
+                const hoverIds=hovered&&!ids.includes(hovered)&&!s.Preview&&s.EditTool!=='split'?[hovered]:[];
                 selectedHighlight.draw(s.Tiles,s.Components,ids,v);hoverHighlight.draw(s.Tiles,s.Components,hoverIds,v);
                 element.style.cursor=editorInput.cursor;
                 element.dataset.highlightComponents=[...ids,...hoverIds].join(',');
@@ -94,6 +94,7 @@ export function BoardCanvas({ onLatch, onCursor, onZoom, cameraCommand }: Props)
                 element.dataset.selectionKind=s.Selection?.kind??'none';
                 element.dataset.selectionCells=String(selectionCount(s));
                 element.dataset.gesture=s.Gesture;
+                element.dataset.splitEdges=String(s.SplitPath?.Edges.size??0);
                 element.dataset.editTool = s.EditTool;
                 element.dataset.lod = tileRenderer!.Lod;
                 element.dataset.renderObjects = String(tileRenderer!.Count);
@@ -103,9 +104,18 @@ export function BoardCanvas({ onLatch, onCursor, onZoom, cameraCommand }: Props)
                     overlay.fill({ color, alpha: .04 }); overlay.stroke({ color, width: 2 / v.zoom }); };
                 if(s.EditTool==='draw'&&hover&&!s.Simulating&&!s.Preview&&contains(g,hover))
                     rectangle({originX:hover.x,originY:hover.y,width:1,height:1},'#f2c94c',true);
-                if(s.Selection?.kind==='region')rectangle(s.Selection.bounds,'#f2c94c',true);
                 if(s.Preview)rectangle(s.Preview.Bounds,s.PreviewValid?'#69e6a6':'#ff657e',true);
-                if(s.Marquee)rectangle(s.Marquee.Bounds,s.Marquee.Local?'#f2c94c':'#82baff',true);
+                if(s.Marquee)rectangle(s.Marquee.Bounds,'#82baff',true);
+                if(s.EditTool==='split'&&!s.Simulating) {
+                    if(s.SplitPath?.Edges.size) {
+                        for(const edge of s.SplitPath.Edges.values())overlay.moveTo(edge.Start.x*Size-v.x,edge.Start.y*Size-v.y).lineTo(edge.End.x*Size-v.x,edge.End.y*Size-v.y);
+                        overlay.stroke({color:'#111720',width:5/v.zoom});
+                        for(const edge of s.SplitPath.Edges.values())overlay.moveTo(edge.Start.x*Size-v.x,edge.Start.y*Size-v.y).lineTo(edge.End.x*Size-v.x,edge.End.y*Size-v.y);
+                        overlay.stroke({color:'#f2c94c',width:2/v.zoom});
+                    }
+                    const vertex=editorInput.Vertex;
+                    if(vertex)overlay.circle(vertex.x*Size-v.x,vertex.y*Size-v.y,3/v.zoom).fill('#f2c94c');
+                }
                 if (!s.Simulating) {
                     for (const [x, y] of [[g.originX, g.originY], [g.originX + g.width, g.originY], [g.originX, g.originY + g.height], [g.originX + g.width, g.originY + g.height]])
                         overlay.circle(x * Size - v.x, y * Size - v.y, 5 / v.zoom).fill('#7093b6').stroke({ color: '#111720', width: 2 / v.zoom });

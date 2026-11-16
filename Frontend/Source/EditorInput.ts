@@ -3,6 +3,7 @@ import { cellKey, lineCells, type Grid, type Point } from './Model';
 import { selectionContains } from './Selection';
 import type { EditorCommand } from './EditorShortcuts';
 import { CellSize } from './TileGeometry';
+import { SplitPath } from './SplitPath';
 export interface CanvasView {
     x: number;
     y: number;
@@ -33,7 +34,12 @@ type Gesture = BaseGesture & ({
     Kind: 'paint' | 'pendingMove' | 'move';
 } | {
     Kind: 'marquee';
-    Local: boolean;
+    Add: boolean;
+    Dragged: boolean;
+    Toggle?: number;
+} | {
+    Kind: 'split';
+    Path: SplitPath;
 } | {
     Kind: 'resize';
     Corner: number;
@@ -50,20 +56,30 @@ export class EditorInput {
     private Gesture: Gesture | null = null;
     private Space = false;
     Hover: Point | null = null;
+    Vertex: Point | null = null;
     connect(adapter: Adapter) {
         this.Adapter = adapter;
         this.Gesture = null;
         this.Space = false;
-        return () => { if (this.Adapter === adapter) {
-            this.Adapter = undefined;
-            this.Gesture = null;
-            this.Space = false;
-        } };
+        this.Hover = null;
+        this.Vertex = null;
+        return () => {
+            if (this.Adapter === adapter) {
+                this.Adapter = undefined;
+                this.Gesture = null;
+                this.Space = false;
+            }
+        };
     }
     private currentGesture() {
         if (this.Gesture && useEditor.getState().Gesture !== this.Gesture.Kind)
             this.Gesture = null;
         return this.Gesture;
+    }
+    private vertex(screen: Point) {
+        const world = this.Adapter!.world(screen), grid = useEditor.getState().Board.grid;
+        return { x: Math.max(grid.originX, Math.min(grid.originX + grid.width, Math.round(world.x / CellSize))),
+            y: Math.max(grid.originY, Math.min(grid.originY + grid.height, Math.round(world.y / CellSize))) };
     }
     private start(gesture: Gesture) { this.Gesture = gesture; useEditor.setState({ Gesture: gesture.Kind }); }
     space(held: boolean) { this.Space = held; this.Adapter?.redraw(); }
@@ -97,6 +113,7 @@ export class EditorInput {
             return;
         const s = useEditor.getState(), cell = a.cell(screen), base = { Start: cell, Last: cell, Screen: screen };
         this.Hover = cell;
+        this.Vertex = this.vertex(screen);
         if (event.button === 2) {
             this.cancel();
             return;
@@ -124,11 +141,17 @@ export class EditorInput {
             s.pickComponent(cell);
             return;
         }
-        if (event.shiftKey || s.EditTool === 'split') {
+        if (s.EditTool === 'split') {
             s.begin();
-            this.start({ ...base, Kind: 'marquee', Local: true });
-            useEditor.setState({ Marquee: { Bounds: boundsBetween(cell, cell), Local: true } });
+            const path = new SplitPath(this.Vertex);
+            this.start({ ...base, Kind: 'split', Path: path });
+            useEditor.setState({ SplitPath: path, SplitNotice: '' });
             a.redraw();
+            return;
+        }
+        if (event.shiftKey) {
+            s.begin();
+            this.start({ ...base, Kind: 'marquee', Add: true, Dragged: false, Toggle: s.Tiles.get(cellKey(cell))?.componentId });
             return;
         }
         if (s.EditTool === 'draw') {
@@ -148,7 +171,7 @@ export class EditorInput {
         const id = s.Tiles.get(cellKey(cell))?.componentId;
         if (event.ctrlKey || event.metaKey) {
             if (id) {
-                const ids = s.Selection?.kind === 'components' ? s.Selection.ids : [];
+                const ids = s.Selection?.ids ?? [];
                 s.selectComponents(ids.includes(id) ? ids.filter(n => n !== id) : [...ids, id]);
             }
             return;
@@ -162,7 +185,7 @@ export class EditorInput {
         }
         else {
             s.selectComponents([]);
-            this.start({ ...base, Kind: 'marquee', Local: false });
+            this.start({ ...base, Kind: 'marquee', Add: false, Dragged: false });
         }
     }
     move(screen: Point) {
@@ -172,6 +195,7 @@ export class EditorInput {
         let g = this.currentGesture();
         const s = useEditor.getState(), cell = a.cell(screen);
         this.Hover = cell;
+        this.Vertex = this.vertex(screen);
         a.cursor(cell);
         if (!g) {
             if (s.Preview?.Kind === 'paste')
@@ -199,9 +223,13 @@ export class EditorInput {
             case 'move':
                 s.movePreview({ x: cell.x - g.Start.x, y: cell.y - g.Start.y });
                 break;
+            case 'split':
+                g.Path.append(this.Vertex);
+                break;
             case 'marquee':
-                if (g.Local || Math.hypot(screen.x - g.Screen.x, screen.y - g.Screen.y) >= 4)
-                    useEditor.setState({ Marquee: { Bounds: boundsBetween(g.Start, cell), Local: g.Local } });
+                g.Dragged ||= Math.hypot(screen.x - g.Screen.x, screen.y - g.Screen.y) >= 4;
+                if (g.Dragged)
+                    useEditor.setState({ Marquee: { Bounds: boundsBetween(g.Start, cell), Add: g.Add } });
                 break;
             case 'resize': {
                 const original = g.Grid, corner = g.Corner, w = a.world(screen);
@@ -228,14 +256,19 @@ export class EditorInput {
         const s = useEditor.getState(), cell = a.cell(screen);
         if (g.Kind === 'move')
             s.confirmMove({ x: cell.x - g.Start.x, y: cell.y - g.Start.y });
+        if (g.Kind === 'split') {
+            g.Path.append(this.vertex(screen));
+            s.splitAlong(g.Path);
+        }
         if (g.Kind === 'marquee') {
-            const bounds = boundsBetween(g.Start, cell);
-            if (g.Local)
-                s.select(bounds);
+            if (g.Add && !g.Dragged) {
+                const ids = s.Selection?.ids ?? [], id = g.Toggle;
+                if (id)
+                    s.selectComponents(ids.includes(id) ? ids.filter(n => n !== id) : [...ids, id]);
+            }
             else
-                s.selectRegionComponents(bounds);
-            if (s.EditTool !== 'split')
-                useEditor.setState({ EditTool: 'pointer' });
+                s.selectRegionComponents(boundsBetween(g.Start, cell), g.Add ? 'add' : 'replace');
+            useEditor.setState({ EditTool: 'pointer' });
         }
         if (g.Kind !== 'pan')
             useEditor.getState().commit();
@@ -243,7 +276,7 @@ export class EditorInput {
         useEditor.setState({ Gesture: 'idle', Marquee: null });
         a.redraw();
     }
-    leave() { this.Hover = null; this.Adapter?.redraw(); }
+    leave() { this.Hover = null; this.Vertex = null; this.Adapter?.redraw(); }
     execute(command: EditorCommand, point: Point) {
         const s = useEditor.getState();
         if (command === 'cancel') {
@@ -278,9 +311,7 @@ export class EditorInput {
                     s.selectTool('merge');
                 break;
             case 'split':
-                if (s.EditTool === 'split')
-                    s.splitSelection();
-                else
+                if (s.EditTool !== 'split')
                     s.selectTool('split');
                 break;
             case 'delete':
@@ -301,7 +332,7 @@ export class EditorInput {
                 break;
             case 'clearSelection':
                 s.selectTool('pointer');
-                useEditor.getState().select(null);
+                useEditor.getState().selectComponents([]);
                 break;
         }
     }

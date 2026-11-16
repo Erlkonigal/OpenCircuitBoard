@@ -3,7 +3,7 @@ import { useShallow } from 'zustand/react/shallow';
 import { ActionIcon, Badge, Button, Group, Modal, NumberInput, ScrollArea, SegmentedControl, TextInput, Tooltip } from '@mantine/core';
 import { ArrowUpRight, Combine, Clipboard, Copy, Grid2X2, Layers3, MousePointer2, Paintbrush, Search, Scissors, Settings2, Trash2, X } from 'lucide-react';
 import { shortcutFor } from './EditorShortcuts';
-import { canSplitSelection, selectionCount, selectionSamples } from './Selection';
+import { selectionCount, selectionSamples } from './Selection';
 import { useEditor } from './EditorStore';
 import { iconUrl, Inks, inkColor, paletteId, ToolIds, type Grid, type Point, type Tile } from './Model';
 import type { Frame } from './Native';
@@ -44,7 +44,7 @@ export const ComponentLibrary = memo(function ComponentLibrary() {
         {!matching.length && !matchingTools.length && <div className="panel-empty"><Search size={22}/><p>No matching components</p><small>Try a name such as clock or trace.</small></div>}
       </div>
     </ScrollArea>
-    <div className="library-note"><MousePointer2 size={14}/><span>{({pointer:'Click to inspect. Shift-drag selects local cells.',draw:'Left-drag to draw. Right-click returns to pointer.',merge:'Click adjacent regions, then press G.',split:'Drag a portion, then press Shift+G.'})[editTool]}</span></div>
+    <div className="library-note"><MousePointer2 size={14}/><span>{({pointer:'Click to inspect. Shift-click toggles; Shift-drag adds.',draw:'Left-drag to draw. Right-click returns to pointer.',merge:'Click adjacent regions, then press G.',split:'Drag along grid edges. Release to split.'})[editTool]}</span></div>
   </>;
 });
 export function ClipboardLibrary({ cursor, onSaveBlueprint }: {
@@ -121,30 +121,26 @@ function BoardProperties() {
         setDraft(previous => ({ ...previous, [field]: value })); }}/>)}</div>{changed && <Button mt="sm" size="xs" fullWidth variant="light" disabled={simulating} onClick={apply}>Apply canvas size</Button>}{error && <p className="field-error">{error}</p>}</section>;
 }
 export function Inspector({frame,onSaveBlueprint}:{onSaveBlueprint:()=>void;frame:Frame|null}) {
-    const state=useEditor(useShallow(s=>({Board:s.Board,Components:s.Components,EditTool:s.EditTool,MergeIds:s.MergeIds,MergeError:s.MergeError,Selection:s.Selection,Tiles:s.Tiles,Simulating:s.Simulating})));
+    const state=useEditor(useShallow(s=>({Board:s.Board,Components:s.Components,EditTool:s.EditTool,MergeIds:s.MergeIds,MergeError:s.MergeError,SplitNotice:s.SplitNotice,Selection:s.Selection,Tiles:s.Tiles,Simulating:s.Simulating})));
     const samples=useMemo(()=>selectionSamples(state),[state.Selection,state.Tiles]);
-    const local=state.Selection?.kind==='region',componentSelection=state.Selection?.kind==='components';
+    const componentSelection=!!state.Selection;
     const homogeneous=samples.length>0&&samples.every(tile=>paletteId(tile.toolId)===paletteId(samples[0].toolId));
     const id=homogeneous?samples[0].toolId:state.Board.selectedTool,title=Inks.find(ink=>ink.id===paletteId(id))?.title??id;
     const pending=state.EditTool==='merge'||state.EditTool==='split';
     return <>
       <div className="panel-heading inspector-heading"><div><span className="eyebrow">FINE TUNE</span><h2>Inspector</h2></div><Settings2 size={17}/></div>
       <ScrollArea className="panel-scroll" offsetScrollbars>
-        <section className="inspector-section"><div className="section-topline"><h3>{pending?state.EditTool==='merge'?'Merge components':'Split components':local?'Local cell selection':componentSelection?'Selected components':state.EditTool==='draw'?'Draw defaults':'Pointer'}</h3>{state.Selection&&<Badge size="xs" variant="light" color={local?'yellow':'teal'}>{selectionCount(state)} cells</Badge>}</div>
+        <section className="inspector-section"><div className="section-topline"><h3>{pending?state.EditTool==='merge'?'Merge components':'Split components':componentSelection?'Selected components':state.EditTool==='draw'?'Draw defaults':'Pointer'}</h3>{state.Selection&&<Badge size="xs" variant="light" color="teal">{selectionCount(state)} cells</Badge>}</div>
           {pending?<>
-            <div className="active-component"><div className="active-component-symbol">{state.EditTool==='merge'?<Combine size={23}/>:<Scissors size={23}/>}</div><div><strong>{state.EditTool==='merge'?`${state.MergeIds.length} regions picked`:`${selectionCount(state)} local cells`}</strong><small>Confirm on the canvas action bar</small></div></div>
-            <p className="property-description">{state.EditTool==='merge'?'Click whole adjacent components with the same ink and settings. Press G to confirm.':'Drag to select less than a whole component. Press Shift+G to detach the selected cells.'}</p>
+            <div className="active-component"><div className="active-component-symbol">{state.EditTool==='merge'?<Combine size={23}/>:<Scissors size={23}/>}</div><div><strong>{state.EditTool==='merge'?`${state.MergeIds.length} regions picked`:'Grid-edge cut'}</strong><small>{state.EditTool==='merge'?'Confirm on the canvas action bar':'Release to split; continue with another line'}</small></div></div>
+            <p className="property-description">{state.EditTool==='merge'?'Click whole adjacent components with the same ink and settings. Press G to confirm.':'Draw along cell edges and release to split components. Each resulting piece can be selected and edited independently.'}</p>
             {state.MergeError&&<p className="field-error" role="alert">{state.MergeError}</p>}
-            <p className="property-description">Right-click or Q cancels and returns to Pointer.</p>
-          </>:local?<>
-            <div className="active-component"><div className="active-component-symbol"><Grid2X2 size={23}/></div><div><strong>Local cells</strong><small>X deletes only the selected cells</small></div></div>
-            <p className="property-description">Split this portion into independent components before editing its properties.</p>
-            <Button size="xs" variant="default" disabled={!canSplitSelection(state)||state.Simulating} onClick={()=>useEditor.getState().selectTool('split')}>Split portion <kbd>Shift+G</kbd></Button>
+            <p className="property-description">{state.EditTool==='split'?'Right-click or Q returns to Pointer. Completed cuts are kept.':'Right-click or Q cancels and returns to Pointer.'}</p>
           </>:componentSelection||state.EditTool==='draw'?<>
             <div className="active-component"><div className="active-component-symbol"><ToolGlyph id={id} size={23}/></div><div><strong>{componentSelection&&!homogeneous?'Mixed components':title}</strong><small>{componentSelection?`${samples.length} whole components`:'Settings for new strokes'}</small></div></div>
             {!componentSelection||homogeneous?<ToolSettings key={`${id}:${componentSelection}`} id={id} selection={componentSelection}/>:<p className="property-description">Select components of the same type to edit common properties.</p>}
-          </>:<p className="property-description">Click a component to view its properties. Drag on blank space to select components; Shift-drag selects local cells.</p>}
-          {state.Selection&&!pending&&<Group mt="md" gap={6}><Button size="xs" variant="default" leftSection={<Copy size={12}/>} disabled={state.Simulating} onClick={()=>useEditor.getState().copy()}>Copy</Button><Button size="xs" variant="subtle" disabled={state.Simulating} onClick={onSaveBlueprint}>Save blueprint</Button><ActionIcon ml="auto" size="sm" variant="subtle" color="gray" aria-label="Clear selection" onClick={()=>useEditor.getState().select(null)}><X size={13}/></ActionIcon></Group>}
+          </>:<p className="property-description">Click a component to view its properties. Drag on blank space to select components; Shift-click toggles components; Shift-drag adds them.</p>}
+          {state.Selection&&!pending&&<Group mt="md" gap={6}><Button size="xs" variant="default" leftSection={<Copy size={12}/>} disabled={state.Simulating} onClick={()=>useEditor.getState().copy()}>Copy</Button><Button size="xs" variant="subtle" disabled={state.Simulating} onClick={onSaveBlueprint}>Save blueprint</Button><ActionIcon ml="auto" size="sm" variant="subtle" color="gray" aria-label="Clear selection" onClick={()=>useEditor.getState().selectComponents([])}><X size={13}/></ActionIcon></Group>}
         </section>
         {frame&&<section className="inspector-section simulation-summary"><h3><Layers3 size={14}/>Live simulation</h3><div className="metric-grid"><div><span>Current tick</span><strong>{frame.tick.toLocaleString()}</strong></div><div><span>Throughput</span><strong>{Math.round(frame.tps).toLocaleString()}<small> TPS</small></strong></div></div><div className="capacity-row"><span>Measured capacity</span><span>{Math.round(frame.capacity).toLocaleString()} TPS</span></div></section>}
         <BoardProperties/>

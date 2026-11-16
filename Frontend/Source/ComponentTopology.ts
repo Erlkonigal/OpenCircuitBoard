@@ -1,4 +1,4 @@
-import type { Tile } from './Model';
+import type { Point, Tile } from './Model';
 export const componentKey = (tile: {
     x: number;
     y: number;
@@ -7,7 +7,11 @@ export function compatibleComponents(a: Tile, b: Tile): boolean {
     return a.toolId === b.toolId && (a.toolId !== 'latch' || a.isOn === b.isOn)
         && (a.toolId !== 'clock' || a.clockHoldTicks === b.clockHoldTicks);
 }
-export function connectedRegions(tiles: Iterable<Tile>): Tile[][] {
+/** Canonical key for an undirected connection between two neighboring cells. */
+export function connectionKey(a: Point, b: Point): string {
+    return a.x < b.x || (a.x === b.x && a.y < b.y) ? `${componentKey(a)}:${componentKey(b)}` : `${componentKey(b)}:${componentKey(a)}`;
+}
+export function connectedRegions(tiles: Iterable<Tile>, blocked?: ReadonlySet<string>): Tile[][] {
     const remaining = new Map(Array.from(tiles, tile => [componentKey(tile), tile]));
     const regions: { Tiles: Tile[]; First: Tile }[] = [];
     // Keep one iterator: repeatedly restarting it scans deleted map entries on fragmented regions.
@@ -20,7 +24,7 @@ export function connectedRegions(tiles: Iterable<Tile>): Tile[][] {
             if (tile.y < first.y || (tile.y === first.y && tile.x < first.x)) first = tile;
             for (const [dx, dy] of [[-1, 0], [1, 0], [0, -1], [0, 1]]) {
                 const key = `${tile.x + dx},${tile.y + dy}`, next = remaining.get(key);
-                if (next) { remaining.delete(key); region.push(next); }
+                if (next && !blocked?.has(connectionKey(tile, next))) { remaining.delete(key); region.push(next); }
             }
         }
         regions.push({ Tiles: region, First: first });

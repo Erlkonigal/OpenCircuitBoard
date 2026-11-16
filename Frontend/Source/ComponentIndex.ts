@@ -101,11 +101,16 @@ export class ComponentIndex {
                 }
         return found.size === wanted.size;
     }
+    compatible(ids: readonly number[]) {
+        const first = this.sample(ids[0]);
+        return !!first && ids.every(id => { const tile = this.sample(id); return !!tile && compatibleComponents(first, tile); });
+    }
+    canMerge(ids: readonly number[]) {
+        return new Set(ids).size >= 2 && this.compatible(ids) && this.connected(ids);
+    }
     canJoin(ids: readonly number[], id: number) {
-        const tile = this.sample(id);
-        if (!tile)
-            return false;
-        return !ids.length || (compatibleComponents(this.sample(ids[0])!, tile) && this.connected([...ids, id]));
+        const joined = [...new Set([...ids, id])];
+        return this.compatible(joined) && this.connected(joined);
     }
     normalize(source: CellStore, ids: Iterable<number>, allocate: () => number): CellStore {
         this.sync(source);

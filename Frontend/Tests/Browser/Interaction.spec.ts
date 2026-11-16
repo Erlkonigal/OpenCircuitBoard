@@ -5,7 +5,7 @@ async function ready(page:Page) {
     const r=(await board.boundingBox())!;return {x:r.x+r.width/2,y:r.y+r.height/2};
 }
 async function drag(page:Page,x:number,y:number,tx:number,ty:number) {await page.mouse.move(x,y);await page.mouse.down();await page.mouse.move(tx,ty,{steps:8});await page.mouse.up();}
-async function local(page:Page,x:number,y:number,tx:number,ty:number) {await page.keyboard.down('Shift');await drag(page,x,y,tx,ty);await page.keyboard.up('Shift');}
+async function additive(page:Page,x:number,y:number,tx:number,ty:number) {await page.keyboard.down('Shift');await drag(page,x,y,tx,ty);await page.keyboard.up('Shift');}
 async function stroke(page:Page,c:{x:number;y:number},row=0,tool='Latch') {
     await page.getByRole('button',{name:tool,exact:true}).click();await drag(page,c.x+12,c.y+row*32+12,c.x+140,c.y+row*32+12);
 }
@@ -20,8 +20,8 @@ test('pointer selects identities, edits properties and deletes the selection rat
     await page.getByLabel('Search components').fill('xqgb');await expect(board).toHaveAttribute('data-edit-tool','pointer');await count(page,5);
     await page.getByLabel('Search components').fill('');await page.mouse.click(c.x+12,c.y+44);await expect(page.getByLabel('Clock hold',{exact:true})).toHaveValue('1');
     await page.keyboard.down('Control');await page.mouse.click(c.x+12,c.y+12);await page.keyboard.up('Control');await count(page,10);
-    await expect(page.getByLabel('Clock hold',{exact:true})).toHaveValue('');await expect(page.getByLabel('Clock hold',{exact:true})).toHaveAttribute('placeholder','Mixed');
-    await page.getByLabel('Clock hold',{exact:true}).fill('3');await page.mouse.click(c.x+12,c.y+12);await count(page,10);
+    await expect(page.getByLabel('Clock hold',{exact:true})).toHaveValue('');await expect(page.getByLabel('Clock hold',{exact:true})).toHaveAttribute('placeholder','Mixed');await expect(page.getByRole('button',{name:'Merge selected components'})).toHaveCount(0);
+    await page.getByLabel('Clock hold',{exact:true}).fill('3');await page.mouse.click(c.x+12,c.y+12);await count(page,10);await expect(page.getByRole('button',{name:'Merge selected components'})).toBeVisible();
     await page.keyboard.press('Control+d');await page.mouse.click(c.x+12,c.y+12);await page.mouse.move(c.x+12,c.y+44);await page.keyboard.press('x');
     await expect(page.locator('.workspace-status')).toContainText('5 cells');
     await page.keyboard.press('Control+z');await count(page,5);await expect(page.locator('.workspace-status')).toContainText('10 cells');
@@ -29,16 +29,21 @@ test('pointer selects identities, edits properties and deletes the selection rat
     await page.screenshot({path:buildPath('PointerPropertiesCapture.png')});
 });
 
-test('ordinary marquee selects complete components while Shift marquee deletes only clipped cells and splits the remainder',async({page})=>{
-    const c=await ready(page),board=page.getByTestId('board');await stroke(page,c);await stroke(page,c,1);await page.keyboard.press('q');
-    await drag(page,c.x-18,c.y-18,c.x+61,c.y+60);await expect(board).toHaveAttribute('data-selection-kind','components');await count(page,10);
+test('Shift clicks preserve multiselection, every marquee selects whole components and eligible groups expose Merge',async({page})=>{
+    const c=await ready(page),board=page.getByTestId('board');await stroke(page,c);await stroke(page,c,1);await stroke(page,c,3);await page.keyboard.press('q');
+    await page.mouse.click(c.x+12,c.y+12);await count(page,5);
+    await page.keyboard.down('Shift');await page.mouse.click(c.x+76,c.y+44);await page.keyboard.up('Shift');await count(page,10);
+    const merge=page.getByRole('button',{name:'Merge selected components',exact:true});await expect(merge).toBeVisible();
+    await page.screenshot({path:buildPath('ShiftMultiSelectCapture.png')});
+    await page.keyboard.down('Shift');await page.mouse.click(c.x+76,c.y+108);await page.keyboard.up('Shift');await count(page,15);await expect(merge).toHaveCount(0);
+    await page.keyboard.down('Shift');await page.mouse.click(c.x+76,c.y+108);await page.keyboard.up('Shift');await merge.click();
+    await expect(board).toHaveAttribute('data-component-count','2');await count(page,10);await page.keyboard.press('Control+z');await count(page,10);
+    await additive(page,c.x+66,c.y+98,c.x+92,c.y+122);await count(page,15);
     await page.screenshot({path:buildPath('ComponentMarqueeCapture.png')});await page.keyboard.press('x');await expect(page.locator('.workspace-status')).toContainText('0 cells');
     await page.keyboard.press('Control+z');await page.keyboard.press('Control+d');
-    await local(page,c.x+66,c.y+2,c.x+92,c.y+60);await count(page,2);await expect(board).toHaveAttribute('data-selection-kind','region');
-    await expect(page.getByTestId('right-dock')).toContainText('Local cell selection');await expect(page.getByLabel('Clock hold',{exact:true})).toHaveCount(0);
-    await page.screenshot({path:buildPath('LocalSelectionCapture.png')});await page.keyboard.press('x');
-    await expect(page.locator('.workspace-status')).toContainText('8 cells');await expect(board).toHaveAttribute('data-component-count','4');
-    await page.keyboard.press('Control+z');await count(page,2);await expect(board).toHaveAttribute('data-component-count','2');
+    await drag(page,c.x-18,c.y-18,c.x+61,c.y+60);await count(page,10);await expect(board).toHaveAttribute('data-selection-kind','components');
+    await page.getByRole('button',{name:'Clock',exact:true}).click();await additive(page,c.x+66,c.y+2,c.x+92,c.y+60);await count(page,10);
+    await expect(board).toHaveAttribute('data-edit-tool','pointer');await expect(page.getByTestId('right-dock')).toContainText('Selected components');
 });
 
 test('nearby keys and right mouse cancel unfinished edits without deleting or committing a partial gesture',async({page})=>{
@@ -64,14 +69,45 @@ test('group dragging keeps identities and a cancelled pan returns to the same ca
     await page.screenshot({path:buildPath('PointerGroupMoveCapture.png')});
 });
 
-test('G and Shift+G share the floating confirmation workflow and local properties become editable after splitting',async({page})=>{
+test('Merge keeps its confirmation tool and Split cuts with a repeated grid-edge stroke on release',async({page})=>{
     const c=await ready(page),board=page.getByTestId('board');await stroke(page,c,0,'Clock');await stroke(page,c,1,'Clock');await page.keyboard.press('q');
     await page.keyboard.press('g');await page.mouse.click(c.x+12,c.y+12);await page.mouse.click(c.x+12,c.y+44);await expect(board).toHaveAttribute('data-merge-count','2');
     await expect(page.getByRole('toolbar',{name:'Pending operation'})).toBeVisible();await page.screenshot({path:buildPath('MergeActionsCapture.png')});
-    await page.keyboard.press('g');await expect(board).toHaveAttribute('data-edit-tool','pointer');await expect(board).toHaveAttribute('data-component-count','1');
-    await page.keyboard.press('Shift+g');await local(page,c.x+65,c.y+1,c.x+123,c.y+30);await expect(page.getByRole('button',{name:'Confirm split',exact:true})).toBeEnabled();
-    await page.screenshot({path:buildPath('SplitActionsCapture.png')});await page.keyboard.press('Shift+g');await expect(board).toHaveAttribute('data-selection-kind','components');
-    await count(page,2);await page.getByLabel('Clock hold',{exact:true}).fill('9');await page.mouse.click(c.x+12,c.y+44);await expect(page.getByLabel('Clock hold',{exact:true})).toHaveValue('1');
+    await page.keyboard.press('g');await expect(board).toHaveAttribute('data-component-count','1');await page.keyboard.press('Shift+g');
+    await page.mouse.move(c.x+64,c.y);await page.mouse.down();await page.mouse.move(c.x+64,c.y+32,{steps:4});await page.mouse.move(c.x+96,c.y+32,{steps:4});
+    await page.mouse.move(c.x+96,c.y+64,{steps:4});await expect(board).toHaveAttribute('data-component-count','1');await expect(board).toHaveAttribute('data-split-edges','3');
+    await page.screenshot({path:buildPath('SplitPathCapture.png')});await page.mouse.up();await expect(board).toHaveAttribute('data-component-count','2');await expect(board).toHaveAttribute('data-edit-tool','split');
+    await expect(page.getByRole('button',{name:'Confirm split',exact:true})).toHaveCount(0);await expect(board).toHaveAttribute('data-split-edges','0');
+    await drag(page,c.x+128,c.y,c.x+128,c.y+64);await expect(board).toHaveAttribute('data-component-count','3');
+    await page.keyboard.press('Control+z');await expect(board).toHaveAttribute('data-component-count','2');await expect(board).toHaveAttribute('data-edit-tool','split');
+    await page.keyboard.press('Control+Shift+z');await expect(board).toHaveAttribute('data-component-count','3');await page.keyboard.press('q');await count(page,5);
+    await page.keyboard.press('Control+d');await page.mouse.click(c.x+140,c.y+12);await page.getByLabel('Clock hold',{exact:true}).fill('9');
+    await page.mouse.click(c.x+12,c.y+44);await expect(page.getByLabel('Clock hold',{exact:true})).toHaveValue('1');
+});
+
+test('drawing merges only entered compatible targets and cancelling restores complete target regions',async({page})=>{
+    const c=await ready(page),board=page.getByTestId('board');await page.getByRole('button',{name:'Latch',exact:true}).click();
+    for(const [start,end] of [[0,1],[4,6],[9,11]])await drag(page,c.x+start*32+12,c.y+12,c.x+end*32+12,c.y+12);
+    await expect(board).toHaveAttribute('data-component-count','3');
+    await page.mouse.move(c.x+44,c.y+12);await page.mouse.down();await page.mouse.move(c.x+140,c.y+12,{steps:6});await expect(board).toHaveAttribute('data-component-count','2');
+    await page.mouse.down({button:'right'});await page.mouse.up({button:'right'});await page.mouse.up();await expect(board).toHaveAttribute('data-component-count','3');
+    await expect(page.locator('.workspace-status')).toContainText('8 cells');await page.keyboard.press('b');await drag(page,c.x+44,c.y+12,c.x+300,c.y+12);
+    await expect(board).toHaveAttribute('data-component-count','1');await expect(page.locator('.workspace-status')).toContainText('12 cells');
+    await page.screenshot({path:buildPath('DrawMergeCapture.png')});await page.keyboard.press('Control+z');await expect(board).toHaveAttribute('data-component-count','3');
+    await page.keyboard.press('Control+Shift+z');await expect(board).toHaveAttribute('data-component-count','1');
+});
+
+test('an incomplete cut leaves no barrier and right mouse cancels a preview in either display mode',async({page})=>{
+    const c=await ready(page),board=page.getByTestId('board');await stroke(page,c,0,'Clock');await stroke(page,c,1,'Clock');await page.keyboard.press('q');
+    await page.keyboard.press('Control+a');await page.getByRole('button',{name:'Merge selected components'}).click();
+    for(const mode of ['2D','2.5D']) {
+        await page.getByText(mode,{exact:true}).click();await page.getByRole('button',{name:'Split',exact:true}).click();
+        await drag(page,c.x+64,c.y,c.x+64,c.y+32);await expect(board).toHaveAttribute('data-component-count','1');
+        await expect(page.getByRole('toolbar',{name:'Split tool'})).toContainText('did not cut');
+        await page.mouse.move(c.x+64,c.y);await page.mouse.down();await page.mouse.move(c.x+64,c.y+64,{steps:5});
+        await page.screenshot({path:buildPath(mode==='2D'?'SplitFlatPreviewCapture.png':'SplitDepthPreviewCapture.png')});
+        await page.mouse.down({button:'right'});await page.mouse.up({button:'right'});await page.mouse.up();await expect(board).toHaveAttribute('data-component-count','1');await expect(board).toHaveAttribute('data-edit-tool','pointer');
+    }
 });
 
 test('paste is temporary, right click cancels it and a confirmed paste cannot accidentally start painting',async({page})=>{

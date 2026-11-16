@@ -5,11 +5,12 @@ import { CellStore } from '../../Source/CellStore';
 import { ComponentIndex } from '../../Source/ComponentIndex';
 import { snapshotTiles } from '../../Source/ComponentTopology';
 import { encodeBoard } from '../../Source/Native';
+import { SplitPath } from '../../Source/SplitPath';
 const state=()=>useEditor.getState();
 const tile=(x:number,y:number,id=1,toolId='latch'):Tile=>({x,y,componentId:id,toolId,isOn:false});
 const id=(x:number,y=0)=>state().Tiles.get(`${x},${y}`)!.componentId;
 function stroke(x:number,y:number,end:number,tool='latch') {state().selectTool(tool);state().paint(lineCells({x,y},{x:end,y}));state().commit();}
-const select=(x:number,y:number,width:number,height=1)=>state().select({originX:x,originY:y,width,height});
+const select=(x:number,y:number,width:number,height=1)=>state().selectRegionComponents({originX:x,originY:y,width,height});
 beforeEach(()=>{useEditor.setState({Simulating:false});state().load(newBoard());});
 describe('Explicit component identity',()=>{
     it('keeps adjacent strokes independent for every ink, while a same-ink starting cell extends its component',()=>{
@@ -36,14 +37,42 @@ describe('Explicit component identity',()=>{
         state().selectTool('latch');state().paint([{x:0,y:0},{x:1,y:1}]);state().commit();expect(id(0)).not.toBe(id(1,1));
         stroke(0,1,1);expect(id(0,1)).not.toBe(id(0));expect(id(0,1)).toBe(id(1,1));
     });
-    it('splits on erase, cut and delete, and cancels without changing identities',()=>{
-        for(const action of ['erase','cut','delete']) {
-            state().load(newBoard());stroke(-2,0,2);const before=state().export();
-            if(action==='erase') {state().paint([{x:0,y:0}],true);state().commit();}
-            else {select(0,0,1);if(action==='cut')state().copy(true);else state().deleteSelection();}
-            expect(id(-1)).not.toBe(id(1));state().undo();expect(state().export()).toEqual(before);
-            state().paint([{x:0,y:0}],true);state().cancel();expect(state().export()).toEqual(before);expect(state().Components.count(id(0))).toBe(5);
+    it('normalizes overwritten leftovers, while cut and delete operate on complete identities',()=>{
+        stroke(-2,0,2);const before=state().export();state().paint([{x:0,y:0}],true);state().commit();
+        expect(id(-1)).not.toBe(id(1));state().undo();expect(state().export()).toEqual(before);
+        for(const cut of [true,false]) {
+            select(0,0,1);if(cut)state().copy(true);else state().deleteSelection();
+            expect(state().Tiles.size).toBe(0);state().undo();expect(state().export()).toEqual(before);
         }
+        state().paint([{x:0,y:0}],true);state().cancel();expect(state().export()).toEqual(before);
+    });
+    it('merges every entered compatible component into the starting identity in one reversible stroke',()=>{
+        for(const tool of ['latch','clock','traceRed']) {
+            state().load(newBoard());stroke(0,0,1,tool);stroke(4,0,6,tool);stroke(9,0,12,tool);
+            const original=id(0),before=state().export(),history=state().Undo.length;
+            stroke(1,0,9,tool);expect(state().Components.size).toBe(1);expect(id(12)).toBe(original);expect(state().Tiles.size).toBe(13);
+            expect(state().Undo.length).toBe(history+1);state().undo();expect(state().export()).toEqual(before);
+            state().redo();expect(state().Components.size).toBe(1);expect(id(12)).toBe(original);
+        }
+    });
+    it('does not merge mere side contacts, corner contacts or a stroke started in empty space',()=>{
+        stroke(0,0,0);stroke(3,1,5);const other=id(3,1);stroke(0,0,4);expect(id(4)).not.toBe(other);
+        state().load(newBoard());stroke(0,0,0);stroke(1,1,3);const diagonal=id(1,1);
+        stroke(0,0,0);state().paint([{x:0,y:0},{x:1,y:1}]);state().commit();expect(id(1,1)).toBe(diagonal);expect(id(0)).not.toBe(diagonal);
+        state().load(newBoard());stroke(4,0,6);const original=id(6);stroke(0,0,4);expect(id(0)).not.toBe(original);expect(id(5)).toBe(original);
+    });
+    it('keeps incompatible color and parameter targets separate while replacing only traversed cells',()=>{
+        for(const [source,target] of [['latch','latch'],['clock','clock'],['traceRed','traceBlue']]) {
+            state().load(newBoard());state().configure({isOn:false,clockHoldTicks:3});stroke(0,0,1,source);
+            state().configure({isOn:true,clockHoldTicks:7});stroke(4,0,7,target);const other=id(7);
+            stroke(1,0,4,source);expect(id(4)).toBe(id(0));expect(id(5)).toBe(other);expect(id(0)).not.toBe(other);
+            if(source==='clock')expect(state().Tiles.get('4,0')!.clockHoldTicks).toBe(3);
+        }
+    });
+    it('rolls back full target merges and bridge cells when an extended stroke is cancelled',()=>{
+        stroke(0,0,1);stroke(4,0,7);const before=state().export(),history=state().Undo.length;
+        state().paint(lineCells({x:1,y:0},{x:4,y:0}));expect(state().Components.size).toBe(1);
+        state().cancel();expect(state().export()).toEqual(before);expect(state().Undo.length).toBe(history);expect(state().Components.size).toBe(2);
     });
     it('merges whole regions by clicks, rejects nonadjacent or incompatible picks and records one command',()=>{
         stroke(0,0,3);stroke(0,1,3);stroke(0,3,3);stroke(4,1,4,'clock');const before=state().export(),history=state().Undo.length;
@@ -64,18 +93,17 @@ describe('Explicit component identity',()=>{
             state().selectTool('merge');state().pickComponent({x:0,y:0});state().pickComponent({x:0,y:1});expect(state().MergeIds).toHaveLength(1);
         }
     });
-    it('splits only selected portions, expands properties to whole components, and preserves new boundaries',()=>{
-        stroke(0,0,5,'clock');const original=id(0);state().selectComponents([original]);state().configure({clockHoldTicks:4},true);select(2,0,2);
-        expect([...state().Tiles.values()].every(t=>t.clockHoldTicks===4)).toBe(true);
-        expect(state().splitSelection()).toBe(true);expect(state().Components.size).toBe(3);expect(id(0)).toBe(original);expect(id(2)).toBe(id(3));
-        state().configure({clockHoldTicks:9},true);expect(state().Tiles.get('2,0')?.clockHoldTicks).toBe(9);expect(state().Tiles.get('1,0')?.clockHoldTicks).toBe(4);
-        select(0,0,2);expect(state().splitSelection()).toBe(false);
+    it('splits along grid edges and edits whole results independently',()=>{
+        stroke(0,0,5,'clock');const original=id(0);state().selectComponents([original]);state().configure({clockHoldTicks:4},true);
+        state().selectTool('split');const path=new SplitPath({x:2,y:0});path.append({x:2,y:1});
+        expect(state().splitAlong(path)).toBe(true);expect(state().Components.size).toBe(2);expect(id(2)).toBe(original);expect(id(0)).not.toBe(original);
+        state().selectTool('pointer');select(0,0,1);state().configure({clockHoldTicks:9},true);expect(state().Tiles.get('1,0')?.clockHoldTicks).toBe(9);expect(state().Tiles.get('2,0')?.clockHoldTicks).toBe(4);
         state().undo();state().undo();expect(state().Components.size).toBe(1);
     });
-    it('preserves whole moves and detaches partial moves even when they land next to their former region',()=>{
-        stroke(0,0,4);const original=id(0);select(0,0,5);expect(state().confirmMove({x:0,y:2})).toBe(true);expect(id(4,2)).toBe(original);
-        state().undo();select(2,0,1);expect(state().confirmMove({x:0,y:1})).toBe(true);expect(state().Components.size).toBe(3);expect(id(2,1)).not.toBe(id(1));expect(id(1)).not.toBe(id(3));
-        state().undo();expect(state().Components.size).toBe(1);
+    it('moves complete components even when a marquee only touches part of their area',()=>{
+        stroke(0,0,4);const original=id(0);select(2,0,1);expect(state().confirmMove({x:0,y:2})).toBe(true);
+        expect(id(4,2)).toBe(original);expect(state().Tiles.has('0,2')).toBe(true);expect(state().Tiles.has('2,0')).toBe(false);
+        state().undo();expect(state().Components.size).toBe(1);expect(id(4)).toBe(original);
     });
     it('remaps independent blueprint placements, preserving flat internal groups and clipped fragments',()=>{
         stroke(0,0,3);stroke(0,1,3);select(0,0,4,2);state().copy();expect(state().createBlueprint('Pair',true)).toBe(true);

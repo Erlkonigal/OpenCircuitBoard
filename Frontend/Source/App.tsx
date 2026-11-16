@@ -5,7 +5,7 @@ import { Activity, ArrowDownLeft, BookOpen, Clipboard, Copy, FilePlus2, FolderOp
 import { BoardCanvas, type CameraCommand } from './BoardCanvas';
 import { editorInput } from './EditorInput';
 import { EditorShortcuts, commandForKey, editorKeysBlocked, shortcutFor } from './EditorShortcuts';
-import { selectionLabel, canSplitSelection } from './Selection';
+import { selectionLabel, canMergeSelection } from './Selection';
 import { useEditor } from './EditorStore';
 import { cellKey, newBoard, type Point } from './Model';
 import { ActivityPanel, BlueprintLibrary, ClipboardLibrary, ComponentLibrary, Inspector } from './WorkspacePanels';
@@ -13,7 +13,7 @@ import { IconControl, WorkspaceToolbar } from './WorkspaceToolbar';
 import { useSimulation } from './SimulationController';
 import * as Native from './Native';
 export function App() {
-    const state = useEditor(useShallow(s => ({ Board: s.Board, EditTool: s.EditTool, MergeIds:s.MergeIds, MergeError:s.MergeError, Components:s.Components, Gesture:s.Gesture, Clipboard: s.Clipboard, LeftOpen: s.LeftOpen, RightOpen: s.RightOpen, PasteAnchor: !!s.PasteAnchor, PreviewValid: s.PreviewValid, Path: s.Path, Selection: s.Selection, Simulating: s.Simulating, Tiles: s.Tiles })));
+    const state = useEditor(useShallow(s => ({ Board: s.Board, EditTool: s.EditTool, MergeIds:s.MergeIds, MergeError:s.MergeError, SplitNotice:s.SplitNotice, Components:s.Components, Gesture:s.Gesture, Clipboard: s.Clipboard, LeftOpen: s.LeftOpen, RightOpen: s.RightOpen, PasteAnchor: !!s.PasteAnchor, PreviewValid: s.PreviewValid, Path: s.Path, Selection: s.Selection, Simulating: s.Simulating, Tiles: s.Tiles })));
     const [cursor, setCursor] = useState<Point>({ x: 0, y: 0 });
     const [zoom, setZoom] = useState(0.5);
     const [camera, setCamera] = useState<CameraCommand>({ action: 'none', sequence: 0 });
@@ -123,7 +123,7 @@ export function App() {
     ];
     const visibleCommands = commands.filter(command => command.label.toLowerCase().includes(commandQuery.toLowerCase()));
     const selectedLabel=selectionLabel(state);
-    const toolLabel=state.EditTool==='pointer'?'Pointer: click to select, drag blank space to select components':state.EditTool==='draw'?'Draw: left-drag to paint | Right-click to return to pointer':state.EditTool==='merge'?'Merge: click adjacent components, then confirm':'Split: drag across a portion, then confirm';
+    const toolLabel=state.EditTool==='pointer'?'Pointer: click to select, drag blank space to select components':state.EditTool==='draw'?'Draw: left-drag to paint | Right-click to return to pointer':state.EditTool==='merge'?'Merge: click adjacent components, then confirm':'Split: drag along grid edges, release to cut';
     return <div className="editor-app">
     <WorkspaceToolbar frame={simulation.frame} starting={simulation.starting} rate={rate} fullSpeed={fullSpeed} step={step} onRate={changeRate} onFullSpeed={() => { setFullSpeed(!fullSpeed); if (simulation.frame?.running)
         void simulation.command('run', !fullSpeed ? 0 : rate); }} onStep={value => setStep(Math.max(1, Math.min(16, value)))} onCommand={(action, value) => void simulation.command(action, value)} onToggle={toggleSimulation} onNew={newProject} onOpen={openProject} onSave={saveProject} onSearch={() => { setCommandQuery(''); setCommandsOpen(true); }}/>
@@ -135,10 +135,16 @@ export function App() {
         <div className="canvas-topline"><span className="canvas-label"><MousePointer2 size={12}/>{state.PasteAnchor ? 'Place your selection' : state.EditTool==='merge'||state.EditTool==='split'?toolLabel:state.Selection?selectedLabel:toolLabel}</span>{state.Simulating && <span className={`canvas-live ${simulation.frame?.running ? 'running' : ''}`}><span />{simulation.starting ? 'Compiling' : simulation.frame?.running ? 'Live simulation' : 'Paused'}</span>}</div>
         {!state.Tiles.size && !state.PasteAnchor && <div className="canvas-welcome"><div className="welcome-symbol"><Layers3 size={31} strokeWidth={1.3}/></div><span className="eyebrow">A LITTLE LOGIC. ENDLESS POSSIBILITIES.</span><h1>Start with a spark.</h1><p>Choose a component from the library<br />and bring your circuit to life.</p><span className="welcome-tip"><ArrowDownLeft size={14}/>Choose an ink to start drawing</span></div>}
         <div className="canvas-zoom"><IconControl label="Zoom out" onClick={() => changeCamera('out')}><Minus size={14}/></IconControl><button type="button" aria-label="Fit canvas" onClick={() => changeCamera('fit')}>{Math.round(zoom * 100)}%</button><IconControl label="Zoom in" onClick={() => changeCamera('in')}><Plus size={14}/></IconControl><span /><IconControl label="Fit board in view" onClick={() => changeCamera('fit')}><Maximize2 size={14}/></IconControl></div>
-        {(state.EditTool==='merge'||state.EditTool==='split')&&<div className="canvas-actions" role="toolbar" aria-label="Pending operation">
-          <span>{state.EditTool==='merge'?`${state.MergeIds.length} components picked`:'Local cells will become independent components'}</span>
-          <Tooltip label={`${state.EditTool==='merge'?'Confirm merge':'Confirm split'} (${shortcutFor(state.EditTool)})`}><Button size="xs" aria-label={state.EditTool==='merge'?'Confirm merge':'Confirm split'} disabled={state.Gesture!=='idle'||(state.EditTool==='merge'?state.MergeIds.length<2:!canSplitSelection(state))} onClick={()=>state.EditTool==='merge'?useEditor.getState().confirmMerge():useEditor.getState().splitSelection()}>{state.EditTool==='merge'?'Confirm merge':'Confirm split'}</Button></Tooltip>
+        {state.EditTool==='merge'&&<div className="canvas-actions" role="toolbar" aria-label="Pending operation">
+          <span>{state.MergeIds.length} components picked</span>
+          <Tooltip label={`Confirm merge (${shortcutFor('merge')})`}><Button size="xs" aria-label="Confirm merge" disabled={state.Gesture!=='idle'||!state.Components.canMerge(state.MergeIds)} onClick={()=>useEditor.getState().confirmMerge()}>Confirm merge</Button></Tooltip>
           <Tooltip label={`Cancel (${shortcutFor('cancel')})`}><Button size="xs" variant="default" onClick={()=>editorInput.cancel()}>Cancel</Button></Tooltip>
+        </div>}
+        {state.EditTool==='pointer'&&!state.Simulating&&!state.PasteAnchor&&state.Gesture==='idle'&&canMergeSelection(state)&&<div className="canvas-actions" role="toolbar" aria-label="Selection actions">
+          <span>{state.Selection!.ids.length} compatible components</span><Button size="xs" aria-label="Merge selected components" leftSection={<Combine size={14}/>} onClick={()=>useEditor.getState().mergeSelection()}>Merge</Button>
+        </div>}
+        {state.EditTool==='split'&&<div className="canvas-actions" role="toolbar" aria-label="Split tool">
+          <span role="status">{state.SplitNotice||'Drag along grid edges. Release to split.'}</span><Tooltip label={`Return to pointer (${shortcutFor('cancel')})`}><Button size="xs" variant="default" onClick={()=>editorInput.cancel()}>Done</Button></Tooltip>
         </div>}
         {state.PasteAnchor && <div className={`canvas-context ${state.PreviewValid ? '' : 'invalid'}`}><Copy size={14}/><span>{state.PreviewValid ? 'Click to place' : 'Choose an empty area'}</span><kbd>Right-click / Q to cancel</kbd></div>}
       </section>{activityOpen && <ActivityPanel onClose={() => setActivityOpen(false)}/>}
@@ -151,6 +157,6 @@ export function App() {
         setCommandsOpen(false);
         visibleCommands[0].run();
     } }}/><div className="command-options">{visibleCommands.map(command => <button type="button" key={command.label} onClick={() => { setCommandsOpen(false); command.run(); }}>{command.icon}<span>{command.label}</span><kbd>{command.shortcut}</kbd></button>)}{!visibleCommands.length && <p>No commands found.</p>}</div><div className="command-hint"><span><kbd>Enter</kbd> to run the first result</span><span><kbd>Esc</kbd> to close</span></div></Modal>
-    <Modal opened={helpOpen} onClose={() => setHelpOpen(false)} title="Make yourself at home" centered><div className="shortcut-list">{[...EditorShortcuts.map(item=>[item.label,item.key]),['Select components','Click / blank drag'],['Select local cells','Shift + drag'],['Cancel','Right-click'],['Pan / zoom','Space + drag / middle drag / wheel']].map(([label, shortcut]) => <div key={label}><span>{label}</span><kbd>{shortcut}</kbd></div>)}</div></Modal>
+    <Modal opened={helpOpen} onClose={() => setHelpOpen(false)} title="Make yourself at home" centered><div className="shortcut-list">{[...EditorShortcuts.map(item=>[item.label,item.key]),['Select components','Click / blank drag'],['Add / remove components','Shift + click'],['Add a component area','Shift + drag'],['Split components','Drag along grid edges'],['Cancel','Right-click'],['Pan / zoom','Space + drag / middle drag / wheel']].map(([label, shortcut]) => <div key={label}><span>{label}</span><kbd>{shortcut}</kbd></div>)}</div></Modal>
   </div>;
 }

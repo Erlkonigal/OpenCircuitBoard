@@ -4,7 +4,7 @@ export const EditorShortcuts = [
     { id: 'delete', label: 'Delete selection', key: 'X' },
     { id: 'cancel', label: 'Cancel / return to pointer', key: 'Q' },
     { id: 'merge', label: 'Merge tool / confirm merge', key: 'G' },
-    { id: 'split', label: 'Split tool / confirm split', key: 'Shift+G' },
+    { id: 'split', label: 'Split along grid edges', key: 'Shift+G' },
     { id: 'fit', label: 'Fit canvas', key: 'F' },
     { id: 'undo', label: 'Undo', key: 'Ctrl+Z' },
     { id: 'redo', label: 'Redo', key: 'Ctrl+Shift+Z' },

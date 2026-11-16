@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { EditorInput } from '../../Source/EditorInput';
 import { useEditor } from '../../Source/EditorStore';
 import { commandForKey } from '../../Source/EditorShortcuts';
-import { selectionCount, selectionSource } from '../../Source/Selection';
+import { canMergeSelection, selectionCount, selectionSource } from '../../Source/Selection';
 import { lineCells, newBoard, type Point } from '../../Source/Model';
 const s=()=>useEditor.getState();
 const point=(x:number,y=0)=>({x:x*64+16,y:y*64+16});
@@ -29,11 +29,20 @@ describe('Pointer-first interaction state machine',()=>{
         click(1,1);expect(selectionCount(s())).toBe(1);
         click(8,8);expect(s().Selection).toBeNull();expect(s().Tiles.size).toBe(9);
     });
-    it('distinguishes whole-component marquee selection from Shift local cells and normalizes partial deletions',()=>{
-        stroke(0,0,4);stroke(0,1,4);
-        input.down(pointer(),point(-1,-1));input.move(point(1,1));input.up(0,point(1,1));expect(selectionCount(s())).toBe(10);expect(s().Selection?.kind).toBe('components');
-        input.down(pointer(0,true),point(2,0));input.move(point(2,1));input.up(0,point(2,1));expect(selectionCount(s())).toBe(2);expect(s().Selection?.kind).toBe('region');
-        input.execute('delete',{x:0,y:0});expect(s().Tiles.size).toBe(8);expect(s().Components.size).toBe(4);s().undo();expect(s().Components.size).toBe(2);expect(selectionCount(s())).toBe(2);
+    it('uses Shift clicks and additive marquees for complete components, including from Draw',()=>{
+        stroke(0,0,4);stroke(0,1,4);stroke(0,3,4);click(0);
+        input.down(pointer(0,true),point(2,1));expect(selectionCount(s())).toBe(5);input.up(0,point(2,1));expect(selectionCount(s())).toBe(10);expect(canMergeSelection(s())).toBe(true);
+        click(4,1,pointer(0,true));expect(selectionCount(s())).toBe(5);click(8,8,pointer(0,true));expect(selectionCount(s())).toBe(5);
+        input.down(pointer(0,true),point(2,1));input.move(point(2,3));input.up(0,point(2,3));expect(selectionCount(s())).toBe(15);
+        input.execute('delete',{x:0,y:0});expect(s().Tiles.size).toBe(0);s().undo();expect(selectionCount(s())).toBe(15);
+        s().selectTool('clock');input.down(pointer(0,true),point(2,1));input.move(point(3,3));input.up(0,point(3,3));
+        expect(selectionCount(s())).toBe(10);expect(s().EditTool).toBe('pointer');expect(s().Tiles.size).toBe(15);
+    });
+    it('shows merge eligibility only for compatible connected selections and merges in one undo',()=>{
+        stroke(0,0,2);stroke(0,1,2);stroke(0,3,2);click(0);click(0,3,pointer(0,true));expect(canMergeSelection(s())).toBe(false);
+        click(0,1,pointer(0,true));expect(canMergeSelection(s())).toBe(false);click(0,3,pointer(0,true));expect(canMergeSelection(s())).toBe(true);
+        const history=s().Undo.length;expect(s().mergeSelection()).toBe(true);expect(s().Components.size).toBe(2);expect(selectionCount(s())).toBe(6);expect(s().Undo.length).toBe(history+1);
+        s().undo();expect(s().Components.size).toBe(3);expect(selectionCount(s())).toBe(6);
     });
     it('supports Ctrl multiselect and moves the group after a screen-space threshold without changing IDs',()=>{
         stroke(0,0,2);stroke(0,1,2);click(0);click(0,1,pointer(0,false,true));expect(selectionCount(s())).toBe(6);
@@ -48,12 +57,13 @@ describe('Pointer-first interaction state machine',()=>{
         s().selectTool('clock');input.down(pointer(),point(0));input.move(point(3));input.cancel();input.up(0,point(3));expect(s().export().tiles).toEqual(before.tiles);expect(s().Undo.length).toBe(history);expect(s().EditTool).toBe('pointer');
         input.down(pointer(),{x:-20*64,y:-14*64});input.move({x:-22*64,y:-16*64});input.cancel();expect(s().Board.grid).toEqual(before.grid);
     });
-    it('restores the original component selection when cancelling an active or pending split',()=>{
+    it('cancels an unfinished split and keeps completed cuts when returning to Pointer',()=>{
         stroke(0,0,4,'clock');click(0);const selection=s().Selection,history=s().Undo.length;
-        input.execute('split',{x:0,y:0});input.down(pointer(),point(1));input.move(point(2));input.cancel();input.up(0,point(2));
-        expect(s().Selection).toEqual(selection);expect(s().EditTool).toBe('pointer');expect(s().Active).toBeNull();
-        input.execute('split',{x:0,y:0});input.down(pointer(),point(1));input.move(point(2));input.up(0,point(2));expect(selectionCount(s())).toBe(2);
-        input.cancel();expect(s().Selection).toEqual(selection);expect(s().Undo.length).toBe(history);expect(s().Components.size).toBe(1);
+        input.execute('split',{x:0,y:0});input.down(pointer(),{x:128,y:0});input.move({x:128,y:64});input.cancel();input.up(0,{x:128,y:64});
+        expect(s().Selection).toEqual(selection);expect(s().EditTool).toBe('pointer');expect(s().Components.size).toBe(1);expect(s().Undo.length).toBe(history);
+        input.execute('split',{x:0,y:0});input.down(pointer(),{x:128,y:0});input.move({x:128,y:64});input.up(0,{x:128,y:64});
+        expect(s().EditTool).toBe('split');expect(s().Components.size).toBe(2);const after=s().Selection;
+        input.cancel();expect(s().Selection).toEqual(after);expect(s().Undo.length).toBe(history+1);expect(s().Components.size).toBe(2);
     });
     it('right click returns to pointer then clears selection; it never deletes',()=>{
         stroke(0,0,2);click(0);const before=s().export();click(0,0,pointer(2));expect(s().Selection).toBeNull();expect(s().export()).toEqual(before);
@@ -64,9 +74,9 @@ describe('Pointer-first interaction state machine',()=>{
         for(const x of [4,6]){input.execute('paste',{x,y:2});click(x,2);expect(s().EditTool).toBe('pointer');expect(selectionCount(s())).toBe(2);}
         expect(s().Components.size).toBe(3);click(10,2);expect(s().Tiles.size).toBe(6);
     });
-    it('partial property changes require splitting; whole-component property edits preserve identity',()=>{
-        stroke(0,0,4,'clock');s().select({originX:1,originY:0,width:2,height:1});s().configure({clockHoldTicks:9},true);expect(s().Tiles.get('1,0')!.clockHoldTicks).toBe(1);
-        s().selectTool('split');expect(s().splitSelection()).toBe(true);expect(s().Selection?.kind).toBe('components');s().configure({clockHoldTicks:9},true);expect(s().Tiles.get('1,0')!.clockHoldTicks).toBe(9);expect(s().Tiles.get('0,0')!.clockHoldTicks).toBe(1);
+    it('edits all selected members even when a marquee covers only a small portion',()=>{
+        stroke(0,0,4,'clock');input.down(pointer(0,true),point(1));input.move(point(2));input.up(0,point(2));
+        expect(selectionCount(s())).toBe(5);s().configure({clockHoldTicks:9},true);expect([...s().Tiles.values()].every(t=>t.clockHoldTicks===9)).toBe(true);
     });
     it('pans with Space or middle mouse without changing tools or creating history',()=>{
         s().selectTool('clock');input.space(true);input.down(pointer(),point(2));input.move(point(4,3));input.up(0,point(4,3));input.space(false);
@@ -76,12 +86,13 @@ describe('Pointer-first interaction state machine',()=>{
         stroke(0,0,2);s().selectTool('clock');input.down(pointer(),point(4));input.execute('undo',{x:0,y:0});input.up(0,point(4));expect(s().Tiles.size).toBe(3);expect(s().Undo).toHaveLength(1);
         useEditor.setState({Simulating:true});click(0);input.execute('delete',{x:0,y:0});expect(latch).toHaveBeenCalledWith({x:0,y:0});expect(s().Tiles.size).toBe(3);
     });
-    it('does not let redo bypass an unfinished merge or split operation',()=>{
-        stroke(0,0,2);stroke(0,1,2);s().undo();const tiles=s().Tiles;
-        for(const command of ['merge','split'] as const){
-            input.execute(command,{x:0,y:0});input.execute('redo',{x:0,y:0});expect(s().EditTool).toBe(command);expect(s().Tiles).toBe(tiles);expect(s().Redo).toHaveLength(1);input.cancel();
-        }
-        input.execute('redo',{x:0,y:0});expect(s().Tiles.size).toBe(6);expect(s().Redo).toHaveLength(0);
+    it('cancels only an active cut on undo, then supports undo and redo while Split is idle',()=>{
+        stroke(0,0,4);input.execute('split',{x:0,y:0});input.down(pointer(),{x:128,y:0});input.move({x:128,y:64});
+        input.execute('undo',{x:0,y:0});input.up(0,{x:128,y:64});expect(s().EditTool).toBe('split');expect(s().Tiles.size).toBe(5);expect(s().Undo.length).toBe(1);
+        input.down(pointer(),{x:128,y:0});input.move({x:128,y:64});input.up(0,{x:128,y:64});expect(s().Components.size).toBe(2);
+        input.execute('undo',{x:0,y:0});expect(s().Components.size).toBe(1);expect(s().EditTool).toBe('split');
+        input.execute('redo',{x:0,y:0});expect(s().Components.size).toBe(2);expect(s().EditTool).toBe('split');
+        input.cancel();input.execute('merge',{x:0,y:0});const tiles=s().Tiles;input.execute('redo',{x:0,y:0});expect(s().Tiles).toBe(tiles);expect(s().EditTool).toBe('merge');
     });
     it('maps nearby shortcuts and leaves retired canvas keys unbound',()=>{
         const key=(key:string,ctrlKey=false,shiftKey=false)=>commandForKey({key,ctrlKey,metaKey:false,shiftKey,altKey:false});

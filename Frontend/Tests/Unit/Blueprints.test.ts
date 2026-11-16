@@ -8,13 +8,13 @@ describe('Project blueprints', () => {
     function create() {
         state().selectTool('clock'); state().configure({ clockHoldTicks: 9 }); state().paint([{ x: -2, y: -1 }]); state().commit();
         state().selectTool('clock'); state().configure({ clockHoldTicks: 17 }); state().paint([{ x: 0, y: 0 }]); state().commit();
-        state().select({ originX: -3, originY: -2, width: 5, height: 4 });
+        state().selectRegionComponents({ originX: -3, originY: -2, width: 5, height: 4 });
         expect(state().createBlueprint('Circuit')).toBe(true);
         return state().Blueprints[0];
     }
-    it('keeps whitespace, parameters, independent placements and clipboard snapshots', () => {
+    it('keeps spacing between components, parameters, independent placements and clipboard snapshots', () => {
         const blueprint = create();
-        expect(blueprint).toMatchObject({ width: 5, height: 4, tiles: [{ x: 1, y: 1, clockHoldTicks: 9 }, { x: 3, y: 2, clockHoldTicks: 17 }] });
+        expect(blueprint).toMatchObject({ width: 3, height: 2, tiles: [{ x: 0, y: 0, clockHoldTicks: 9 }, { x: 2, y: 1, clockHoldTicks: 17 }] });
         state().useBlueprint(blueprint.id);
         expect(state().ClipboardOrigin).toBe('blueprint');
         state().paste({ x: 3, y: 2 }); const source = state().Preview!.Source;
@@ -22,11 +22,11 @@ describe('Project blueprints', () => {
         expect(state().confirmPaste()).toBe(true);
         state().paste({ x: 10, y: 3 }); expect(state().confirmPaste()).toBe(true);
         state().deleteBlueprint(blueprint.id); expect(state().Blueprints).toHaveLength(0);
-        expect(state().Tiles.get('5,3')?.clockHoldTicks).toBe(9);
-        expect(state().Tiles.get('13,5')?.clockHoldTicks).toBe(17);
+        expect(state().Tiles.get('4,2')?.clockHoldTicks).toBe(9);
+        expect(state().Tiles.get('12,4')?.clockHoldTicks).toBe(17);
         state().undo(); expect(state().Blueprints).toHaveLength(1);
-        state().undo(); expect(state().Tiles.has('13,5')).toBe(false);
-        expect(state().Tiles.has('5,3')).toBe(true);
+        state().undo(); expect(state().Tiles.has('12,4')).toBe(false);
+        expect(state().Tiles.has('4,2')).toBe(true);
     });
     it('round-trips as a project and tracks management commands', () => {
         const blueprint = create(); state().renameBlueprint(blueprint.id, 'Renamed');
