@@ -2,6 +2,7 @@ import type { ReactNode } from 'react';
 import { useShallow } from 'zustand/react/shallow';
 import { ActionIcon, Button, Menu, NumberInput, SegmentedControl, Slider, Tooltip } from '@mantine/core';
 import { ChevronDown, Command, FilePlus2, FolderOpen, History, Layers3, PanelLeftClose, PanelLeftOpen, PanelRightClose, PanelRightOpen, Pause, Play, Redo2, RotateCcw, Save, Settings2, SkipBack, SkipForward, Undo2, Zap } from 'lucide-react';
+import { shortcutFor } from './EditorShortcuts';
 import { useEditor } from './EditorStore';
 import type { Frame } from './Native';
 export function IconControl({ label, children, onClick, disabled = false, active = false }: {
@@ -44,7 +45,7 @@ export function WorkspaceToolbar(props: Props) {
       <Button size="xs" variant="default" leftSection={<Save size={14}/>} onClick={() => props.onSave()} aria-label="Save project">Save</Button>
     </header>
     <div className="workspace-toolbar">
-      <div className="toolbar-cluster"><IconControl label="Toggle component library" onClick={() => useEditor.setState({ LeftOpen: !state.LeftOpen })}>{state.LeftOpen ? <PanelLeftClose size={16}/> : <PanelLeftOpen size={16}/>}</IconControl><span className="toolbar-divider"/><IconControl label="Undo (Ctrl+Z)" disabled={!state.Undo.length || state.Simulating} onClick={state.undo}><Undo2 size={15}/></IconControl><IconControl label="Redo (Ctrl+U)" disabled={!state.Redo.length || state.Simulating} onClick={state.redo}><Redo2 size={15}/></IconControl></div>
+      <div className="toolbar-cluster"><IconControl label="Toggle component library" onClick={() => useEditor.setState({ LeftOpen: !state.LeftOpen })}>{state.LeftOpen ? <PanelLeftClose size={16}/> : <PanelLeftOpen size={16}/>}</IconControl><span className="toolbar-divider"/><IconControl label={`Undo (${shortcutFor('undo')})`} disabled={!state.Undo.length || state.Simulating} onClick={state.undo}><Undo2 size={15}/></IconControl><IconControl label={`Redo (${shortcutFor('redo')})`} disabled={!state.Redo.length || state.Simulating} onClick={state.redo}><Redo2 size={15}/></IconControl></div>
       <div className="workspace-mode"><span className={state.Simulating ? 'mode-dot running' : 'mode-dot'}/>{state.Simulating ? 'Simulation' : 'Design'}<span className="mode-detail">{state.Simulating ? 'Circuit is read-only' : `${state.ComponentCount.toLocaleString()} components`}</span></div>
       <div className="toolbar-space"/>
       <SegmentedControl className="render-mode" aria-label="Render mode" size="xs" value={state.RenderMode} data={[{ value: '2d', label: '2D' }, { value: '2.5d', label: '2.5D' }]} onChange={value => state.setRenderMode(value as '2d' | '2.5d')}/>

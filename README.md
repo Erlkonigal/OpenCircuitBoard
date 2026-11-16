@@ -4,15 +4,34 @@ A desktop circuit workspace built with **Tauri, React, TypeScript, Mantine, and 
 
 The workspace has a searchable component library, a central canvas, and an inspector for component and canvas properties. Clipboard history lives in its own panel; Activity opens below the canvas. Transport, stepping, speed, and full-speed controls stay in the top toolbar. Press Ctrl+K to find commands.
 
-Click or drag to draw. Right-drag erases; Shift-drag selects. Drag within a selection to move it. Ctrl+C/X/V copies, cuts, and previews a paste. Click to place; Esc cancels. Middle-drag pans and the wheel zooms. Ctrl+Z undoes, Ctrl+U or Ctrl+Shift+Z redoes. The inspector edits selected components, or the defaults for the active tool. Runtime states never overwrite the editable circuit.
+The editor opens in **Pointer** mode. Click a component to inspect its properties; Ctrl-click adds or removes whole components from the selection. Drag on blank space to select every component whose actual cells intersect the rectangle. **Shift-drag selects only local cells**, clearly marked with an amber rectangle. Drag selected components or a local selection to move them; a four-CSS-pixel threshold separates clicks from moves. Component selection follows IDs and exact membership, including holes, rather than a bounding rectangle.
 
-Each stroke creates a component, including traces, buses, Cross, and ports. Starting on an existing cell with the same exact ink extends that component and inherits its settings. Left painting replaces occupied cells. Adjacent strokes remain independent; hover or selection highlights the whole component's actual area, without permanent boundary lines. Overwriting, erasing, cutting, deleting, or moving a portion splits any disconnected pieces using four-neighbor connectivity. The largest remaining piece keeps its ID; equal-sized pieces use topmost, then leftmost order.
+Common editing controls stay near the left hand:
 
-Use **Merge** to click complete component regions with the same ink and settings. Each new region must touch the selected group; confirm once with the inspector or Enter. Esc or right-click cancels. **Split**, beside Merge in the Tools section, lets you drag a rectangle over a portion and confirm with the inspector or Enter. Select less than the whole component. Inspector property changes apply to whole touched components, so split first to edit only a portion. Whole-component moves retain their IDs; partial moves detach the moved pieces. Paste and move still reject occupied or out-of-bounds destinations.
+| Action | Control |
+| --- | --- |
+| Pointer / draw with last ink | V / B |
+| Delete the current selection | X |
+| Cancel an unfinished operation and return to Pointer | Right-click or Q |
+| Clear an idle pointer selection | Right-click, Q, or Ctrl+D |
+| Merge tool / confirm merge | G |
+| Split tool / confirm split | Shift+G |
+| Pan / zoom / fit canvas | Space+left drag or middle drag / wheel / F |
+| Undo / redo | Ctrl+Z / Ctrl+Shift+Z |
+| Copy / cut / paste | Ctrl+C / Ctrl+X / Ctrl+V |
+| Select all complete components | Ctrl+A |
+
+Select an ink or the Draw tool to enter drawing mode. Left-click or drag draws; right mouse never erases. Each stroke creates a component, including traces, buses, Cross, and ports. Starting on an existing cell with the same exact ink extends that component and inherits its settings. Left painting replaces occupied cells; adjacent strokes remain independent. Hover and whole-component selection highlight the actual component area without permanent boundary lines.
+
+**X deletes what is selected, never what is merely hovered.** Whole-component selections delete complete identities; local selections delete only their cells. Overwriting, local deletion, cutting, or partial movement splits disconnected pieces using four-neighbor connectivity. The largest remaining piece keeps its ID; ties use topmost, then leftmost order. Whole-component moves preserve IDs. Paste and move reject occupied or out-of-bounds destinations.
+
+The Tools section contains Pointer, Draw, Merge, and Split. Merge picks whole regions by clicks and requires the same ink, compatible settings, and a connected group. Split detaches a local selection smaller than the original component. Confirm with G / Shift+G or the floating canvas action bar; successful actions return to Pointer. Right-click or Q cancels and restores the previous selection and document. A second cancel in idle Pointer mode clears the selection. Every committed edit is one undo step; undo during an unfinished operation cancels that operation first.
+
+The inspector edits whole components and displays mixed values for compatible multi-selections. Split a local selection before editing its properties. When drawing, inspector settings are defaults for new strokes. Text fields and modal windows own their keyboard input, so typing X, Q, or other editing letters cannot change the canvas. Esc, Del, Backspace, Enter, and Ctrl+U are not canvas commands. Runtime state stays separate from editable data; simulation locks design edits while retaining Latch clicks.
 
 Same-ink components with different IDs do not merge or conduct directly. Existing connections between different inks retain their color, port, and directional Cross rules; another physical route may still connect separate components.
 
-Blueprints are flat ink snapshots saved with the current project. Save a selection in the inspector or save a clipboard item; the Blueprints panel supports search, rename, and delete. Clicking a blueprint copies its snapshot into clipboard history while keeping the panel open. Each Ctrl+V starts an ordinary paste preview, and each placement remaps every internal component to a fresh ID while preserving its grouping as editable cells. Blueprint management and placement support undo/redo.
+Blueprints are flat ink snapshots saved with the current project. Save a selection in the inspector or save a clipboard item; the Blueprints panel supports search, rename, and delete. Clicking a blueprint copies its snapshot into clipboard history while keeping the panel open. Each Ctrl+V starts an ordinary paste preview, and each placement remaps every internal component to a fresh ID while preserving its grouping as editable cells. Confirming a paste returns to Pointer and selects the newly placed components; right-click or Q cancels the preview. Blueprint management and placement support undo/redo.
 
 The toolbar's 2D / 2.5D control applies to the board and both preview libraries and remembers the choice on this device. At 12 CSS pixels per cell and above, the board and previews show ink symbols; all Trace variants use only their color at every zoom level. Between 2 and 12 pixels they use color chunks with batched depth in 2.5D. Below 2 pixels both modes use area-weighted color and coverage maps. The sparse 64-cell chunk index and worker-built color pyramid update affected chunks and ancestors; a shared 64 MiB LRU bounds color raster and thumbnail caches. Zoom uses proportional steps around the pointer.
 
@@ -75,9 +94,9 @@ make core-benchmark CORE_BENCHMARK_ARGS="--minimum-tps 3142"
 make board-benchmark BOARD_PATH=C:/Projects/Example.ocb
 ```
 
-`frontend-test` builds the frontend, runs editor unit tests, and exercises the rendered production UI in Edge on Windows or Chromium on Linux. Captures are written under `build/`; inspect `InterfaceCapture.png`, `Capture.png`, `SelectorCapture.png`, `BoardEdgeCapture.png`, and the relevant property/clipboard captures.
+`frontend-test` builds the frontend, runs editor unit tests, and exercises the rendered production UI in Edge on Windows or Chromium on Linux. Captures are written under `build/`; inspect `InterfaceCapture.png`, `PointerPropertiesCapture.png`, `ComponentMarqueeCapture.png`, `LocalSelectionCapture.png`, `MergeActionsCapture.png`, `SplitActionsCapture.png`, and the relevant rendering/clipboard captures.
 
-`native-test` builds and tests the real Tauri app, its simulation controls, and archive IPC. On Windows, `test-tools` installs `tauri-driver` and matching EdgeDriver into `build/TestTools`. Linux also needs `WebKitWebDriver` (the `webkit2gtk-driver` package on Debian/Ubuntu), and a display or Xvfb. Native captures include `DesktopCapture.png`, `DesktopSimulationCapture.png`, and `DesktopComponentLanesCapture.png`, and `DesktopComponentMergeCapture.png`. Use `make native-ui-test` to test an already-built Release binary without rebuilding it.
+`native-test` builds and tests the real Tauri app, its simulation controls, and archive IPC. On Windows, `test-tools` installs `tauri-driver` and matching EdgeDriver into `build/TestTools`. Linux also needs `WebKitWebDriver` (the `webkit2gtk-driver` package on Debian/Ubuntu), and a display or Xvfb. Native captures include `DesktopCapture.png`, `DesktopSimulationCapture.png`, and `DesktopComponentLanesCapture.png`, `DesktopComponentMergeCapture.png`, and `DesktopPointerInteractionCapture.png`. Use `make native-ui-test` to test an already-built Release binary without rebuilding it.
 
 `test` runs Rust workspace tests, a frontend production build, unit tests, and browser tests. CI defines Windows and Linux validation and packaging separately.
 

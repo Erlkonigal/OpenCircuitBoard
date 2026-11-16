@@ -1,4 +1,5 @@
 import { browser, $, expect } from '@wdio/globals';
+import { Key } from 'webdriverio';
 import { buildPath } from '../Paths';
 describe('Native circuit workspace', () => {
     it('renders the redesigned desktop workspace', async () => {
@@ -109,7 +110,7 @@ describe('Native circuit workspace', () => {
         for(const row of [0,1]) await browser.action('pointer').move({x:Math.round(center.x+12),y:Math.round(center.y+row*32+12)}).down().up().perform();
         await expect($('[data-testid="board"]')).toHaveAttribute('data-merge-count','2');
         await browser.saveScreenshot(buildPath('DesktopComponentMergeCapture.png'));
-        await $('button=Confirm merge').click();
+        await $('button[aria-label="Confirm merge"]').click();
         await $('button=Run circuit').click(); await $('button[aria-label="Pause simulation"]').click();
         const joined=await pixels();
         await browser.action('pointer').move({x:Math.round(center.x+12),y:Math.round(center.y+12)}).down().up().perform();
@@ -214,6 +215,24 @@ describe('Native circuit workspace', () => {
         await $('button=Back to design').click();
         await browser.waitUntil(async () => JSON.stringify(await pixel()) === JSON.stringify(design));
         await browser.saveScreenshot(buildPath('DesktopLodDesignCapture.png'));
+    });
+
+    it('uses pointer selection, local selection, nearby deletion and right-click cancellation in the native window',async()=>{
+        await browser.refresh();await browser.waitUntil(async()=>await $('[data-testid="board"]').getAttribute('data-render-ready')==='true');
+        await $('.command-trigger').click();await $('input[aria-label="Search commands"]').setValue('new circuit');await $('.command-options button').click();
+        const board=$('[data-testid="board"]');await expect(board).toHaveAttribute('data-edit-tool','pointer');
+        const c=await browser.execute(()=>{const r=document.querySelector('[data-testid="board"]')!.getBoundingClientRect();return {x:Math.round(r.x+r.width/2),y:Math.round(r.y+r.height/2)};});
+        const click=async(x:number,y:number,button:0|2=0)=>browser.action('pointer').move({x:c.x+x,y:c.y+y}).down({button}).up({button}).perform();
+        await $('button[aria-label="Clock"]').click();
+        await browser.action('pointer').move({x:c.x+12,y:c.y+12}).down().move({x:c.x+140,y:c.y+12,duration:250}).up().perform();
+        await browser.keys('q');await expect(board).toHaveAttribute('data-edit-tool','pointer');await click(12,12);await expect(board).toHaveAttribute('data-selection-cells','5');
+        await $('input[aria-label="Clock hold"]').setValue('7');await click(12,12);await browser.keys('x');await expect($('.workspace-status')).toHaveText(expect.stringContaining('0 cells'));
+        await browser.keys(['Control','z']);await expect($('.workspace-status')).toHaveText(expect.stringContaining('5 cells'));await expect(board).toHaveAttribute('data-selection-cells','5');
+        await click(12,12,2);await expect(board).toHaveAttribute('data-selection-cells','0');await expect($('.workspace-status')).toHaveText(expect.stringContaining('5 cells'));
+        await browser.action('key').down(Key.Shift).perform(true);await click(76,12);await browser.action('key').up(Key.Shift).perform();
+        await expect(board).toHaveAttribute('data-selection-kind','region');await expect(board).toHaveAttribute('data-selection-cells','1');await browser.keys('x');
+        await expect($('.workspace-status')).toHaveText(expect.stringContaining('4 cells'));await expect(board).toHaveAttribute('data-component-count','2');
+        await browser.saveScreenshot(buildPath('DesktopPointerInteractionCapture.png'));
     });
 
 });

@@ -51,7 +51,7 @@ describe('Explicit component identity',()=>{
         state().pickComponent({x:3,y:1});state().pickComponent({x:4,y:1});expect(state().MergeIds).toHaveLength(2);
         expect(state().confirmMerge()).toBe(true);expect(state().Components.count(id(0))).toBe(8);expect(state().Undo).toHaveLength(history+1);
         state().undo();expect(state().export()).toEqual(before);state().redo();expect(id(3,1)).toBe(id(0));
-        state().selectTool('merge');state().pickComponent({x:0,y:0});state().cancel();expect(state().MergeIds).toEqual([]);expect(state().EditTool).toBe('ink');
+        state().selectTool('merge');state().pickComponent({x:0,y:0});state().cancel();expect(state().MergeIds).toEqual([]);expect(state().EditTool).toBe('pointer');
     });
     it('requires the entire picked set to stay connected, including when removing a bridge',()=>{
         for(let y=0;y<3;y++)stroke(0,y,1);state().selectTool('merge');
@@ -65,7 +65,7 @@ describe('Explicit component identity',()=>{
         }
     });
     it('splits only selected portions, expands properties to whole components, and preserves new boundaries',()=>{
-        stroke(0,0,5,'clock');const original=id(0);select(2,0,2);state().configure({clockHoldTicks:4},true);
+        stroke(0,0,5,'clock');const original=id(0);state().selectComponents([original]);state().configure({clockHoldTicks:4},true);select(2,0,2);
         expect([...state().Tiles.values()].every(t=>t.clockHoldTicks===4)).toBe(true);
         expect(state().splitSelection()).toBe(true);expect(state().Components.size).toBe(3);expect(id(0)).toBe(original);expect(id(2)).toBe(id(3));
         state().configure({clockHoldTicks:9},true);expect(state().Tiles.get('2,0')?.clockHoldTicks).toBe(9);expect(state().Tiles.get('1,0')?.clockHoldTicks).toBe(4);
@@ -88,7 +88,7 @@ describe('Explicit component identity',()=>{
         stroke(0,0,1);select(0,0,2);state().copy();
         for(const mode of ['merge','split']) {
             state().selectTool(mode);if(mode==='merge')state().pickComponent({x:0,y:0});
-            state().paste({x:4,y:mode==='merge'?0:1});expect(state().EditTool).toBe('ink');expect(state().MergeIds).toEqual([]);
+            state().paste({x:4,y:mode==='merge'?0:1});expect(state().EditTool).toBe('pointer');expect(state().MergeIds).toEqual([]);
             expect(state().confirmPaste()).toBe(true);
         }
     });

@@ -22,6 +22,7 @@ export class ComponentIndex {
         }
     }
     get size() { return this.Entries.size; }
+    ids() { return this.Entries.keys(); }
     chunkCount(id: number, key: string) { return this.Entries.get(id)?.Chunks.get(key) ?? 0; }
     count(id: number) { return this.Entries.get(id)?.Size ?? 0; }
     private membership(tile: Tile, delta: number) {

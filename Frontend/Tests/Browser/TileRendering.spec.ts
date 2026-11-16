@@ -100,9 +100,9 @@ test('rectangles, holes, turns and diagonal contacts render independently of dra
     await page.screenshot({ path: buildPath('TileShapesCapture.png') });
     const original = await image(page);
     const origin = await center(page);
-    await page.mouse.click(origin.x - 4 * 32 + 12, origin.y + 12 - 3 * 32, { button: 'right' });
+    await page.keyboard.press('v');await page.mouse.click(origin.x - 4 * 32 + 12, origin.y + 12 - 3 * 32);await page.keyboard.press('x');
     expect(await image(page)).not.toBe(original);
-    await page.keyboard.press('Control+z');
+    await page.keyboard.press('Control+z');await page.keyboard.press('Control+d');
     expect(await image(page)).toBe(original);
     for (let i = 0; i < cells.length; i++) await page.keyboard.press('Control+z');
     await paint(page, [...cells].reverse());

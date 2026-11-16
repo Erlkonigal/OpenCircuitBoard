@@ -28,22 +28,20 @@ test('adjacent strokes stay independent, highlight entire regions and merge by c
     await expect(page.getByTestId('board')).toHaveAttribute('data-merge-count','2');
     await expect(page.getByTestId('board')).toHaveAttribute('data-highlight-cells','8');
     await page.screenshot({path:buildPath('ComponentMergeCapture.png')});
-    await page.getByRole('button',{name:'Confirm merge',exact:true}).click();await page.keyboard.press('Escape');
+    await page.getByRole('button',{name:'Confirm merge',exact:true}).click();await page.keyboard.press('Control+d');
     const joined=await hoverId(page,c.x+12,c.y+12,8);expect(joined).not.toBe(first);
-    await page.keyboard.press('Control+z');expect(await hoverId(page,c.x+12,c.y+12,4)).toBe(first);
-    await page.keyboard.press('Control+u');await hoverId(page,c.x+12,c.y+44,8);
+    await page.keyboard.press('Control+z');await page.keyboard.press('Control+d');expect(await hoverId(page,c.x+12,c.y+12,4)).toBe(first);
+    await page.keyboard.press('Control+Shift+z');await page.keyboard.press('Control+d');await hoverId(page,c.x+12,c.y+44,8);
     await page.getByRole('button',{name:'Merge',exact:true}).click();await page.mouse.click(c.x+12,c.y+12);await page.mouse.click(c.x+12,c.y+12,{button:'right'});
-    await expect(page.getByTestId('board')).toHaveAttribute('data-edit-tool','ink');await expect(page.locator('.workspace-status')).toContainText('8 cells');
-    await page.mouse.move(100,25);await expect(page.getByTestId('board')).toHaveAttribute('data-highlight-cells','0');
+    await expect(page.getByTestId('board')).toHaveAttribute('data-edit-tool','pointer');await expect(page.locator('.workspace-status')).toContainText('8 cells');
+    await page.keyboard.press('Control+d');await page.mouse.move(100,25);await expect(page.getByTestId('board')).toHaveAttribute('data-highlight-cells','0');
 });
 
 test('left paint overwrites, splits disconnected remainders and allows explicit partial splits and whole-component settings',async({page})=>{
     const c=await ready(page);await page.getByRole('button',{name:'Clock',exact:true}).click();
     await drag(page,c.x+12,c.y+12,c.x+204,c.y+12);const first=await hoverId(page,c.x+12,c.y+12,7);
-    await select(page,c.x+65,c.y+2,c.x+125,c.y+30);
+    await page.keyboard.press('v');await page.mouse.click(c.x+12,c.y+12);
     await page.getByLabel('Clock hold',{exact:true}).fill('4');
-    await page.getByRole('button',{name:'Clear selection'}).click();
-    await select(page,c.x+1,c.y+2,c.x+30,c.y+30);await expect(page.getByLabel('Clock hold',{exact:true})).toHaveValue('4');
     await page.getByRole('button',{name:'Clear selection'}).click();
     await page.getByRole('button',{name:'Trace',exact:true}).click();await page.mouse.click(c.x+108,c.y+12);
     expect(await hoverId(page,c.x+12,c.y+12,3)).toBe(first);const right=await hoverId(page,c.x+140,c.y+12,3);expect(right).not.toBe(first);
@@ -52,9 +50,8 @@ test('left paint overwrites, splits disconnected remainders and allows explicit 
     await page.getByRole('button',{name:'Split',exact:true}).click();await expect(page.getByTestId('board')).toHaveAttribute('data-edit-tool','split');
     await drag(page,c.x+65,c.y+2,c.x+125,c.y+30);await page.getByRole('button',{name:'Confirm split',exact:true}).click();
     await page.getByRole('button',{name:'Clear selection'}).click();await hoverId(page,c.x+75,c.y+12,2);
-    await select(page,c.x+65,c.y+2,c.x+125,c.y+30);await expect(page.getByRole('button',{name:'Confirm split',exact:true})).toBeDisabled();
-    await page.getByRole('button',{name:'Clock',exact:true}).click();await page.getByLabel('Clock hold',{exact:true}).fill('9');await page.getByRole('button',{name:'Clear selection'}).click();
-    await select(page,c.x+1,c.y+2,c.x+30,c.y+30);await expect(page.getByLabel('Clock hold',{exact:true})).toHaveValue('4');
+    await page.mouse.click(c.x+75,c.y+12);await page.getByLabel('Clock hold',{exact:true}).fill('9');
+    await page.mouse.click(c.x+12,c.y+12);await expect(page.getByLabel('Clock hold',{exact:true})).toHaveValue('4');
     await page.screenshot({path:buildPath('ComponentSplitCapture.png')});
 });
 
@@ -65,7 +62,7 @@ test('merge rejects distant and incompatible regions and leaves cancelled choice
     await page.getByRole('button',{name:'Merge',exact:true}).click();await page.mouse.click(c.x+12,c.y+12);await page.mouse.click(c.x+12,c.y+108);
     await expect(page.getByRole('alert')).toContainText('adjacent');await expect(page.getByTestId('board')).toHaveAttribute('data-merge-count','1');
     await page.mouse.click(c.x+12,c.y+44);await page.mouse.click(c.x+140,c.y+44);await expect(page.getByTestId('board')).toHaveAttribute('data-merge-count','2');
-    await page.keyboard.press('Escape');await hoverId(page,c.x+12,c.y+12,4);
+    await page.keyboard.press('q');await hoverId(page,c.x+12,c.y+12,4);
     await expect(page.locator('.workspace-status')).toContainText('13 cells');
 });
 

@@ -22,10 +22,8 @@ export interface Board {
     grid: Grid;
     tiles: Tile[];
 }
-export interface Selection {
-    bounds: Grid;
-    cells: string[];
-}
+export type Selection = { kind: 'components'; ids: number[] } | { kind: 'region'; bounds: Grid; cells: string[] };
+export type EditorTool = 'pointer' | 'draw' | 'merge' | 'split';
 export interface ClipboardItem {
     width: number;
     height: number;

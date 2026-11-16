@@ -1,8 +1,9 @@
 import { create } from 'zustand';
-import { cellKey, contains, ToolIds, newBoard, validateBoard, validateProject, type Board, type Blueprint, type ClipboardItem, type Grid, type Point, type ProjectDocument, type RenderMode, type Selection, type Tile } from './Model';
+import { cellKey, contains, ToolIds, newBoard, validateBoard, validateProject, type EditorTool, type Board, type Blueprint, type ClipboardItem, type Grid, type Point, type ProjectDocument, type RenderMode, type Selection, type Tile } from './Model';
 import { CellStore, inkSource, type CellChange } from './CellStore';
 import { ComponentIndex } from './ComponentIndex';
 import { connectedRegions, snapshotTiles } from './ComponentTopology';
+import { selectionSource, selectionIds } from './Selection';
 import { loadRenderMode, saveRenderMode } from './Preferences';
 interface Document {
     tiles: CellStore;
@@ -43,7 +44,13 @@ interface State {
         Next: number;
     };
     Stroke: Tile | null;
-    EditTool: 'ink' | 'merge' | 'split';
+    EditTool: EditorTool;
+    Gesture: 'idle' | 'pendingMove' | 'marquee' | 'move' | 'paint' | 'resize' | 'pan';
+    Marquee: {
+        Bounds: Grid;
+        Local: boolean;
+    } | null;
+    ToolSelection: Selection | null;
     MergeIds: number[];
     MergeError: string;
     Blueprints: Blueprint[];
@@ -90,6 +97,10 @@ interface State {
     undo: () => void;
     redo: () => void;
     select: (bounds: Grid | null) => void;
+    selectComponents: (ids: number[]) => void;
+    selectRegionComponents: (bounds: Grid) => void;
+    selectAll: () => void;
+    cancelInteraction: () => void;
     movePreview: (offset: Point) => void;
     confirmMove: (offset: Point) => boolean;
     copy: (cut?: boolean) => boolean;
@@ -104,28 +115,16 @@ interface State {
 }
 const EmptyPreview = { Preview: null, PreviewValid: false, PasteAnchor: null };
 const EmptyMerge = { MergeIds: [] as number[], MergeError: '' };
-const SelectionSources = new WeakMap<Selection, {
-    Tiles: CellStore;
-    Source: CellStore;
-}>();
 function allocate(s: State) { if (s.Ids.Next > 2147483647)
     throw Error('ComponentIdLimit'); return s.Ids.Next++; }
 function setTiles(s: State, tiles: CellStore) { s.Components.sync(tiles); return { Tiles: tiles, Revision: s.Revision + 1 }; }
-function selectedSource(s: State): CellStore {
-    if (!s.Selection)
-        return new CellStore();
-    const cached = SelectionSources.get(s.Selection);
-    if (cached?.Tiles === s.Tiles)
-        return cached.Source;
-    const source = CellStore.from(s.Tiles.query(s.Selection.bounds));
-    SelectionSources.set(s.Selection, { Tiles: s.Tiles, Source: source });
-    return source;
-}
 function selectionItem(s: State): ClipboardItem | null {
     if (!s.Selection)
         return null;
-    const b = s.Selection.bounds;
-    return { width: b.width, height: b.height, tiles: snapshotTiles([...selectedSource(s).values()]).map(t => ({ ...t, x: t.x - b.originX, y: t.y - b.originY })) };
+    const source = selectionSource(s), b = s.Selection.kind === 'region' ? s.Selection.bounds : source.Bounds;
+    if (!b)
+        return null;
+    return { width: b.width, height: b.height, tiles: snapshotTiles([...source.values()]).map(t => ({ ...t, x: t.x - b.originX, y: t.y - b.originY })) };
 }
 function previewValid(s: State, source: CellStore, offset: Point, excluded?: CellStore) {
     const b = source.Bounds, g = s.Board.grid;
@@ -140,7 +139,7 @@ function* translated(source: CellStore, offset: Point): IterableIterator<readonl
 }
 export const useEditor = create<State>((set, get) => ({
     Board: newBoard(), Tiles: new CellStore(), Components: new ComponentIndex(), Ids: { Next: 1 }, Stroke: null,
-    EditTool: 'ink', ...EmptyMerge, Blueprints: [], RenderMode: loadRenderMode(), Selection: null,
+    EditTool: 'pointer', Gesture: 'idle', Marquee: null, ToolSelection: null, ...EmptyMerge, Blueprints: [], RenderMode: loadRenderMode(), Selection: null,
     Clipboard: [], ClipboardIndex: -1, ClipboardOrigin: 'copy', Undo: [], Redo: [], Active: null, ...EmptyPreview,
     LeftDock: 'circuitEditor', RightDock: 'eventLog', LeftOpen: true, RightOpen: true, LeftWidth: 272, RightWidth: 272,
     Events: [], Path: '', Recent: [], Revision: 0, Simulating: false, Runtime: new Map(), RuntimeGrid: null,
@@ -151,7 +150,7 @@ export const useEditor = create<State>((set, get) => ({
         for (const tile of project.board.tiles)
             next = Math.max(next, tile.componentId + 1);
         set({ Board: { ...project.board, tiles: [] }, Tiles: tiles, Components: new ComponentIndex(tiles), Ids: { Next: next }, Stroke: null,
-            EditTool: 'ink', ...EmptyMerge, Blueprints: project.blueprints, Selection: null, Clipboard: [], ClipboardIndex: -1, ClipboardOrigin: 'copy',
+            EditTool: 'pointer', Gesture: 'idle', Marquee: null, ToolSelection: null, ...EmptyMerge, Blueprints: project.blueprints, Selection: null, Clipboard: [], ClipboardIndex: -1, ClipboardOrigin: 'copy',
             Undo: [], Redo: [], Active: null, ...EmptyPreview, Path: path, Runtime: new Map(), RuntimeGrid: null, Revision: get().Revision + 1 });
     },
     export: () => { const s = get(); return { ...s.Board, grid: { ...s.Board.grid }, tiles: [...s.Tiles.values()].sort((a, b) => a.y - b.y || a.x - b.x) }; },
@@ -166,24 +165,47 @@ export const useEditor = create<State>((set, get) => ({
         get().commit();
         return true;
     },
-    renameBlueprint: (id, name) => { const s = get(); if (s.Simulating || !name.trim() || !s.Blueprints.some(b => b.id === id && b.name !== name.trim()))
-        return; s.begin(); set({ Blueprints: s.Blueprints.map(b => b.id === id ? { ...b, name: name.trim() } : b) }); get().commit(); },
-    deleteBlueprint: id => { const s = get(); if (s.Simulating || !s.Blueprints.some(b => b.id === id))
-        return; s.begin(); set({ Blueprints: s.Blueprints.filter(b => b.id !== id) }); get().commit(); },
-    useBlueprint: id => { const s = get(), b = s.Blueprints.find(b => b.id === id); if (!b || s.Simulating)
-        return; set({ Clipboard: [{ width: b.width, height: b.height, tiles: b.tiles }, ...s.Clipboard].slice(0, 4), ClipboardIndex: 0, ClipboardOrigin: 'blueprint', ...EmptyPreview }); },
+    renameBlueprint: (id, name) => {
+        const s = get();
+        if (s.Simulating || !name.trim() || !s.Blueprints.some(b => b.id === id && b.name !== name.trim()))
+            return;
+        s.begin();
+        set({ Blueprints: s.Blueprints.map(b => b.id === id ? { ...b, name: name.trim() } : b) });
+        get().commit();
+    },
+    deleteBlueprint: id => {
+        const s = get();
+        if (s.Simulating || !s.Blueprints.some(b => b.id === id))
+            return;
+        s.begin();
+        set({ Blueprints: s.Blueprints.filter(b => b.id !== id) });
+        get().commit();
+    },
+    useBlueprint: id => {
+        const s = get(), b = s.Blueprints.find(b => b.id === id);
+        if (!b || s.Simulating)
+            return;
+        set({ Clipboard: [{ width: b.width, height: b.height, tiles: b.tiles }, ...s.Clipboard].slice(0, 4), ClipboardIndex: 0, ClipboardOrigin: 'blueprint', ...EmptyPreview });
+    },
     selectTool: id => {
         if (get().Simulating)
             return;
-        get().cancel();
+        const previous = get();
+        const restore = previous.EditTool === 'merge' || previous.EditTool === 'split' ? previous.ToolSelection : previous.Selection;
+        previous.cancel();
         const s = get();
         if (id === 'merge' || id === 'split') {
-            set({ EditTool: id, Selection: id === 'merge' ? null : s.Selection, RightOpen: true, ...EmptyMerge });
+            set({ EditTool: id, ToolSelection: restore, Selection: id === 'split' && restore?.kind === 'region' ? restore : null, RightOpen: true });
             return;
         }
-        if (!ToolIds.slice(1).includes(id))
+        if (id === 'pointer') {
+            set({ EditTool: 'pointer', Selection: restore });
+            return;
+        }
+        const tool = id === 'draw' ? s.Board.selectedTool : id;
+        if (!ToolIds.slice(1).includes(tool))
             throw Error('ProjectBoardInvalid');
-        set({ EditTool: 'ink', ...EmptyMerge, Board: { ...s.Board, selectedTool: id } });
+        set({ EditTool: 'draw', Selection: null, Board: { ...s.Board, selectedTool: tool } });
     },
     pickComponent: point => {
         const s = get();
@@ -216,16 +238,16 @@ export const useEditor = create<State>((set, get) => ({
         for (const id of s.MergeIds)
             for (const tile of s.Components.members(id))
                 changes.push([cellKey(tile), { ...tile, componentId }]);
-        set({ ...setTiles(s, s.Tiles.update(changes)), ...EmptyMerge });
+        set({ ...setTiles(s, s.Tiles.update(changes)), ...EmptyMerge, EditTool: 'pointer', ToolSelection: null, Selection: { kind: 'components', ids: [componentId] } });
         get().commit();
         return true;
     },
     splitSelection: () => {
         const s = get();
-        if (s.Simulating || !s.Selection)
+        if (s.Simulating || s.Selection?.kind !== 'region')
             return false;
         const groups = new Map<number, Tile[]>(), changes: [string, Tile][] = [];
-        for (const tile of selectedSource(s).values()) {
+        for (const tile of selectionSource(s).values()) {
             let group = groups.get(tile.componentId);
             if (!group) {
                 group = [];
@@ -245,12 +267,15 @@ export const useEditor = create<State>((set, get) => ({
         if (!changes.length)
             return false;
         s.begin();
-        set(setTiles(s, s.Tiles.update(changes)));
+        set({ ...setTiles(s, s.Tiles.update(changes)), EditTool: 'pointer', ToolSelection: null, Selection: { kind: 'components', ids: [...new Set(changes.map(([, tile]) => tile.componentId))] } });
         get().commit();
         return true;
     },
-    begin: () => { const s = get(); if (!s.Simulating && !s.Active)
-        set({ Active: { tiles: s.Tiles, grid: s.Board.grid, selection: s.Selection, blueprints: s.Blueprints }, Stroke: null }); },
+    begin: () => {
+        const s = get();
+        if (!s.Simulating && !s.Active)
+            set({ Active: { tiles: s.Tiles, grid: s.Board.grid, selection: s.Selection, blueprints: s.Blueprints }, Stroke: null });
+    },
     paint: (points, remove = false) => {
         let s = get();
         if (s.Simulating)
@@ -302,19 +327,59 @@ export const useEditor = create<State>((set, get) => ({
             s = get();
         }
         const changes = [...s.Tiles.changes(before.tiles)];
-        const cells = s.Selection ? [...s.Tiles.query(s.Selection.bounds)].map(cellKey) : [];
-        const selection = s.Selection && cells.length ? { ...s.Selection, cells } : null;
+        let selection = s.Selection;
+        if (selection?.kind === 'region') {
+            const cells = [...s.Tiles.query(selection.bounds)].map(cellKey);
+            selection = cells.length ? { ...selection, cells } : null;
+        }
+        else if (selection) {
+            const ids = selection.ids.filter(id => s.Components.count(id));
+            selection = ids.length ? { ...selection, ids } : null;
+        }
         const command = { changes, beforeGrid: before.grid, afterGrid: s.Board.grid, beforeSelection: before.selection, afterSelection: selection, beforeBlueprints: before.blueprints, afterBlueprints: s.Blueprints };
         set({ Active: null, Stroke: null, Selection: selection, ...((changes.length || JSON.stringify(before.grid) !== JSON.stringify(s.Board.grid) || before.blueprints !== s.Blueprints) ? { Undo: [...s.Undo, command], Redo: [] } : {}) });
     },
-    cancel: () => { const s = get(); set({ ...EmptyPreview, ...EmptyMerge, EditTool: 'ink', Active: null, Stroke: null, ...(s.Active ? { ...setTiles(s, s.Active.tiles), Board: { ...s.Board, grid: s.Active.grid }, Selection: s.Active.selection, Blueprints: s.Active.blueprints } : {}) }); },
-    undo: () => { get().cancel(); const s = get(), c = s.Undo.at(-1); if (!c || s.Simulating)
-        return; set({ ...setTiles(s, s.Tiles.update(c.changes.map(c => [c.key, c.before]))), Board: { ...s.Board, grid: c.beforeGrid }, Selection: c.beforeSelection, Blueprints: c.beforeBlueprints, Undo: s.Undo.slice(0, -1), Redo: [...s.Redo, c] }); },
-    redo: () => { get().cancel(); const s = get(), c = s.Redo.at(-1); if (!c || s.Simulating)
-        return; set({ ...setTiles(s, s.Tiles.update(c.changes.map(c => [c.key, c.after]))), Board: { ...s.Board, grid: c.afterGrid }, Selection: c.afterSelection, Blueprints: c.afterBlueprints, Redo: s.Redo.slice(0, -1), Undo: [...s.Undo, c] }); },
-    select: bounds => { const s = get(), cells = bounds ? [...s.Tiles.query(bounds)].map(cellKey) : []; set({ Selection: bounds && cells.length ? { bounds, cells } : null }); },
-    movePreview: offset => { const s = get(); if (!s.Selection || s.Simulating)
-        return; const source = s.Preview?.Kind === 'move' ? s.Preview.Source : selectedSource(s), b = s.Selection.bounds; set({ Preview: { Source: source, Offset: offset, Kind: 'move', Bounds: { ...b, originX: b.originX + offset.x, originY: b.originY + offset.y } }, PreviewValid: previewValid(s, source, offset, source), PasteAnchor: null }); },
+    cancel: () => {
+        const s = get(), selection = s.EditTool === 'merge' || s.EditTool === 'split' ? s.ToolSelection : s.Active ? s.Active.selection : s.Selection;
+        set({ ...EmptyPreview, ...EmptyMerge, EditTool: 'pointer', ToolSelection: null, Gesture: 'idle', Marquee: null, Active: null, Stroke: null, Selection: selection,
+            ...(s.Active ? { ...setTiles(s, s.Active.tiles), Board: { ...s.Board, grid: s.Active.grid }, Blueprints: s.Active.blueprints } : {}) });
+    },
+    cancelInteraction: () => { const s = get(), clear = s.EditTool === 'pointer' && s.Gesture === 'idle' && !s.Preview && !s.Active; s.cancel(); if (clear)
+        set({ Selection: null }); },
+    undo: () => {
+        const s = get();
+        if (s.Simulating)
+            return;
+        if (s.Active || s.Preview || s.Gesture !== 'idle' || s.EditTool === 'merge' || s.EditTool === 'split') {
+            s.cancel();
+            return;
+        }
+        const c = s.Undo.at(-1);
+        if (!c)
+            return;
+        set({ ...setTiles(s, s.Tiles.update(c.changes.map(c => [c.key, c.before]))), EditTool: 'pointer', Board: { ...s.Board, grid: c.beforeGrid }, Selection: c.beforeSelection, Blueprints: c.beforeBlueprints, Undo: s.Undo.slice(0, -1), Redo: [...s.Redo, c] });
+    },
+    redo: () => {
+        const s = get();
+        if (s.Simulating || s.Active || s.Preview || s.Gesture !== 'idle' || s.EditTool === 'merge' || s.EditTool === 'split')
+            return;
+        const c = s.Redo.at(-1);
+        if (!c)
+            return;
+        set({ ...setTiles(s, s.Tiles.update(c.changes.map(c => [c.key, c.after]))), EditTool: 'pointer', Board: { ...s.Board, grid: c.afterGrid }, Selection: c.afterSelection, Blueprints: c.afterBlueprints, Redo: s.Redo.slice(0, -1), Undo: [...s.Undo, c] });
+    },
+    select: bounds => { const s = get(), cells = bounds ? [...s.Tiles.query(bounds)].map(cellKey) : []; set({ Selection: bounds && cells.length ? { kind: 'region', bounds, cells } : null }); },
+    selectComponents: ids => { const s = get(), valid = [...new Set(ids)].filter(id => s.Components.count(id)); set({ Selection: valid.length ? { kind: 'components', ids: valid } : null, RightOpen: valid.length ? true : s.RightOpen }); },
+    selectRegionComponents: bounds => { const s = get(); s.selectComponents([...new Set([...s.Tiles.query(bounds)].map(t => t.componentId))]); },
+    selectAll: () => { const s = get(); if (!s.Simulating)
+        s.selectComponents([...s.Components.ids()]); },
+    movePreview: offset => {
+        const s = get();
+        if (!s.Selection || s.Simulating)
+            return;
+        const source = s.Preview?.Kind === 'move' ? s.Preview.Source : selectionSource(s), b = s.Selection.kind === 'region' ? s.Selection.bounds : source.Bounds!;
+        set({ Preview: { Source: source, Offset: offset, Kind: 'move', Bounds: { ...b, originX: b.originX + offset.x, originY: b.originY + offset.y } }, PreviewValid: previewValid(s, source, offset, source), PasteAnchor: null });
+    },
     confirmMove: offset => {
         const s = get();
         s.movePreview(offset);
@@ -348,17 +413,33 @@ export const useEditor = create<State>((set, get) => ({
                     cells.push(key);
                 }
             }
-        set({ ...setTiles(s, s.Tiles.update(changes)), Selection: { bounds: p.Bounds, cells }, ...EmptyPreview });
+        set({ ...setTiles(s, s.Tiles.update(changes)), Selection: s.Selection?.kind === 'components' ? s.Selection : { kind: 'region', bounds: p.Bounds, cells }, ...EmptyPreview });
         get().commit();
         return true;
     },
-    copy: (cut = false) => { const s = get(); if (s.Simulating)
-        return false; const item = selectionItem(s); if (!item)
-        return false; set({ Clipboard: [item, ...s.Clipboard].slice(0, 4), ClipboardIndex: 0, ClipboardOrigin: 'copy' }); if (s.LeftDock !== 'clipboard' && s.RightDock !== 'clipboard')
-        s.activateDock('left', 'clipboard'); if (cut)
-        get().deleteSelection(); return true; },
-    paste: anchor => { const s = get(), item = s.Clipboard[s.ClipboardIndex]; if (!item || s.Simulating)
-        return; const source = inkSource(item); set({ EditTool: 'ink', ...EmptyMerge, Preview: { Source: source, Offset: anchor, Kind: 'paste', Bounds: { originX: anchor.x, originY: anchor.y, width: item.width, height: item.height } }, PasteAnchor: anchor, PreviewValid: previewValid(s, source, anchor) }); },
+    copy: (cut = false) => {
+        const s = get();
+        if (s.Simulating || s.Active || s.Preview || s.EditTool === 'merge' || s.EditTool === 'split')
+            return false;
+        const item = selectionItem(s);
+        if (!item)
+            return false;
+        set({ Clipboard: [item, ...s.Clipboard].slice(0, 4), ClipboardIndex: 0, ClipboardOrigin: 'copy' });
+        if (s.LeftDock !== 'clipboard' && s.RightDock !== 'clipboard')
+            s.activateDock('left', 'clipboard');
+        if (cut)
+            get().deleteSelection();
+        return true;
+    },
+    paste: anchor => {
+        const s = get(), item = s.Clipboard[s.ClipboardIndex];
+        if (!item || s.Simulating)
+            return;
+        if (s.Active || s.EditTool === 'merge' || s.EditTool === 'split')
+            s.cancel();
+        const source = inkSource(item);
+        set({ EditTool: 'pointer', ToolSelection: null, Gesture: 'idle', ...EmptyMerge, Preview: { Source: source, Offset: anchor, Kind: 'paste', Bounds: { originX: anchor.x, originY: anchor.y, width: item.width, height: item.height } }, PasteAnchor: anchor, PreviewValid: previewValid(s, source, anchor) });
+    },
     confirmPaste: () => {
         const s = get(), p = s.Preview;
         if (!p || p.Kind !== 'paste' || !previewValid(s, p.Source, p.Offset) || s.Simulating)
@@ -373,30 +454,44 @@ export const useEditor = create<State>((set, get) => ({
             }
             changes.push([key, { ...t, componentId }]);
         }
-        set({ ...setTiles(s, s.Tiles.update(changes)), Selection: { bounds: p.Bounds, cells: changes.map(([key]) => key) }, ...EmptyPreview });
+        set({ ...setTiles(s, s.Tiles.update(changes)), EditTool: 'pointer', Selection: { kind: 'components', ids: [...ids.values()] }, ...EmptyPreview });
         get().commit();
         return true;
     },
-    deleteSelection: () => { const s = get(); if (!s.Selection || s.Simulating)
-        return; s.begin(); set({ ...setTiles(s, s.Tiles.update(s.Selection.cells.map(key => [key, undefined]))), Selection: null }); get().commit(); },
-    resize: grid => { const s = get(), b = s.Tiles.Bounds; if (s.Simulating || grid.width < 4 || grid.height < 4 || ![grid.width, grid.height, grid.originX, grid.originY].every(Number.isInteger) || grid.originX < -2147483648 || grid.originY < -2147483648 || grid.originX + grid.width > 2147483647 || grid.originY + grid.height > 2147483647 || (b && (!contains(grid, { x: b.originX, y: b.originY }) || !contains(grid, { x: b.originX + b.width - 1, y: b.originY + b.height - 1 }))))
-        return false; s.begin(); set({ Board: { ...s.Board, grid }, Revision: s.Revision + 1 }); return true; },
+    deleteSelection: () => {
+        const s = get();
+        if (!s.Selection || s.Simulating || s.Active || s.Preview || s.Gesture !== 'idle' || s.EditTool === 'merge' || s.EditTool === 'split')
+            return;
+        const source = selectionSource(s);
+        s.begin();
+        set({ ...setTiles(s, s.Tiles.update((function* () { for (const key of source.keys())
+                yield [key, undefined] as const; })())), Selection: null, EditTool: 'pointer' });
+        get().commit();
+    },
+    resize: grid => {
+        const s = get(), b = s.Tiles.Bounds;
+        if (s.Simulating || grid.width < 4 || grid.height < 4 || ![grid.width, grid.height, grid.originX, grid.originY].every(Number.isInteger) || grid.originX < -2147483648 || grid.originY < -2147483648 || grid.originX + grid.width > 2147483647 || grid.originY + grid.height > 2147483647 || (b && (!contains(grid, { x: b.originX, y: b.originY }) || !contains(grid, { x: b.originX + b.width - 1, y: b.originY + b.height - 1 }))))
+            return false;
+        s.begin();
+        set({ Board: { ...s.Board, grid }, Revision: s.Revision + 1 });
+        return true;
+    },
     configure: (patch, selection = false) => {
         const s = get();
         if (s.Simulating)
             return;
         if (patch.clockHoldTicks !== undefined && (!Number.isInteger(patch.clockHoldTicks) || patch.clockHoldTicks < 1 || patch.clockHoldTicks > 2147483647))
             return;
-        if (selection && s.Selection) {
+        if (selection && s.Selection?.kind === 'components') {
             s.begin();
-            const ids = new Set([...selectedSource(s).values()].map(t => t.componentId)), changes: [string, Tile][] = [];
+            const ids = selectionIds(s), changes: [string, Tile][] = [];
             for (const id of ids)
                 for (const t of s.Components.members(id))
                     changes.push([cellKey(t), { ...t, ...patch, componentId: id }]);
             set(setTiles(s, s.Tiles.update(changes)));
             get().commit();
         }
-        else
+        else if (!selection)
             set({ Board: { ...s.Board, ...(patch.clockHoldTicks ? { clockHoldTicks: patch.clockHoldTicks } : {}), ...(patch.isOn !== undefined ? { latchInitialState: patch.isOn } : {}), ...(patch.toolId ? { selectedTool: patch.toolId } : {}) } });
     },
     activateDock: (side, id) => { const s = get(), a = side === 'left' ? 'LeftDock' : 'RightDock', b = side === 'left' ? 'RightDock' : 'LeftDock'; set({ [a]: id, ...(s[b] === id ? { [b]: s[a] } : {}) }); },

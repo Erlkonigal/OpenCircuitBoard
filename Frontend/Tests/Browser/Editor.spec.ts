@@ -31,7 +31,7 @@ test('design workspace, drawing, selection, clipboard and history', async ({ pag
     await page.screenshot({ path: buildPath('SelectorCapture.png') });
     await page.keyboard.press('Control+z');
     await expect(page.locator('.workspace-status')).toContainText('0 cells');
-    await page.keyboard.press('Control+u');
+    await page.keyboard.press('Control+Shift+z');
     await expect(page.locator('.workspace-status')).toContainText('6 cells');
     await page.keyboard.down('Shift');
     await page.mouse.move(center.x - 100, center.y - 40);
@@ -65,13 +65,8 @@ test('component library and inspector configure colors and per-cell settings', a
     await page.screenshot({ path: buildPath('ClockSettingsCapture.png') });
     const center = await boardCenter(page);
     await page.mouse.click(center.x, center.y);
-    await page.keyboard.down('Shift');
-    await page.mouse.move(center.x - 8, center.y - 8);
-    await page.mouse.down();
-    await page.mouse.move(center.x + 30, center.y + 30);
-    await page.mouse.up();
-    await page.keyboard.up('Shift');
-    await expect(page.getByTestId('right-dock')).toContainText('Selection');
+    await page.keyboard.press('v');await page.mouse.click(center.x+12,center.y+12);
+    await expect(page.getByTestId('right-dock')).toContainText('Selected components');
     await page.getByLabel('Clock hold', { exact: true }).fill('7');
     await page.screenshot({ path: buildPath('SelectionSettingsCapture.png') });
     await page.getByRole('button', { name: 'Clear selection' }).click();
@@ -115,5 +110,5 @@ test('canvas tools, panel toggles, activity and command menu', async ({ page }) 
     await page.getByRole('button', { name: 'Show clipboard', exact: true }).last().click();
     await expect(page.getByTestId('left-dock')).toContainText('Clipboard');
     await page.getByRole('button', { name: 'Keyboard shortcuts', exact: true }).click();
-    await expect(page.getByRole('dialog')).toContainText('Ctrl Z / U');
+    await expect(page.getByRole('dialog')).toContainText('Ctrl+Shift+Z');
 });

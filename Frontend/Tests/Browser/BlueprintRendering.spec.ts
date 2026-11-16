@@ -133,10 +133,16 @@ test('million-cell overview uses bounded aggregate objects and updates after edi
     await page.mouse.move(origin.x - 60, origin.y + 40, { steps: 10 }); await page.mouse.up({ button: 'middle' });
     await expect(page.getByTestId('board')).toHaveAttribute('data-color-ready', 'true');
     await page.getByRole('button', { name: 'Fit board in view' }).click();
-    await page.mouse.click(origin.x + 12, origin.y + 12, { button: 'right' });
+    await page.mouse.click(origin.x+12,origin.y+12);
+    await expect(page.getByTestId('board')).toHaveAttribute('data-selection-cells','32768');
+    expect(Number(await page.getByTestId('board').getAttribute('data-highlight-objects'))).toBeLessThan(200);
+    await page.mouse.click(origin.x+12,origin.y+12,{button:'right'});
+    await expect(page.locator('.workspace-status')).toContainText('1,048,576 cells');
+    await page.keyboard.down('Shift');await page.mouse.click(origin.x+12,origin.y+12);await page.keyboard.up('Shift');
+    await page.keyboard.press('x');
     await expect(page.locator('.workspace-status')).toContainText('1,048,575 cells');
     await page.keyboard.press('Control+z'); await expect(page.locator('.workspace-status')).toContainText('1,048,576 cells');
-    await page.getByText('2D', { exact: true }).click();
+    await page.keyboard.press('Control+d');await page.getByText('2D', { exact: true }).click();
     await expect(page.getByTestId('board')).toHaveAttribute('data-color-ready', 'true');
     expect(await sample(page)).toEqual(color);
     expect(errors).toEqual([]);
