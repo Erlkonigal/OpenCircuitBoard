@@ -11,7 +11,7 @@ pub struct CompileInput {
     pub Kinds: Vec<i32>,
     pub InitialStates: Vec<i32>,
     pub ClockHoldTicks: Vec<i32>,
-    pub IsolationMasks: Vec<i32>,
+    pub ComponentIds: Vec<i32>,
 }
 #[derive(Clone, Debug, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -284,7 +284,7 @@ impl SimulationCore {
             &input.Kinds,
             &input.InitialStates,
             &input.ClockHoldTicks,
-            &input.IsolationMasks,
+            &input.ComponentIds,
         ]
         .iter()
         .any(|v| v.len() != count)
@@ -308,13 +308,15 @@ impl SimulationCore {
             if kinds[cell] == 26 && input.ClockHoldTicks[cell] <= 0 {
                 return Err(fail(Some(cell), "invalid_clock_hold_ticks"));
             }
-            if !(0..=3).contains(&input.IsolationMasks[cell]) {
-                return Err(fail(Some(cell), "invalid_isolation_mask"));
+            if (kinds[cell] == 0 && input.ComponentIds[cell] != 0)
+                || (kinds[cell] != 0 && input.ComponentIds[cell] <= 0)
+            {
+                return Err(fail(Some(cell), "invalid_component_id"));
             }
             hash(kinds[cell]);
             hash(input.InitialStates[cell]);
             hash(input.ClockHoldTicks[cell]);
-            hash(input.IsolationMasks[cell]);
+            hash(input.ComponentIds[cell]);
         }
         let neighbor = |cell: usize, dx: i32, dy: i32| -> Option<usize> {
             let x = (cell % width) as i32 + dx;
@@ -322,15 +324,43 @@ impl SimulationCore {
             if x < 0 || y < 0 || x >= width as i32 || y >= height as i32 {
                 None
             } else {
-                let next = y as usize * width + x as usize;
-                let (owner, bit) = if dx != 0 {
-                    (cell.min(next), 1)
-                } else {
-                    (cell.min(next), 2)
-                };
-                (input.IsolationMasks[owner] & bit == 0).then_some(next)
+                Some(y as usize * width + x as usize)
             }
         };
+        // IDs cannot join disconnected cells or incompatible ink settings.
+        let mut samples: HashMap<i32, usize> = HashMap::new();
+        let mut visited = vec![false; count];
+        for cell in 0..count {
+            if kinds[cell] == 0 || visited[cell] {
+                continue;
+            }
+            let id = input.ComponentIds[cell];
+            if samples.insert(id, cell).is_some() {
+                return Err(fail(Some(cell), "disconnected_component"));
+            }
+            visited[cell] = true;
+            let mut queue = vec![cell];
+            while let Some(current) = queue.pop() {
+                if kinds[current] != kinds[cell]
+                    || (kinds[cell] == 25
+                        && (input.InitialStates[current] != 0) != (input.InitialStates[cell] != 0))
+                    || (kinds[cell] == 26
+                        && input.ClockHoldTicks[current] != input.ClockHoldTicks[cell])
+                {
+                    return Err(fail(Some(current), "incompatible_component"));
+                }
+                for (dx, dy) in [(-1, 0), (1, 0), (0, -1), (0, 1)] {
+                    if let Some(n) = neighbor(current, dx, dy) {
+                        if !visited[n] && input.ComponentIds[n] == id {
+                            visited[n] = true;
+                            queue.push(n);
+                        }
+                    }
+                }
+            }
+        }
+        drop(samples);
+        drop(visited);
         let directions = [(-1, 0), (1, 0), (0, -1), (0, 1)];
         let mut deviceSet = DisjointSet::new(count);
         let mut ports = DisjointSet::new(count);
@@ -340,6 +370,7 @@ impl SimulationCore {
             for (dx, dy) in [(1, 0), (0, 1)] {
                 if let Some(n) = neighbor(cell, dx, dy) {
                     if isDevice(kind)
+                        && input.ComponentIds[cell] == input.ComponentIds[n]
                         && kinds[n] == kind
                         && (kind != 26 || input.ClockHoldTicks[cell] == input.ClockHoldTicks[n])
                         && (kind != 25
@@ -347,10 +378,16 @@ impl SimulationCore {
                     {
                         deviceSet.unite(cell, n);
                     }
-                    if (kind == 15 || kind == 16) && kinds[n] == kind {
+                    if (kind == 15 || kind == 16)
+                        && kinds[n] == kind
+                        && input.ComponentIds[cell] == input.ComponentIds[n]
+                    {
                         ports.unite(cell, n);
                     }
-                    if isConductor(kind) && isConductor(kinds[n]) && color(kind) == color(kinds[n])
+                    if isConductor(kind)
+                        && isConductor(kinds[n])
+                        && color(kind) == color(kinds[n])
+                        && (kind != kinds[n] || input.ComponentIds[cell] == input.ComponentIds[n])
                     {
                         conductors.unite(cell, n);
                     }
@@ -403,7 +440,10 @@ impl SimulationCore {
                         if let Some(n) = neighbor(cell, dx, dy) {
                             if isConductor(kinds[n]) && color(kinds[n]) == c {
                                 conductors.unite(channels[orientation * 6 + c], n);
-                            } else if let Some(other) = cross.get(&n) {
+                            } else if let Some(other) = cross
+                                .get(&n)
+                                .filter(|_| input.ComponentIds[cell] == input.ComponentIds[n])
+                            {
                                 conductors.unite(
                                     channels[orientation * 6 + c],
                                     other[orientation * 6 + c],
@@ -1318,111 +1358,147 @@ impl Snapshot {
 }
 
 #[cfg(test)]
-mod isolationTests {
+mod componentTests {
     use super::*;
-    fn input(width: usize, height: usize, kinds: Vec<i32>) -> CompileInput {
+    fn input(width: usize, height: usize, kinds: Vec<i32>, ids: Vec<i32>) -> CompileInput {
         CompileInput {
             Width: width,
             Height: height,
             Kinds: kinds,
+            ComponentIds: ids,
             InitialStates: vec![0; width * height],
             ClockHoldTicks: vec![1; width * height],
-            IsolationMasks: vec![0; width * height],
         }
     }
     #[test]
-    fn adjacentLatchesSplitOnlyAtBlockedEdges() {
-        for (width, height, bit) in [(2, 1, 1), (1, 2, 2)] {
-            let mut data = input(width, height, vec![25, 25]);
-            let mut joined = SimulationCore::compile(data.clone()).unwrap();
-            joined.toggleLatch(0).unwrap();
-            assert_eq!(joined.states(), &[1, 1]);
-            data.IsolationMasks[0] = bit;
-            let mut split = SimulationCore::compile(data).unwrap();
-            split.toggleLatch(0).unwrap();
-            assert_eq!(split.states(), &[1, 0]);
-            let snapshot = split.capture();
-            split.toggleLatch(1).unwrap();
-            assert_eq!(split.states(), &[1, 1]);
-            split.restore(&snapshot).unwrap();
-            assert_eq!(split.states(), &[1, 0]);
-            assert!(joined.restore(&snapshot).is_err());
-            split.resetSilent();
-            assert_eq!(split.states(), &[0, 0]);
-        }
-    }
-    #[test]
-    fn parallelLanesIsolatePortsConductorsAndDevices() {
-        for conductor in [1, 2, 3, 4, 5, 6] {
-            let mut data = input(
-                5,
-                2,
-                vec![25, 15, conductor, 16, 17, 25, 15, conductor, 16, 17],
+    fn adjacentLatchesOnlyShareStateWithinTheirIdentity() {
+        for (width, height) in [(4, 2), (2, 4)] {
+            let ids = if width == 4 {
+                vec![7, 7, 7, 7, 8, 8, 8, 8]
+            } else {
+                vec![7, 8, 7, 8, 7, 8, 7, 8]
+            };
+            let data = input(width, height, vec![25; 8], ids.clone());
+            let mut core = SimulationCore::compile(data.clone()).unwrap();
+            core.toggleLatch(0).unwrap();
+            assert_eq!(
+                core.states(),
+                ids.iter().map(|&id| u8::from(id == 7)).collect::<Vec<_>>()
             );
-            data.IsolationMasks[..5].fill(2);
+            let snapshot = core.capture();
+            core.toggleLatch(ids.iter().position(|&id| id == 8).unwrap())
+                .unwrap();
+            assert_eq!(core.states(), &[1; 8]);
+            core.restore(&snapshot).unwrap();
+            let mut merged = data;
+            merged.ComponentIds.fill(7);
+            let mut joined = SimulationCore::compile(merged).unwrap();
+            assert!(joined.restore(&snapshot).is_err());
+            joined.toggleLatch(0).unwrap();
+            assert_eq!(joined.states(), &[1; 8]);
+        }
+    }
+    #[test]
+    fn adjacentLanesKeepDevicesPortsAndAllConductorKindsIndependent() {
+        for conductor in 1..=12 {
+            let mut data = input(
+                7,
+                2,
+                vec![
+                    25, 15, conductor, conductor, conductor, 16, 17, 25, 15, conductor, conductor,
+                    conductor, 16, 17,
+                ],
+                vec![1, 2, 3, 3, 3, 4, 5, 6, 7, 8, 8, 8, 9, 10],
+            );
+            // Buses need matching traces at the R/W ports.
+            if conductor > 6 {
+                let trace = match conductor {
+                    7 => 4,
+                    8 => 2,
+                    9 => 3,
+                    10 => 1,
+                    11 => 5,
+                    _ => 6,
+                };
+                for cell in [2, 4, 9, 11] {
+                    data.Kinds[cell] = trace;
+                    data.ComponentIds[cell] = cell as i32 + 100;
+                }
+            }
             let mut core = SimulationCore::compile(data).unwrap();
             core.toggleLatch(0).unwrap();
             core.advanceSilent(1);
             assert_eq!(
                 core.states(),
-                &[1, 1, 1, 1, 1, 0, 0, 0, 0, 0],
-                "kind {conductor}"
-            );
-            core.toggleLatch(5).unwrap();
-            core.advanceSilent(1);
-            assert_eq!(core.states(), &[1; 10]);
-        }
-        // Cross and Bus cells connect through matching traces on either side.
-        for connector in [10, 13] {
-            let mut data = input(
-                7,
-                2,
-                vec![
-                    25, 15, 1, connector, 1, 16, 17, 25, 15, 1, connector, 1, 16, 17,
-                ],
-            );
-            data.IsolationMasks[..7].fill(2);
-            let mut core = SimulationCore::compile(data).unwrap();
-            core.toggleLatch(0).unwrap();
-            core.advanceSilent(1);
-            assert_eq!(core.states(), &[1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0]);
-        }
-    }
-    #[test]
-    fn barriersCutSignalBindingsAndAllowAlternateRoutes() {
-        for owner in 0..4 {
-            let mut data = input(5, 1, vec![25, 15, 1, 16, 17]);
-            data.IsolationMasks[owner] = 1;
-            assert!(
-                SimulationCore::compile(data).is_err(),
-                "port on either side of barrier must be validated"
+                &[1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0],
+                "conductor {conductor}"
             );
         }
-        let mut data = input(2, 2, vec![25; 4]);
-        data.IsolationMasks[0] = 1;
-        let mut core = SimulationCore::compile(data.clone()).unwrap();
-        core.toggleLatch(0).unwrap();
-        assert_eq!(core.states(), &[1; 4]);
-        data.IsolationMasks[2] = 1;
+        let data = input(
+            7,
+            2,
+            vec![25, 15, 1, 13, 1, 16, 17, 25, 15, 1, 13, 1, 16, 17],
+            (1..=14).collect(),
+        );
         let mut core = SimulationCore::compile(data).unwrap();
         core.toggleLatch(0).unwrap();
-        assert_eq!(core.states(), &[1, 0, 1, 0]);
+        core.advanceSilent(1);
+        assert_eq!(core.states(), &[1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0]);
     }
     #[test]
-    fn undefinedKindsAndInvalidMasksUseGenericValidation() {
-        for kind in [-1, 14, 28, 999] {
-            let error = SimulationCore::compile(input(1, 1, vec![kind]))
-                .err()
-                .unwrap();
-            assert_eq!(error.ErrorReason, "unknown_kind");
-            assert_eq!((error.ErrorX, error.ErrorY), (0, 0));
+    fn differentInkRoutesStillCarrySignalsBetweenIndependentRegions() {
+        // Adjacent same-kind traces with distinct IDs don't connect, but a matching bus may bridge them.
+        let blocked = input(6, 1, vec![25, 15, 1, 1, 16, 17], (1..=6).collect());
+        let mut core = SimulationCore::compile(blocked).unwrap();
+        core.toggleLatch(0).unwrap();
+        core.advanceSilent(1);
+        assert_eq!(core.states(), &[1, 1, 1, 0, 0, 0]);
+        let mut bridge = input(
+            6,
+            2,
+            vec![25, 15, 1, 1, 16, 17, 0, 0, 10, 10, 0, 0],
+            vec![1, 2, 3, 4, 5, 6, 0, 0, 7, 7, 0, 0],
+        );
+        let mut core = SimulationCore::compile(bridge.clone()).unwrap();
+        core.toggleLatch(0).unwrap();
+        core.advanceSilent(1);
+        assert_eq!(core.states()[5], 1);
+        bridge.Kinds[8] = 7;
+        bridge.Kinds[9] = 7; // Blue bus doesn't carry a yellow trace.
+        let mut core = SimulationCore::compile(bridge).unwrap();
+        core.toggleLatch(0).unwrap();
+        core.advanceSilent(1);
+        assert_eq!(core.states()[5], 0);
+    }
+    #[test]
+    fn rejectsMissingDisconnectedAndIncompatibleIdentities() {
+        for (kinds, ids, reason) in [
+            (vec![25], vec![0], "invalid_component_id"),
+            (vec![25], vec![-1], "invalid_component_id"),
+            (vec![0], vec![1], "invalid_component_id"),
+            (vec![25, 0, 25], vec![1, 0, 1], "disconnected_component"),
+            (vec![25, 26], vec![1, 1], "incompatible_component"),
+            (vec![14], vec![1], "unknown_kind"),
+        ] {
+            let width = kinds.len();
+            assert_eq!(
+                SimulationCore::compile(input(width, 1, kinds, ids))
+                    .err()
+                    .unwrap()
+                    .ErrorReason,
+                reason
+            );
         }
-        for mask in [-1, 4, 16] {
-            let mut data = input(1, 1, vec![25]);
-            data.IsolationMasks[0] = mask;
+        for kind in [25, 26] {
+            let mut data = input(2, 1, vec![kind; 2], vec![1; 2]);
+            if kind == 25 {
+                data.InitialStates[1] = 1;
+            } else {
+                data.ClockHoldTicks[1] = 2;
+            }
             assert_eq!(
                 SimulationCore::compile(data).err().unwrap().ErrorReason,
-                "invalid_isolation_mask"
+                "incompatible_component"
             );
         }
     }

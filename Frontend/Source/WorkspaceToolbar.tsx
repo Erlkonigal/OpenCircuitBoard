@@ -30,7 +30,7 @@ interface Props {
     onSearch: () => void;
 }
 export function WorkspaceToolbar(props: Props) {
-    const state = useEditor(useShallow(s => ({ Path: s.Path, Recent: s.Recent, LeftOpen: s.LeftOpen, RightOpen: s.RightOpen, Undo: s.Undo, Redo: s.Redo, undo: s.undo, redo: s.redo, Simulating: s.Simulating, Tiles: s.Tiles, RenderMode: s.RenderMode, setRenderMode: s.setRenderMode })));
+    const state = useEditor(useShallow(s => ({ Path: s.Path, Recent: s.Recent, LeftOpen: s.LeftOpen, RightOpen: s.RightOpen, Undo: s.Undo, Redo: s.Redo, undo: s.undo, redo: s.redo, Simulating: s.Simulating, ComponentCount: s.Components.size, RenderMode: s.RenderMode, setRenderMode: s.setRenderMode })));
     const name = state.Path.split(/[\\/]/).at(-1) || 'Untitled circuit';
     const capacity = Math.max(2, Math.floor(props.frame?.capacity ?? 1000000));
     return <>
@@ -45,7 +45,7 @@ export function WorkspaceToolbar(props: Props) {
     </header>
     <div className="workspace-toolbar">
       <div className="toolbar-cluster"><IconControl label="Toggle component library" onClick={() => useEditor.setState({ LeftOpen: !state.LeftOpen })}>{state.LeftOpen ? <PanelLeftClose size={16}/> : <PanelLeftOpen size={16}/>}</IconControl><span className="toolbar-divider"/><IconControl label="Undo (Ctrl+Z)" disabled={!state.Undo.length || state.Simulating} onClick={state.undo}><Undo2 size={15}/></IconControl><IconControl label="Redo (Ctrl+U)" disabled={!state.Redo.length || state.Simulating} onClick={state.redo}><Redo2 size={15}/></IconControl></div>
-      <div className="workspace-mode"><span className={state.Simulating ? 'mode-dot running' : 'mode-dot'}/>{state.Simulating ? 'Simulation' : 'Design'}<span className="mode-detail">{state.Simulating ? 'Circuit is read-only' : `${state.Tiles.size.toLocaleString()} components`}</span></div>
+      <div className="workspace-mode"><span className={state.Simulating ? 'mode-dot running' : 'mode-dot'}/>{state.Simulating ? 'Simulation' : 'Design'}<span className="mode-detail">{state.Simulating ? 'Circuit is read-only' : `${state.ComponentCount.toLocaleString()} components`}</span></div>
       <div className="toolbar-space"/>
       <SegmentedControl className="render-mode" aria-label="Render mode" size="xs" value={state.RenderMode} data={[{ value: '2d', label: '2D' }, { value: '2.5d', label: '2.5D' }]} onChange={value => state.setRenderMode(value as '2d' | '2.5d')}/>
       <span className="toolbar-divider"/>

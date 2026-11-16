@@ -1,3 +1,4 @@
+import { validateComponents } from './ComponentTopology';
 export interface Point {
     x: number;
     y: number;
@@ -10,11 +11,9 @@ export interface Grid {
 }
 export interface Tile extends Point {
     toolId: string;
+    componentId: number;
     isOn: boolean;
     clockHoldTicks?: number;
-}
-export interface IsolationEdge extends Point {
-    axis: 'horizontal' | 'vertical';
 }
 export interface Board {
     selectedTool: string;
@@ -22,18 +21,15 @@ export interface Board {
     latchInitialState: boolean;
     grid: Grid;
     tiles: Tile[];
-    isolationEdges?: IsolationEdge[];
 }
 export interface Selection {
     bounds: Grid;
     cells: string[];
-    isolationEdges?: string[];
 }
 export interface ClipboardItem {
     width: number;
     height: number;
     tiles: Tile[];
-    isolationEdges?: IsolationEdge[];
 }
 export interface Blueprint extends ClipboardItem {
     id: string;
@@ -65,7 +61,7 @@ export function inkColor(id: string) { const suffix = id.slice(paletteId(id).len
 export const cellKey = (point: Point) => `${point.x},${point.y}`;
 export const parseKey = (key: string): Point => { const [x, y] = key.split(',').map(Number); return { x, y }; };
 export const contains = (grid: Grid, point: Point) => point.x >= grid.originX && point.y >= grid.originY && point.x < grid.originX + grid.width && point.y < grid.originY + grid.height;
-export const newBoard = (): Board => ({ selectedTool: 'or', clockHoldTicks: 1, latchInitialState: true, grid: { originX: -20, originY: -14, width: 40, height: 28 }, tiles: [], isolationEdges: [] });
+export const newBoard = (): Board => ({ selectedTool: 'or', clockHoldTicks: 1, latchInitialState: true, grid: { originX: -20, originY: -14, width: 40, height: 28 }, tiles: [] });
 export function lineCells(start: Point, end: Point) { const result: Point[] = []; let { x, y } = start; const dx = Math.abs(end.x - x), dy = -Math.abs(end.y - y), sx = x < end.x ? 1 : -1, sy = y < end.y ? 1 : -1; let error = dx + dy; while (true) {
     result.push({ x, y });
     if (x === end.x && y === end.y)
@@ -80,30 +76,12 @@ export function lineCells(start: Point, end: Point) { const result: Point[] = []
         y += sy;
     }
 } return result; }
-export const edgeKey = (edge: IsolationEdge) => `${edge.x},${edge.y}:${edge.axis}`;
-export function edgeInGrid(edge: IsolationEdge, grid: Grid): boolean {
-    return (edge.axis === 'horizontal' || edge.axis === 'vertical') && Number.isInteger(edge.x) && Number.isInteger(edge.y)
-        && edge.x >= grid.originX && edge.y >= grid.originY
-        && edge.x + Number(edge.axis === 'horizontal') <= grid.originX + grid.width
-        && edge.y + Number(edge.axis === 'vertical') <= grid.originY + grid.height;
-}
-export function validateEdges(value: unknown, grid: Grid, error: string): IsolationEdge[] {
-    if (value === undefined) return [];
-    if (!Array.isArray(value)) throw Error(error);
-    const edges = new Map<string, IsolationEdge>();
-    for (const edge of value) {
-        if (!edge || !edgeInGrid(edge, grid)) throw Error(error);
-        const normalized = { x: edge.x, y: edge.y, axis: edge.axis } as IsolationEdge;
-        edges.set(edgeKey(normalized), normalized);
-    }
-    return [...edges.values()].sort((a, b) => a.y - b.y || a.x - b.x || a.axis.localeCompare(b.axis));
-}
 export function validateBoard(value: unknown): Board {
     const board = value as Board;
     if (!board || !Array.isArray(board.tiles)) throw Error('ProjectBoardInvalid');
     const defaults = newBoard(), g = { ...defaults.grid, ...board.grid };
     const result: Board = { selectedTool: board.selectedTool ?? defaults.selectedTool, clockHoldTicks: board.clockHoldTicks ?? 1,
-        latchInitialState: board.latchInitialState ?? true, grid: g, tiles: [], isolationEdges: validateEdges(board.isolationEdges, g, 'ProjectBoardInvalid') };
+        latchInitialState: board.latchInitialState ?? true, grid: g, tiles: [] };
     if (![g.originX, g.originY, g.width, g.height].every(Number.isInteger) || g.originX < -2147483648 || g.originY < -2147483648
         || g.originX + g.width > 2147483647 || g.originY + g.height > 2147483647 || g.width < 4 || g.height < 4
         || !ToolIds.slice(1).includes(result.selectedTool) || !Number.isInteger(result.clockHoldTicks) || result.clockHoldTicks < 1 || result.clockHoldTicks > 2147483647)
@@ -113,13 +91,14 @@ export function validateBoard(value: unknown): Board {
         if (!tile || !Number.isInteger(tile.x) || !Number.isInteger(tile.y) || cells.has(cellKey(tile)) || !contains(g, tile)
             || !ToolIds.slice(1).includes(tile.toolId)) throw Error('ProjectBoardInvalid');
         cells.add(cellKey(tile));
-        const normalized: Tile = { x: tile.x, y: tile.y, toolId: tile.toolId, isOn: tile.isOn ?? (tile.toolId === 'latch' ? result.latchInitialState : true) };
+        const normalized: Tile = { x: tile.x, y: tile.y, toolId: tile.toolId, componentId: tile.componentId, isOn: tile.isOn ?? (tile.toolId === 'latch' ? result.latchInitialState : true) };
         if (tile.toolId === 'clock') {
             normalized.clockHoldTicks = tile.clockHoldTicks ?? result.clockHoldTicks;
             if (!Number.isInteger(normalized.clockHoldTicks) || normalized.clockHoldTicks < 1 || normalized.clockHoldTicks > 2147483647) throw Error('ProjectBoardInvalid');
         }
         return normalized;
     });
+    validateComponents(result.tiles, 'ProjectBoardInvalid');
     return result;
 }
 export function validateProject(value: unknown): ProjectDocument {
@@ -132,8 +111,7 @@ export function validateProject(value: unknown): ProjectDocument {
             || ![blueprint.width, blueprint.height].every(n => Number.isInteger(n) && n > 0 && n <= 2147483647) || !Array.isArray(blueprint.tiles))
             throw Error('ProjectBlueprintInvalid');
         ids.add(blueprint.id);
-        const isolationEdges = validateEdges(blueprint.isolationEdges, { originX: 0, originY: 0, width: blueprint.width, height: blueprint.height }, 'ProjectBlueprintInvalid');
-        if (!blueprint.tiles.length && !isolationEdges.length) throw Error('ProjectBlueprintInvalid');
+        if (!blueprint.tiles.length) throw Error('ProjectBlueprintInvalid');
         const cells = new Set<string>();
         const tiles = blueprint.tiles.map(tile => {
             if (!tile || !Number.isInteger(tile.x) || !Number.isInteger(tile.y) || tile.x < 0 || tile.y < 0
@@ -142,9 +120,10 @@ export function validateProject(value: unknown): ProjectDocument {
                 || (tile.toolId === 'clock' && (!Number.isInteger(tile.clockHoldTicks) || tile.clockHoldTicks! < 1 || tile.clockHoldTicks! > 2147483647)))
                 throw Error('ProjectBlueprintInvalid');
             cells.add(cellKey(tile));
-            return { x: tile.x, y: tile.y, toolId: tile.toolId, isOn: tile.isOn, ...(tile.toolId === 'clock' ? { clockHoldTicks: tile.clockHoldTicks } : {}) };
+            return { x: tile.x, y: tile.y, toolId: tile.toolId, componentId: tile.componentId, isOn: tile.isOn, ...(tile.toolId === 'clock' ? { clockHoldTicks: tile.clockHoldTicks } : {}) };
         });
-        return { id: blueprint.id, name: blueprint.name.trim(), width: blueprint.width, height: blueprint.height, tiles, isolationEdges };
+        validateComponents(tiles, 'ProjectBlueprintInvalid');
+        return { id: blueprint.id, name: blueprint.name.trim(), width: blueprint.width, height: blueprint.height, tiles };
     });
     return { board, blueprints };
 }

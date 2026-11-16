@@ -5,8 +5,8 @@ The fixture was recorded from the existing `SimulationCoreTests.cpp` operation s
 plus 128 fixed-seed random boards (seed 20261115). Repeated arrays are run-length encoded.
 The active replay retains 597 state/delta comparisons. Sessions 39, 40, 46, 48, 49, and 81
 used the removed Mesh component (kind 14) and were retired with it; obsolete `meshIds`
-fields were dropped from the remaining records. Isolation masks default to zero for
-this legacy replay, preserving its original connectivity.
+fields were dropped from the remaining records. The test-only replay adapter assigns IDs to compatible same-ink connected regions,
+preserving recorded connectivity. Production project loading requires explicit IDs.
 It contains original inputs, compilation errors, visible states, deltas, latch operations,
 snapshot capture/restore operations, resets, and deferred presentation operations.
 

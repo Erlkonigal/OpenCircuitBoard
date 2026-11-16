@@ -1,6 +1,5 @@
 import { useEffect, useRef } from 'react';
 import { Application, Container } from 'pixi.js';
-import { isolationSource } from './IsolationStore';
 import { inkSource } from './CellStore';
 import { RenderBudget } from './ColorCache';
 import { TileRenderer } from './TileRenderer';
@@ -17,7 +16,7 @@ class ThumbnailRenderer {
     private async init() {
         if (this.App) return;
         const app = new Application();
-        await app.init({ width: Width, height: Height, resolution: 2, background: '#0c141d', antialias: true, autoStart: false, preference: 'webgl', useBackBuffer: true, preserveDrawingBuffer: true });
+        await app.init({ width: Width, height: Height, resolution: 2, background: '#0c141d', antialias: true, autoStart: false, preference: 'webgl', preserveDrawingBuffer: true });
         this.App = app; this.World = new Container();
         this.Tiles = new TileRenderer(app.renderer, () => this.Redraw?.());
         this.World.addChild(this.Tiles.Layer); app.stage.addChild(this.World);
@@ -37,7 +36,7 @@ class ThumbnailRenderer {
             const source = inkSource(item);
             const draw = () => {
                 world.scale.set(view.zoom); world.position.set(Width / 2 - x * view.zoom, Height / 2 - y * view.zoom);
-                tiles.draw({ occupied: source, isolation: isolationSource(item), preview: null, previewValid: true, simulating: false, runtime: null, mode }, view);
+                tiles.draw({ occupied: source, preview: null, previewValid: true, simulating: false, runtime: null, mode }, view);
             };
             await new Promise<void>((resolve, reject) => {
                 const timeout = window.setTimeout(() => { this.Redraw = undefined; reject(Error('ThumbnailRenderTimeout')); }, 30000);

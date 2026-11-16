@@ -53,39 +53,6 @@ pub fn toolKind(id: &str) -> Option<i32> {
         }
     })
 }
-#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq, Hash, PartialOrd, Ord)]
-#[serde(rename_all = "camelCase")]
-pub enum EdgeAxis {
-    Horizontal,
-    Vertical,
-}
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, Hash)]
-#[serde(rename_all = "camelCase")]
-pub struct IsolationEdge {
-    pub X: i32,
-    pub Y: i32,
-    pub Axis: EdgeAxis,
-}
-impl IsolationEdge {
-    pub fn inGrid(&self, grid: &Grid) -> bool {
-        self.X >= grid.OriginX
-            && self.Y >= grid.OriginY
-            && self.X as i64 + i64::from(self.Axis == EdgeAxis::Horizontal)
-                <= grid.OriginX as i64 + grid.Width as i64
-            && self.Y as i64 + i64::from(self.Axis == EdgeAxis::Vertical)
-                <= grid.OriginY as i64 + grid.Height as i64
-    }
-}
-fn validateEdges(edges: &[IsolationEdge], grid: &Grid, error: &str) -> Result<(), String> {
-    if edges.iter().any(|edge| !edge.inGrid(grid)) {
-        return Err(error.into());
-    }
-    Ok(())
-}
-fn canonicalEdges(edges: &mut Vec<IsolationEdge>) {
-    edges.sort_by_key(|edge| (edge.Y, edge.X, edge.Axis));
-    edges.dedup();
-}
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct Grid {
@@ -110,6 +77,7 @@ pub struct Tile {
     pub X: i32,
     pub Y: i32,
     pub ToolId: String,
+    pub ComponentId: i32,
     #[serde(default = "yes")]
     pub IsOn: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -128,8 +96,6 @@ pub struct Board {
     pub Grid: Grid,
     #[serde(default)]
     pub Tiles: Vec<Tile>,
-    #[serde(default)]
-    pub IsolationEdges: Vec<IsolationEdge>,
 }
 impl Default for Board {
     fn default() -> Self {
@@ -139,7 +105,6 @@ impl Default for Board {
             LatchInitialState: true,
             Grid: Grid::default(),
             Tiles: vec![],
-            IsolationEdges: vec![],
         }
     }
 }
@@ -158,8 +123,6 @@ pub struct Blueprint {
     pub Width: i32,
     pub Height: i32,
     pub Tiles: Vec<Tile>,
-    #[serde(default)]
-    pub IsolationEdges: Vec<IsolationEdge>,
 }
 #[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
@@ -179,20 +142,10 @@ impl ProjectDocument {
                 || blueprint.Name.trim().is_empty()
                 || blueprint.Width < 1
                 || blueprint.Height < 1
-                || (blueprint.Tiles.is_empty() && blueprint.IsolationEdges.is_empty())
+                || blueprint.Tiles.is_empty()
             {
                 return Err("ProjectBlueprintInvalid".into());
             }
-            validateEdges(
-                &blueprint.IsolationEdges,
-                &Grid {
-                    OriginX: 0,
-                    OriginY: 0,
-                    Width: blueprint.Width,
-                    Height: blueprint.Height,
-                },
-                "ProjectBlueprintInvalid",
-            )?;
             for tile in &blueprint.Tiles {
                 if tile.X < 0
                     || tile.Y < 0
@@ -205,6 +158,7 @@ impl ProjectDocument {
                     return Err("ProjectBlueprintInvalid".into());
                 }
             }
+            validateComponents(&blueprint.Tiles, 1, "ProjectBlueprintInvalid")?;
         }
         Ok(())
     }
@@ -222,7 +176,6 @@ impl Board {
         if !ToolIds[1..].contains(&self.SelectedTool.as_str()) || self.ClockHoldTicks < 1 {
             return Err("ProjectBoardInvalid".into());
         }
-        validateEdges(&self.IsolationEdges, g, "ProjectBoardInvalid")?;
         let mut cells = std::collections::HashSet::new();
         for tile in &self.Tiles {
             if tile.X < g.OriginX
@@ -237,7 +190,7 @@ impl Board {
                 return Err("ProjectBoardInvalid".into());
             }
         }
-        Ok(())
+        validateComponents(&self.Tiles, self.ClockHoldTicks, "ProjectBoardInvalid")
     }
     pub fn compileInput(&self) -> Result<(CompileInput, (i32, i32)), String> {
         self.validate()?;
@@ -267,31 +220,70 @@ impl Board {
             Kinds: vec![0; count],
             InitialStates: vec![0; count],
             ClockHoldTicks: vec![1; count],
-            IsolationMasks: vec![0; count],
+            ComponentIds: vec![0; count],
         };
         for t in &self.Tiles {
             let cell = (t.Y - minY) as usize * width + (t.X - minX) as usize;
             input.Kinds[cell] = toolKind(&t.ToolId).unwrap();
+            input.ComponentIds[cell] = t.ComponentId;
             input.InitialStates[cell] = t.IsOn as i32;
             input.ClockHoldTicks[cell] = t.ClockHoldTicks.unwrap_or(self.ClockHoldTicks);
         }
-        for edge in &self.IsolationEdges {
-            let x = edge.X as i64 - minX as i64 - i64::from(edge.Axis == EdgeAxis::Vertical);
-            let y = edge.Y as i64 - minY as i64 - i64::from(edge.Axis == EdgeAxis::Horizontal);
-            if x >= 0 && y >= 0 && x < width as i64 && y < height as i64 {
-                let bit = if edge.Axis == EdgeAxis::Vertical {
-                    1
-                } else {
-                    2
+        Ok((input, (minX, minY)))
+    }
+}
+fn validateComponents(tiles: &[Tile], defaultHold: i32, error: &str) -> Result<(), String> {
+    use std::collections::{HashMap, HashSet};
+    let mut samples: HashMap<i32, &Tile> = HashMap::new();
+    let mut cells = HashMap::with_capacity(tiles.len());
+    for tile in tiles {
+        if tile.ComponentId < 1 {
+            return Err(error.into());
+        }
+        if let Some(first) = samples.get(&tile.ComponentId) {
+            if first.ToolId != tile.ToolId
+                || (tile.ToolId == "latch" && first.IsOn != tile.IsOn)
+                || (tile.ToolId == "clock"
+                    && first.ClockHoldTicks.unwrap_or(defaultHold)
+                        != tile.ClockHoldTicks.unwrap_or(defaultHold))
+            {
+                return Err(error.into());
+            }
+        } else {
+            samples.insert(tile.ComponentId, tile);
+        }
+        cells.insert((tile.X, tile.Y), tile);
+    }
+    let mut completed = HashSet::new();
+    for seed in tiles {
+        let point = (seed.X, seed.Y);
+        if !cells.contains_key(&point) {
+            continue;
+        }
+        if !completed.insert(seed.ComponentId) {
+            return Err(error.into());
+        }
+        cells.remove(&point);
+        let mut queue = vec![point];
+        while let Some((x, y)) = queue.pop() {
+            for (dx, dy) in [(-1, 0), (1, 0), (0, -1), (0, 1)] {
+                let Some(nx) = x.checked_add(dx) else {
+                    continue;
                 };
-                // Edges on the cropped perimeter do not affect simulation connectivity.
-                if (bit == 1 && x + 1 < width as i64) || (bit == 2 && y + 1 < height as i64) {
-                    input.IsolationMasks[y as usize * width + x as usize] |= bit;
+                let Some(ny) = y.checked_add(dy) else {
+                    continue;
+                };
+                if cells
+                    .get(&(nx, ny))
+                    .is_some_and(|t| t.ComponentId == seed.ComponentId)
+                {
+                    cells.remove(&(nx, ny));
+                    queue.push((nx, ny));
                 }
             }
         }
-        Ok((input, (minX, minY)))
     }
+    Ok(())
 }
 pub fn normalizePath(path: &Path) -> PathBuf {
     if path
@@ -344,15 +336,11 @@ pub fn load(path: &Path) -> Result<ProjectDocument, String> {
         }
         None => vec![],
     };
-    let mut project = ProjectDocument {
+    let project = ProjectDocument {
         Board: board,
         Blueprints: blueprints,
     };
     project.validate()?;
-    canonicalEdges(&mut project.Board.IsolationEdges);
-    for blueprint in &mut project.Blueprints {
-        canonicalEdges(&mut blueprint.IsolationEdges);
-    }
     Ok(project)
 }
 pub fn save(path: &Path, project: &ProjectDocument) -> Result<PathBuf, String> {
@@ -381,10 +369,8 @@ pub fn save(path: &Path, project: &ProjectDocument) -> Result<PathBuf, String> {
         )
         .map_err(|_| "ProjectSaveWriteFailed")?;
         let mut canonical = project.clone();
-        canonicalEdges(&mut canonical.Board.IsolationEdges);
         canonical.Board.Tiles.sort_by_key(|t| (t.Y, t.X));
         for blueprint in &mut canonical.Blueprints {
-            canonicalEdges(&mut blueprint.IsolationEdges);
             blueprint.Tiles.sort_by_key(|t| (t.Y, t.X));
         }
         let text = serde_json::to_vec(&Archive {

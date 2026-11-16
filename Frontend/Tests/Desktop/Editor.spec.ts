@@ -84,7 +84,7 @@ describe('Native circuit workspace', () => {
         await browser.saveScreenshot(buildPath('DesktopLatchCapture.png'));
         await $('button=Back to design').click();
     });
-    it('isolates adjacent latch lanes through drawn boundaries and native simulation', async () => {
+    it('keeps adjacent drawn lanes independent and merges complete latch regions through native simulation', async () => {
         await $('.command-trigger').click(); await $('input[aria-label="Search commands"]').setValue('new circuit'); await $('.command-options button').click();
         const center = await browser.execute(() => { const r = document.querySelector('[data-testid="board"]')!.getBoundingClientRect(); return {x:r.x+r.width/2,y:r.y+r.height/2}; });
         for (const [index, tool] of ['Latch','Read','Trace','Write','Buffer'].entries()) {
@@ -92,9 +92,6 @@ describe('Native circuit workspace', () => {
             if (tool === 'Latch') await $('label=Off').click();
             for (const row of [0,1]) await browser.action('pointer').move({x:Math.round(center.x+index*32+12),y:Math.round(center.y+row*32+12)}).down().up().perform();
         }
-        await $('button[aria-label="Isolation"]').click();
-        await browser.action('pointer').move({x:Math.round(center.x+1),y:Math.round(center.y+32)}).down().move({x:Math.round(center.x+159),y:Math.round(center.y+32),duration:300}).up().perform();
-        await expect($('.workspace-status')).toHaveText(expect.stringContaining('5 edges'));
         const pixels = () => browser.execute(() => {
             const canvas=document.querySelector('canvas[aria-label="Circuit board"]') as HTMLCanvasElement, gl=canvas.getContext('webgl2')!;
             const scale=canvas.width/canvas.getBoundingClientRect().width;
@@ -106,42 +103,23 @@ describe('Native circuit workspace', () => {
         await $('button[aria-label="Next tick"]').click();
         await browser.waitUntil(async()=>{const current=await pixels();return JSON.stringify(current[0])!==JSON.stringify(before[0]) && JSON.stringify(current[1])!==JSON.stringify(before[1]);});
         const after=await pixels(); expect(after[2]).toEqual(before[2]); expect(after[3]).toEqual(before[3]); expect(after[1]).not.toEqual(before[1]);
-        await browser.saveScreenshot(buildPath('DesktopIsolationCapture.png'));
+        await browser.saveScreenshot(buildPath('DesktopComponentLanesCapture.png'));
         await $('button=Back to design').click();
-        await $('button[aria-label="Isolation"]').click();
-        await browser.action('pointer').move({x:Math.round(center.x+1),y:Math.round(center.y+32)}).down({button:2}).move({x:Math.round(center.x+159),y:Math.round(center.y+32),duration:300}).up({button:2}).perform();
-        await expect($('.workspace-status')).not.toHaveText(expect.stringContaining('edges'));
+        await $('button[aria-label="Merge"]').click();
+        for(const row of [0,1]) await browser.action('pointer').move({x:Math.round(center.x+12),y:Math.round(center.y+row*32+12)}).down().up().perform();
+        await expect($('[data-testid="board"]')).toHaveAttribute('data-merge-count','2');
+        await browser.saveScreenshot(buildPath('DesktopComponentMergeCapture.png'));
+        await $('button=Confirm merge').click();
         await $('button=Run circuit').click(); await $('button[aria-label="Pause simulation"]').click();
         const joined=await pixels();
         await browser.action('pointer').move({x:Math.round(center.x+12),y:Math.round(center.y+12)}).down().up().perform();
         await $('button[aria-label="Next tick"]').click();
-        await browser.waitUntil(async()=>JSON.stringify((await pixels())[2])!==JSON.stringify(joined[2]));
+        await browser.waitUntil(async()=>{const current=await pixels();return JSON.stringify(current[2])!==JSON.stringify(joined[2]) && JSON.stringify(current[3])!==JSON.stringify(joined[3]);});
         await $('button=Back to design').click();
-    });
-    it('inverts isolation lines as native runtime colors change', async () => {
-        await $('.command-trigger').click();await $('input[aria-label="Search commands"]').setValue('new circuit');await $('.command-options button').click();
-        const center=await browser.execute(()=>{const r=document.querySelector('[data-testid="board"]')!.getBoundingClientRect();return {x:r.x+r.width/2,y:r.y+r.height/2};});
-        await $('button[aria-label="Clock"]').click();
-        for(const y of [12,44]) await browser.action('pointer').move({x:Math.round(center.x+12),y:Math.round(center.y+y)}).down().up().perform();
-        await $('button[aria-label="Isolation"]').click();
-        await browser.action('pointer').move({x:Math.round(center.x+12),y:Math.round(center.y+32)}).down().up().perform();
-        await expect($('.workspace-status')).toHaveText(expect.stringContaining('1 edges'));
-        const colors=()=>browser.execute(()=> {
-            const canvas=document.querySelector('canvas[aria-label="Circuit board"]') as HTMLCanvasElement,gl=canvas.getContext('webgl2')!,scale=canvas.width/canvas.getBoundingClientRect().width;
-            return [32,35].map(y=>{const pixel=new Uint8Array(4);gl.readPixels(Math.floor(canvas.width/2+3*scale),canvas.height-1-Math.floor(canvas.height/2+y*scale),1,1,gl.RGBA,gl.UNSIGNED_BYTE,pixel);return [...pixel];});
-        });
-        await $('button=Run circuit').click();await $('button[aria-label="Pause simulation"]').click();await $('button[aria-label="Reset simulation"]').click();
-        const before=await colors();
-        for(const channel of [0,1,2]) expect(Math.abs(before[0][channel]+before[1][channel]-255)).toBeLessThanOrEqual(2);
-        await $('button[aria-label="Next tick"]').click();
-        await browser.waitUntil(async()=>JSON.stringify(await colors())!==JSON.stringify(before));
-        const after=await colors();
-        for(const channel of [0,1,2]) expect(Math.abs(after[0][channel]+after[1][channel]-255)).toBeLessThanOrEqual(2);
-        await browser.saveScreenshot(buildPath('DesktopIsolationColorCapture.png'));await $('button=Back to design').click();
     });
     it('round-trips v2 archives through real native IPC', async () => {
         const file = buildPath('DesktopProject.ocb');
-        const board = { isolationEdges: [{ x: 0, y: 1, axis: 'vertical' }], selectedTool: 'clock', clockHoldTicks: 3, latchInitialState: false, grid: { originX: -20, originY: -14, width: 40, height: 28 }, tiles: [{ x: -2, y: 1, toolId: 'clock', isOn: true, clockHoldTicks: 3 }, { x: 0, y: 1, toolId: 'latch', isOn: false }] };
+        const board = { selectedTool: 'clock', clockHoldTicks: 3, latchInitialState: false, grid: { originX: -20, originY: -14, width: 40, height: 28 }, tiles: [{ x: -2, y: 1, toolId: 'clock', componentId: 1, isOn: true, clockHoldTicks: 3 }, { x: 0, y: 1, toolId: 'latch', componentId: 2, isOn: false }] };
         const result = await browser.execute(async (file: string, project: typeof board) => {
             try {
                 const invoke = (window as unknown as Window & {
@@ -149,14 +127,14 @@ describe('Native circuit workspace', () => {
                         invoke: (command: string, args: unknown) => Promise<unknown>;
                     };
                 }).__TAURI_INTERNALS__.invoke;
-                await invoke('saveProject', { path: file, project: { board: project, blueprints: [{ id: 'clock', name: 'Clock', width: 1, height: 1, isolationEdges: [], tiles: [{ x: 0, y: 0, toolId: 'clock', isOn: true, clockHoldTicks: 3 }] }] } });
+                await invoke('saveProject', { path: file, project: { board: project, blueprints: [{ id: 'clock', name: 'Clock', width: 1, height: 1, tiles: [{ x: 0, y: 0, toolId: 'clock', componentId: 1, isOn: true, clockHoldTicks: 3 }] }] } });
                 return await invoke('openProject', { path: file });
             }
             catch (error) {
                 return { error: String(error) };
             }
         }, file, board);
-        expect(result).toEqual({ board, blueprints: [{ id: 'clock', name: 'Clock', width: 1, height: 1, isolationEdges: [], tiles: [{ x: 0, y: 0, toolId: 'clock', isOn: true, clockHoldTicks: 3 }] }] });
+        expect(result).toEqual({ board, blueprints: [{ id: 'clock', name: 'Clock', width: 1, height: 1, tiles: [{ x: 0, y: 0, toolId: 'clock', componentId: 1, isOn: true, clockHoldTicks: 3 }] }] });
     });
     it('renders joined sides and gradients in the real WebView', async () => {
         await $('.command-trigger').click();
@@ -203,8 +181,8 @@ describe('Native circuit workspace', () => {
     it('updates aggregate color textures from native runtime frames and restores editable colors', async () => {
         const file = buildPath('DesktopLodProject.ocb');
         const result = await browser.execute(async (file: string) => {
-            const tiles: { x: number; y: number; toolId: string; isOn: boolean; clockHoldTicks: number }[] = [];
-            for (let y = 0; y < 64; y++) for (let x = 0; x < 64; x++) tiles.push({ x, y, toolId: 'clock', isOn: true, clockHoldTicks: 1 });
+            const tiles: { x: number; y: number; toolId: string; componentId: number; isOn: boolean; clockHoldTicks: number }[] = [];
+            for (let y = 0; y < 64; y++) for (let x = 0; x < 64; x++) tiles.push({ x, y, toolId: 'clock', componentId: 1, isOn: true, clockHoldTicks: 1 });
             const invoke = (window as unknown as { __TAURI_INTERNALS__: { invoke: (command: string, args: unknown) => Promise<unknown> } }).__TAURI_INTERNALS__.invoke;
             return invoke('saveProject', { path: file, project: { board: { selectedTool: 'clock', clockHoldTicks: 1, latchInitialState: true,
                 grid: { originX: -512, originY: -512, width: 1024, height: 1024 }, tiles },

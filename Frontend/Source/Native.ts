@@ -47,19 +47,11 @@ export function encodeBoard(board: Board) { board = validateBoard(board); const 
     maxX = Math.max(maxX, tile.x);
     maxY = Math.max(maxY, tile.y);
 } const width = maxX - minX + 1, height = maxY - minY + 1, count = width * height; if (count > 1048576)
-    throw Error('SimulationGridTooLarge'); const bytes = new Uint8Array(24 + count * 16), data = new DataView(bytes.buffer); [0x4f434249, 2, width, height, minX, minY].forEach((v, i) => data.setInt32(i * 4, v, true)); for (let i = 0; i < count; i++) {
+    throw Error('SimulationGridTooLarge'); const bytes = new Uint8Array(24 + count * 16), data = new DataView(bytes.buffer); [0x4f434249, 3, width, height, minX, minY].forEach((v, i) => data.setInt32(i * 4, v, true)); for (let i = 0; i < count; i++) {
     data.setInt32(24 + (count * 2 + i) * 4, 1, true);
 } for (const t of tiles) {
     const cell = (t.y - minY) * width + t.x - minX;
-    [ToolKinds[t.toolId], Number(t.isOn), t.clockHoldTicks ?? board.clockHoldTicks].forEach((v, i) => data.setInt32(24 + (count * i + cell) * 4, v, true));
-}
-for (const edge of board.isolationEdges ?? []) {
-    const x = edge.x - minX - Number(edge.axis === 'vertical'), y = edge.y - minY - Number(edge.axis === 'horizontal');
-    const bit = edge.axis === 'vertical' ? 1 : 2;
-    if (x >= 0 && y >= 0 && x < width && y < height && ((bit === 1 && x + 1 < width) || (bit === 2 && y + 1 < height))) {
-        const offset = 24 + (count * 3 + y * width + x) * 4;
-        data.setInt32(offset, data.getInt32(offset, true) | bit, true);
-    }
+    [ToolKinds[t.toolId], Number(t.isOn), t.clockHoldTicks ?? board.clockHoldTicks, t.componentId].forEach((v, i) => data.setInt32(24 + (count * i + cell) * 4, v, true));
 }
 return bytes; }
 export async function compile(board: Board) { if (!isDesktop())

@@ -70,7 +70,7 @@ fn rawInput(bytes: &[u8]) -> Result<(CompileInput, (i32, i32)), String> {
         return Err("SimulationInputInvalid".into());
     }
     let read = |i: usize| i32::from_le_bytes(bytes[i..i + 4].try_into().unwrap());
-    if read(0) != 0x4f434249 || read(4) != 2 {
+    if read(0) != 0x4f434249 || read(4) != 3 {
         return Err("SimulationInputInvalid".into());
     }
     let width = read(8);
@@ -100,7 +100,7 @@ fn rawInput(bytes: &[u8]) -> Result<(CompileInput, (i32, i32)), String> {
             Kinds: array(0),
             InitialStates: array(1),
             ClockHoldTicks: array(2),
-            IsolationMasks: array(3),
+            ComponentIds: array(3),
         },
         (read(16), read(20)),
     ))

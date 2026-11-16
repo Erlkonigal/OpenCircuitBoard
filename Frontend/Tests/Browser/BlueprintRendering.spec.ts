@@ -30,17 +30,17 @@ async function fixture(page: Page, kind: 'dense' | 'sparse' | 'thumbnail') {
             if (command !== 'openProject') throw Error(`Unexpected test IPC: ${command}`);
             const board = { selectedTool: 'or', clockHoldTicks: 1, latchInitialState: true,
                 grid: kind === 'sparse' ? { originX: -1000000, originY: -1000000, width: 2000000, height: 2000000 }
-                    : { originX: -512, originY: -512, width: 1024, height: 1024 }, tiles: [] as { x: number; y: number; toolId: string; isOn: boolean }[] };
+                    : { originX: -512, originY: -512, width: 1024, height: 1024 }, tiles: [] as { x: number; y: number; toolId: string; componentId: number; isOn: boolean }[] };
             if (kind === 'dense') {
                 for (let y = -512; y < 512; y++) for (let x = -512; x < 512; x++)
-                    board.tiles.push({ x, y, toolId: ['traceRed', 'traceGreen', 'traceBlue'][Math.floor((y + 512) / 32) % 3], isOn: true });
+                    board.tiles.push({ x, y, toolId: ['traceRed', 'traceGreen', 'traceBlue'][Math.floor((y + 512) / 32) % 3], componentId: 1 + Math.floor((y + 512) / 32), isOn: true });
             }
             else if (kind === 'sparse') {
-                for (let i = -3; i <= 3; i++) for (let j = 0; j < 64; j++) board.tiles.push({ x: i * 300000 + j, y: i * 300000, toolId: 'traceRed', isOn: true });
+                for (let i = -3; i <= 3; i++) for (let j = 0; j < 64; j++) board.tiles.push({ x: i * 300000 + j, y: i * 300000, toolId: 'traceRed', componentId: i + 4, isOn: true });
             }
             const tiles = [] as typeof board.tiles;
             for (let y = 0; y < 256; y++) for (let x = 0; x < 256; x++) if (x % 8 < 4)
-                tiles.push({ x, y, toolId: ['traceRed', 'traceBlue'][Math.floor(x / 4) % 2], isOn: true });
+                tiles.push({ x, y, toolId: ['traceRed', 'traceBlue'][Math.floor(x / 4) % 2], componentId: 1 + Math.floor(x / 8), isOn: true });
             return { board, blueprints: [{ id: 'large', name: 'Large circuit', width: 256, height: 256, tiles }] };
         } };
     }, kind);
@@ -126,6 +126,8 @@ test('million-cell overview uses bounded aggregate objects and updates after edi
         const mainThreadHeapBytes = (performance as unknown as { memory?: { usedJSHeapSize: number } }).memory?.usedJSHeapSize;
         return { pointerMoveFrameMs, mainThreadHeapBytes };
     });
+    await expect(page.getByTestId('board')).toHaveAttribute('data-highlight-cells','32768');
+    expect(Number(await page.getByTestId('board').getAttribute('data-highlight-objects'))).toBeLessThan(200);
     await writeFile(buildPath('RenderingMetrics.json'), JSON.stringify({ loadAndOverviewMs: Date.now() - start, objects, ...frames }, null, 2));
     await page.mouse.move(origin.x + 30, origin.y + 20); await page.mouse.down({ button: 'middle' });
     await page.mouse.move(origin.x - 60, origin.y + 40, { steps: 10 }); await page.mouse.up({ button: 'middle' });

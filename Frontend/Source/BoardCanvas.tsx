@@ -3,9 +3,8 @@ import { Application, Container, Graphics, Rectangle, TilingSprite, type Texture
 import { TileRenderer } from './TileRenderer';
 import { CellSize as Size, ShadowMargin } from './TileGeometry';
 import { useEditor } from './EditorStore';
-import { cellKey, contains, edgeInGrid, edgeKey, ToolIds, lineCells, parseKey, type Grid, type IsolationEdge, type Point, type Tile } from './Model';
-import { edgeLine, nearestEdge } from './IsolationStore';
-import { createIsolationFilter, IsolationColor, IsolationWidth } from './IsolationRenderer';
+import { cellKey, contains, ToolIds, lineCells, type Grid, type Point } from './Model';
+import { ComponentHighlight } from './ComponentHighlight';
 export interface CameraCommand {
     action: 'none' | 'in' | 'out' | 'fit';
     sequence: number;
@@ -27,7 +26,7 @@ interface View {
 export function minimumZoom(grid: Grid, width: number, height: number) { return Math.min(width / (grid.width * Size), height / (grid.height * Size), 1.25); }
 export function BoardCanvas({ onLatch, onSettings, onCursor, onZoom, cameraCommand }: Props) {
     const host = useRef<HTMLDivElement>(null), view = useRef<View>({ x: 0, y: 0, zoom: .5, width: 736, height: 658 });
-    const hover = useRef<Point | null>(null), isolationHover = useRef<IsolationEdge | null>(null);
+    const hover = useRef<Point | null>(null);
     const requestDraw = useRef<() => void>(() => { });
     const drag = useRef<{
         kind: string;
@@ -37,8 +36,6 @@ export function BoardCanvas({ onLatch, onSettings, onCursor, onZoom, cameraComma
         view: Point;
         corner?: number;
         grid?: Grid;
-        edge?: IsolationEdge;
-        remove?: boolean;
     } | null>(null);
     useEffect(() => {
         const element = host.current!;
@@ -49,24 +46,24 @@ export function BoardCanvas({ onLatch, onSettings, onCursor, onZoom, cameraComma
         let frame = 0;
         let tileRenderer: TileRenderer | undefined;
         let patternTexture: Texture | undefined;
-        const isolationCursorFilter = createIsolationFilter(.55);
+        const selectedHighlight = new ComponentHighlight(0x82baff), hoverHighlight = new ComponentHighlight(0xf2c94c);
+        let selectionSource: unknown, selectionArea: unknown, selectedIds: number[]=[];
         void (async () => {
-            await app.init({ background: '#0c1219', antialias: true, resolution: window.devicePixelRatio || 1, autoDensity: true, autoStart: false, preference: 'webgl', useBackBuffer: true, preserveDrawingBuffer: true });
+            await app.init({ background: '#0c1219', antialias: true, resolution: window.devicePixelRatio || 1, autoDensity: true, autoStart: false, preference: 'webgl', preserveDrawingBuffer: true });
             if (disposed) {
                 app.destroy(true);
                 return;
             }
             element.appendChild(app.canvas);
             app.canvas.setAttribute('aria-label', 'Circuit board');
-            const world = new Container(), board = new Graphics(), overlay = new Graphics(), isolationCursor = new Graphics();
-            isolationCursor.filters = [isolationCursorFilter];
+            const world = new Container(), board = new Graphics(), overlay = new Graphics();
             tileRenderer = new TileRenderer(app.renderer, () => requestDraw.current());
             app.stage.addChild(world);
             const motif = new Graphics().poly([0, 64, 96, 8, 192, 64, 192, 176, 96, 232, 0, 176]).stroke({ color: '#304638', alpha: .15, width: 2 });
             patternTexture = app.renderer.generateTexture({ target: motif, frame: new Rectangle(0, 0, 256, 256), resolution: 1 });
             motif.destroy();
             const pattern = new TilingSprite({ texture: patternTexture, width: 256, height: 256 });
-            world.addChild(board, pattern, tileRenderer.Layer, overlay, isolationCursor);
+            world.addChild(board, pattern, tileRenderer.Layer, selectedHighlight.Layer, hoverHighlight.Layer, overlay);
             const draw = () => {
                 frame = 0;
                 if (disposed)
@@ -87,25 +84,30 @@ export function BoardCanvas({ onLatch, onSettings, onCursor, onZoom, cameraComma
                     pattern.tilePosition.set(-(g.originX * Size % 256), -(g.originY * Size % 256));
                 }
                 board.roundRect(0, 0, g.width * Size, g.height * Size, Size).stroke({ color: '#31483f', width: 1.5 / v.zoom });
-                tileRenderer!.draw({ occupied: s.Tiles, isolation: s.Isolation, preview: s.Preview, previewValid: s.PreviewValid,
+                tileRenderer!.draw({ occupied: s.Tiles, preview: s.Preview, previewValid: s.PreviewValid,
                     simulating: s.Simulating, runtime: s.RuntimeGrid, mode: s.RenderMode }, v);
-                element.dataset.isolationObjects = String(tileRenderer!.EdgeCount);
+                if(selectionSource!==s.Tiles || selectionArea!==s.Selection) {
+                    selectedIds=s.Selection?[...new Set([...s.Tiles.query(s.Selection.bounds)].map(t=>t.componentId))]:[];
+                    selectionSource=s.Tiles;selectionArea=s.Selection;
+                }
+                const ids=[...new Set([...selectedIds,...s.MergeIds])];
+                const hovered=hover.current?s.Tiles.get(cellKey(hover.current))?.componentId:undefined;
+                const hoverIds=hovered && !ids.includes(hovered) && !s.Preview?[hovered]:[];
+                selectedHighlight.draw(s.Tiles,s.Components,ids,v);hoverHighlight.draw(s.Tiles,s.Components,hoverIds,v);
+                element.dataset.highlightComponents=[...ids,...hoverIds].join(',');
+                element.dataset.highlightCells=String([...ids,...hoverIds].reduce((count,id)=>count+s.Components.count(id),0));
+                element.dataset.highlightObjects=String(selectedHighlight.Count+hoverHighlight.Count);
+                element.dataset.mergeCount=String(s.MergeIds.length);
+                element.dataset.componentCount=String(s.Components.size);
                 element.dataset.editTool = s.EditTool;
                 element.dataset.lod = tileRenderer!.Lod;
                 element.dataset.renderObjects = String(tileRenderer!.Count);
                 element.dataset.colorReady = String(tileRenderer!.Ready);
                 overlay.clear(); overlay.position.set(v.x, v.y);
-                isolationCursor.clear(); isolationCursor.position.set(v.x, v.y);
                 const rectangle = (bounds: Grid, color: string, fill = false) => { overlay.rect(bounds.originX * Size - v.x, bounds.originY * Size - v.y, bounds.width * Size, bounds.height * Size); if (fill)
-                    overlay.fill({ color, alpha: .08 }); overlay.stroke({ color, width: 2 / v.zoom }); };
-                if (s.EditTool === 'ink' && hover.current && !s.Simulating && !s.PasteAnchor && !s.Selection && contains(g, hover.current))
+                    overlay.fill({ color, alpha: .04 }); overlay.stroke({ color, width: 2 / v.zoom }); };
+                if (s.EditTool === 'ink' && hover.current && !s.Simulating && !s.PasteAnchor && !s.Selection && contains(g, hover.current) && !s.Tiles.has(cellKey(hover.current)))
                     rectangle({ originX: hover.current.x, originY: hover.current.y, width: 1, height: 1 }, '#f2c94c', true);
-                if (s.EditTool === 'isolation' && !s.Simulating && !s.PasteAnchor && !s.Selection && !drag.current && v.zoom * Size >= 12 && isolationHover.current && edgeInGrid(isolationHover.current, g) && !s.Isolation.get(edgeKey(isolationHover.current))) {
-                    const edge = isolationHover.current;
-                    isolationCursor.moveTo(edge.x * Size - v.x, edge.y * Size - v.y)
-                        .lineTo((edge.x + Number(edge.axis === 'horizontal')) * Size - v.x, (edge.y + Number(edge.axis === 'vertical')) * Size - v.y)
-                        .stroke({ color: IsolationColor, width: IsolationWidth / v.zoom, cap: 'butt' });
-                }
                 if (s.Selection)
                     rectangle(s.Selection.bounds, '#82baff', true);
                 if (s.PasteAnchor) {
@@ -145,8 +147,8 @@ export function BoardCanvas({ onLatch, onSettings, onCursor, onZoom, cameraComma
             element.dataset.renderReady = 'true';
             requestDraw.current();
         })().catch(error => { element.dataset.renderError = String(error); useEditor.getState().log(String(error)); });
-        return () => { disposed = true; unsubscribe(); observer?.disconnect(); cancelAnimationFrame(frame); requestDraw.current = () => { }; tileRenderer?.destroy(); if (app.renderer)
-            app.destroy(true, { children: true }); patternTexture?.destroy(true); isolationCursorFilter.destroy(); };
+        return () => { disposed = true; unsubscribe(); observer?.disconnect(); cancelAnimationFrame(frame); requestDraw.current = () => { }; selectedHighlight.destroy(); hoverHighlight.destroy(); tileRenderer?.destroy(); if (app.renderer)
+            app.destroy(true, { children: true }); patternTexture?.destroy(true); };
     }, []);
     useEffect(() => { if (!cameraCommand || cameraCommand.action === 'none')
         return; const v = view.current, g = useEditor.getState().Board.grid, min = minimumZoom(g, v.width, v.height); if (cameraCommand.action === 'fit') {
@@ -186,16 +188,18 @@ export function BoardCanvas({ onLatch, onSettings, onCursor, onZoom, cameraComma
                     onLatch(c);
                 return;
             }
+            if(s.EditTool==='merge') {
+                if(event.button===2) {s.cancel();drag.current=null;}
+                else if(event.button===0) s.pickComponent(c);
+                requestDraw.current();return;
+            }
+            if(s.EditTool==='split') {
+                if(event.button===2) {s.cancel();drag.current=null;}
+                else if(event.button===0) drag.current={...base,kind:'select'};
+                requestDraw.current();return;
+            }
             if (event.button === 0 && !event.shiftKey && !s.PasteAnchor && s.Selection && contains(s.Selection.bounds, c)) {
                 drag.current = { ...base, kind: 'move' };
-                return;
-            }
-            if (s.EditTool === 'isolation' && (event.button === 0 || event.button === 2) && !event.shiftKey && !s.PasteAnchor) {
-                if (v.zoom * Size < 12) { s.log('Zoom in to edit isolation edges.'); return; }
-                const edge = nearestEdge(world(p));
-                s.select(null); s.begin(); s.paintIsolation([edge], event.button === 2);
-                isolationHover.current = edge;
-                drag.current = { ...base, kind: 'isolation', edge, remove: event.button === 2 };
                 return;
             }
             if (event.button === 2) {
@@ -241,7 +245,6 @@ export function BoardCanvas({ onLatch, onSettings, onCursor, onZoom, cameraComma
         }} onPointerMove={event => {
             const p = screen(event), c = cell(p), s = useEditor.getState(), d = drag.current;
             hover.current = c;
-            isolationHover.current = nearestEdge(world(p));
             onCursor(c);
             if (!d) {
                 if (s.PasteAnchor)
@@ -255,7 +258,6 @@ export function BoardCanvas({ onLatch, onSettings, onCursor, onZoom, cameraComma
                 if (s.PasteAnchor)
                     s.paste(cell(p));
             }
-            else if (d.kind === 'isolation') s.paintIsolation(edgeLine(d.edge!, world(p)), d.remove);
             else if (d.kind === 'paint' || d.kind === 'delete')
                 s.paint(lineCells(d.last, c), d.kind === 'delete');
             else if (d.kind === 'move')
@@ -281,7 +283,7 @@ export function BoardCanvas({ onLatch, onSettings, onCursor, onZoom, cameraComma
     else if (d.kind === 'move')
         s.confirmMove({ x: c.x - d.start.x, y: c.y - d.start.y });
     else if (d.kind !== 'pan')
-        s.commit(); drag.current = null; requestDraw.current(); }} onPointerLeave={() => { hover.current = null; isolationHover.current = null; requestDraw.current(); }} onPointerCancel={() => { useEditor.getState().cancel(); drag.current = null; requestDraw.current(); }} onKeyDown={event => { if (event.key === 'Escape') {
+        s.commit(); drag.current = null; requestDraw.current(); }} onPointerLeave={() => { hover.current = null; requestDraw.current(); }} onPointerCancel={() => { useEditor.getState().cancel(); drag.current = null; requestDraw.current(); }} onKeyDown={event => { if(event.key==='Enter') {const s=useEditor.getState();if(s.EditTool==='merge'){event.preventDefault();s.confirmMerge();}else if(s.EditTool==='split'){event.preventDefault();s.splitSelection();}} if (event.key === 'Escape') {
         drag.current = null;
         useEditor.getState().cancel();
         requestDraw.current();

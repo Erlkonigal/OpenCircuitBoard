@@ -12,6 +12,40 @@ fn expand(value: &Value) -> Vec<i32> {
     }
     values
 }
+// The recordings predate IDs. This adapter exists only for historical test fixtures.
+fn assignRecordedComponents(input: &mut CompileInput) {
+    let count = input.Width * input.Height;
+    input.ComponentIds = vec![0; count];
+    let mut id = 0;
+    for cell in 0..count {
+        if input.Kinds.get(cell).copied().unwrap_or(0) == 0 || input.ComponentIds[cell] != 0 {
+            continue;
+        }
+        id += 1;
+        input.ComponentIds[cell] = id;
+        let mut queue = vec![cell];
+        while let Some(current) = queue.pop() {
+            let (x, y) = (current % input.Width, current / input.Width);
+            for (dx, dy) in [(-1, 0), (1, 0), (0, -1), (0, 1)] {
+                let (nx, ny) = (x as i32 + dx, y as i32 + dy);
+                if nx < 0 || ny < 0 || nx >= input.Width as i32 || ny >= input.Height as i32 {
+                    continue;
+                }
+                let n = ny as usize * input.Width + nx as usize;
+                if input.ComponentIds[n] == 0
+                    && input.Kinds[n] == input.Kinds[cell]
+                    && (input.Kinds[cell] != 25
+                        || (input.InitialStates[n] != 0) == (input.InitialStates[cell] != 0))
+                    && (input.Kinds[cell] != 26
+                        || input.ClockHoldTicks[n] == input.ClockHoldTicks[cell])
+                {
+                    input.ComponentIds[n] = id;
+                    queue.push(n);
+                }
+            }
+        }
+    }
+}
 #[test]
 fn replayLegacyCore() {
     let mut cores: HashMap<u64, SimulationCore> = HashMap::new();
@@ -31,18 +65,15 @@ fn replayLegacyCore() {
             continue;
         }
         if op == "compile" {
-            let input = CompileInput {
+            let mut input = CompileInput {
                 Width: v["width"].as_u64().unwrap() as usize,
                 Height: v["height"].as_u64().unwrap() as usize,
                 Kinds: expand(&v["kinds"]),
                 InitialStates: expand(&v["initialStates"]),
                 ClockHoldTicks: expand(&v["clockHoldTicks"]),
-                IsolationMasks: vec![
-                    0;
-                    v["width"].as_u64().unwrap() as usize
-                        * v["height"].as_u64().unwrap() as usize
-                ],
+                ComponentIds: vec![],
             };
+            assignRecordedComponents(&mut input);
             let result = SimulationCore::compileWithOrdering(input, *ordering.get(&id).unwrap());
             assert_eq!(
                 result.is_ok(),

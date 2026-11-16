@@ -372,7 +372,7 @@ mod tests {
             Kinds: vec![26, 15, 1, 16, 17],
             InitialStates: vec![0; 5],
             ClockHoldTicks: vec![1; 5],
-            IsolationMasks: vec![0; 5],
+            ComponentIds: vec![1, 2, 3, 4, 5],
         }
     }
     fn u32At(frame: &[u8], offset: usize) -> u32 {
@@ -504,6 +504,7 @@ mod tests {
         let session = Session::default();
         let mut invalid = input();
         invalid.Kinds = vec![15, 0, 0, 0, 0];
+        invalid.ComponentIds = vec![1, 0, 0, 0, 0];
         let error = session
             .request(Action::Compile(invalid, (-9, 4)))
             .unwrap_err();

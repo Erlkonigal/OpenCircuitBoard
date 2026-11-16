@@ -31,7 +31,7 @@ fn main() {
         Kinds: vec![0; count],
         InitialStates: vec![0; count],
         ClockHoldTicks: vec![1; count],
-        IsolationMasks: vec![0; count],
+        ComponentIds: vec![0; count],
     };
     for lane in 0..lanes {
         if unary {
@@ -68,6 +68,20 @@ fn main() {
                 input.Kinds[(y + 1) * width + x] = 16;
             }
         }
+    }
+    // This generated layout uses individual devices/ports and continuous trace runs.
+    let mut nextId = 1;
+    for cell in 0..count {
+        if input.Kinds[cell] == 0 {
+            continue;
+        }
+        input.ComponentIds[cell] =
+            if cell % width > 0 && input.Kinds[cell] == 1 && input.Kinds[cell - 1] == 1 {
+                input.ComponentIds[cell - 1]
+            } else {
+                nextId += 1;
+                nextId
+            };
     }
     let start = Instant::now();
     let mut core = SimulationCore::compile(input).unwrap();

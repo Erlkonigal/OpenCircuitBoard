@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { CellStore } from '../../Source/CellStore';
 import { cellKey, type Tile } from '../../Source/Model';
-const tile = (x: number, y: number): Tile => ({ x, y, toolId: 'or', isOn: true });
+const tile = (x: number, y: number): Tile => ({ x, y, toolId: 'or', componentId: 1, isOn: true });
 describe('Persistent sparse spatial index', () => {
     it('shares unaffected chunks and diffs only changed paths', () => {
         const source = CellStore.from([tile(-65, -64), tile(-1, 0), tile(64, 64)]);

@@ -4,14 +4,14 @@ import type { Tile } from '../../Source/Model';
 describe('Area weighted color LOD', () => {
     it('averages premultiplied color and preserves empty coverage', () => {
         const pyramid = new ColorPyramid();
-        const tiles: Tile[] = [{ x: 0, y: 0, toolId: 'traceRed', isOn: true }, { x: 1, y: 0, toolId: 'traceBlue', isOn: true }];
+        const tiles: Tile[] = [{ x: 0, y: 0, toolId: 'traceRed', componentId: 1, isOn: true }, { x: 1, y: 0, toolId: 'traceBlue', componentId: 2, isOn: true }];
         pyramid.update([{ x: 0, y: 0, tiles }]);
         const pixel = pyramid.raster({ level: 1, x: 0, y: 0 }).pixels.slice(0, 4), a = tileColor(tiles[0]), b = tileColor(tiles[1]);
         expect([...pixel]).toEqual([...a.map((v, i) => Math.round((v + b[i]) / 4)), 128]);
         expect([...pyramid.raster({ level: 1, x: 0, y: 0 }).pixels.slice(4, 8)]).toEqual([0, 0, 0, 0]);
     });
     it('updates ancestors and handles negative quadrants, removal and runtime states', () => {
-        const pyramid = new ColorPyramid(), tile: Tile = { x: -1, y: -1, toolId: 'latch', isOn: true };
+        const pyramid = new ColorPyramid(), tile: Tile = { x: -1, y: -1, toolId: 'latch', componentId: 3, isOn: true };
         pyramid.update([{ x: -1, y: -1, tiles: [tile] }]);
         const request = { level: 1, x: -1, y: -1 };
         expect(pyramid.raster(request).pixels.at(-1)).toBe(64);
@@ -30,7 +30,7 @@ describe('Area weighted color LOD', () => {
         for (let y = -2; y < 2; y++) for (let x = -2; x < 2; x++) {
             const tiles: Tile[] = [];
             for (let py = 0; py < 64; py++) for (let px = 0; px < 64; px++) if ((px + py) % 4 !== 0)
-                tiles.push({ x: x * 64 + px, y: y * 64 + py, toolId: 'traceRed', isOn: true });
+                tiles.push({ x: x * 64 + px, y: y * 64 + py, toolId: 'traceRed', componentId: 4, isOn: true });
             chunks.push({ x, y, tiles });
         }
         pyramid.update(chunks);
