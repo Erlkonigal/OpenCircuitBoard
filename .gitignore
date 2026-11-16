@@ -5,3 +5,5 @@
 *.dll
 *.so
 *.ocb
+
+!Frontend/Assets/Examples/HelloWorld5x8.ocb

@@ -27,6 +27,7 @@ case "$ocbAction" in
    exec build/Backend/release/OpenCircuitBoard
   fi;;
  package) invokeTauri build --bundles appimage;;
+ examples) invokeCargo run --locked -p ocb-core --example HelloWorld5x8;;
  core-test) invokeCargo test --locked -p ocb-core;;
  core-benchmark) invokeCargo run --locked --release -p ocb-core --bin ocb-benchmark -- "${ocbBenchmarkArgs[@]}";;
  board-benchmark)

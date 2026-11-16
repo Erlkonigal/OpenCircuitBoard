@@ -44,6 +44,10 @@ Blueprints are flat ink snapshots saved with the current project. Save a selecti
 
 The toolbar's 2D / 2.5D control applies to the board and both preview libraries and remembers the choice on this device. At 12 CSS pixels per cell and above, the board and previews show ink symbols; all Trace variants use only their color at every zoom level. Between 2 and 12 pixels they use color chunks with batched depth in 2.5D. Below 2 pixels both modes use area-weighted color and coverage maps. The sparse 64-cell chunk index and worker-built color pyramid update affected chunks and ancestors; a shared 64 MiB LRU bounds color raster and thumbnail caches. Zoom uses proportional steps around the pointer.
 
+## Example projects
+
+[Hello, World! 5×8 character display](Frontend/Assets/Examples/HelloWorld5x8.ocb) is a complete editable circuit that cycles through the text one character at a time. Open it in the desktop app, zoom out around the display to about 9%, set 16 TPS, and run. See the [example guide](Frontend/Assets/Examples/README.md) for viewing, timing, circuit structure, and regeneration with `make examples`.
+
 ## Repository layout
 
 - `Frontend/Source`: React editor, PixiJS renderer, and TypeScript state and IPC clients.

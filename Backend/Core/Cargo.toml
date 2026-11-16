@@ -25,3 +25,11 @@ path = "Tests/LegacyTests.rs"
 [[test]]
 name = "project"
 path = "Tests/ProjectTests.rs"
+
+[[example]]
+name = "HelloWorld5x8"
+path = "Examples/HelloWorld5x8.rs"
+
+[[test]]
+name = "examples"
+path = "Tests/ExampleTests.rs"

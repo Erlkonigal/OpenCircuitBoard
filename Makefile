@@ -16,9 +16,10 @@ export BOARD_PATH
 export BOARD_BENCHMARK_ARGS
 export FRONTEND_TEST
 
-.PHONY: help init format frontend-build test-tools build build-debug build-release run package core-test core-benchmark board-benchmark native-test native-ui-test frontend-test browser-test test check-platform clean
+.PHONY: help init examples format frontend-build test-tools build build-debug build-release run package core-test core-benchmark board-benchmark native-test native-ui-test frontend-test browser-test test check-platform clean
 help:
 	@echo 'make init TARGET_PLATFORM=<windows|linux>          Install locked npm/Cargo dependencies'
+	@echo 'make examples                                    Regenerate and verify example projects'
 	@echo 'make build [BUILD_TYPE=Debug|Release]              Build the desktop application'
 	@echo 'make run [BUILD_TYPE=Debug|Release]                Launch the editor'
 	@echo 'make package                                     Build NSIS or AppImage package'
@@ -28,7 +29,7 @@ help:
 	@echo 'make core-benchmark [CORE_BENCHMARK_ARGS=...]'
 	@echo 'make board-benchmark BOARD_PATH=/absolute/path/project.ocb'
 
-init format frontend-build test-tools build run package core-test core-benchmark board-benchmark native-test native-ui-test frontend-test browser-test test check-platform clean:
+init examples format frontend-build test-tools build run package core-test core-benchmark board-benchmark native-test native-ui-test frontend-test browser-test test check-platform clean:
 	@$(OcbCommand)
 
 build-debug:
