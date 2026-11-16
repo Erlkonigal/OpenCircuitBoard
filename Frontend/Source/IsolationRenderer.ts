@@ -1,15 +1,34 @@
-import { Container, Graphics } from 'pixi.js';
+import { BlendModeFilter, Container, Graphics } from 'pixi.js';
 import { IsolationStore, type IsolationChunk } from './IsolationStore';
 import type { TileView } from './TileRenderer';
 import { CellSize } from './TileGeometry';
-export const IsolationColor = '#e1cf9a', IsolationWidth = 2;
+export const IsolationColor = 0xffffff, IsolationWidth = 2;
+/** Invert the backdrop once through an opaque edge mask, including at intersections. */
+export function createIsolationFilter(opacity = 1) {
+    const filter = new BlendModeFilter({
+        gl: { functions: '', main: `
+            float coverage = front.a * uBlend;
+            finalColor = vec4(mix(back.rgb, vec3(1.0) - back.rgb, coverage),
+                coverage + back.a * (1.0 - coverage));
+        ` },
+        gpu: { functions: '', main: `
+            let coverage = front.a * blendUniforms.uBlend;
+            out = vec4<f32>(mix(back.rgb, vec3<f32>(1.0) - back.rgb, coverage),
+                coverage + back.a * (1.0 - coverage));
+        ` }
+    });
+    filter.resources.blendUniforms.uniforms.uBlend = opacity;
+    filter.resolution = 'inherit'; filter.antialias = 'inherit';
+    return filter;
+}
 /** Visible chunks share one graphics object; consecutive edge segments become one line. */
 export class IsolationRenderer {
     readonly Layer = new Container();
     private readonly Visible = new Map<string, { Source: IsolationChunk; Zoom: number; Graphic: Graphics }>();
+    private readonly Filter: BlendModeFilter;
     Count = 0;
-    constructor(alpha = 1) { this.Layer.alpha = alpha; }
-    draw(source: IsolationStore | undefined, view: TileView, tint = 0xffffff) {
+    constructor(alpha = 1) { this.Filter = createIsolationFilter(alpha); this.Layer.filters = [this.Filter]; }
+    draw(source: IsolationStore | undefined, view: TileView) {
         this.Layer.visible = !!source?.size && view.zoom * CellSize >= 2;
         if (!this.Layer.visible) { this.clear(); return; }
         const bounds = { originX: Math.floor((view.x - view.width / view.zoom / 2) / CellSize) - 1,
@@ -42,11 +61,10 @@ export class IsolationRenderer {
                 graphic.stroke({ color: IsolationColor, width: IsolationWidth / view.zoom, cap: 'butt' });
                 entry.Source = chunk; entry.Zoom = view.zoom;
             }
-            entry.Graphic.tint = tint;
         }
         for (const [key, entry] of this.Visible) if (!wanted.has(key)) { entry.Graphic.destroy(); this.Visible.delete(key); }
         this.Count = this.Visible.size;
     }
     clear() { for (const entry of this.Visible.values()) entry.Graphic.destroy(); this.Visible.clear(); this.Count = 0; }
-    destroy() { this.clear(); this.Layer.destroy(); }
+    destroy() { this.clear(); this.Layer.destroy(); this.Filter.destroy(); }
 }

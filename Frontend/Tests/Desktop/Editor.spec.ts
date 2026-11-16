@@ -104,7 +104,7 @@ describe('Native circuit workspace', () => {
         const before=await pixels();
         await browser.action('pointer').move({x:Math.round(center.x+12),y:Math.round(center.y+12)}).down().up().perform();
         await $('button[aria-label="Next tick"]').click();
-        await browser.waitUntil(async()=>JSON.stringify((await pixels())[0])!==JSON.stringify(before[0]));
+        await browser.waitUntil(async()=>{const current=await pixels();return JSON.stringify(current[0])!==JSON.stringify(before[0]) && JSON.stringify(current[1])!==JSON.stringify(before[1]);});
         const after=await pixels(); expect(after[2]).toEqual(before[2]); expect(after[3]).toEqual(before[3]); expect(after[1]).not.toEqual(before[1]);
         await browser.saveScreenshot(buildPath('DesktopIsolationCapture.png'));
         await $('button=Back to design').click();
@@ -117,6 +117,27 @@ describe('Native circuit workspace', () => {
         await $('button[aria-label="Next tick"]').click();
         await browser.waitUntil(async()=>JSON.stringify((await pixels())[2])!==JSON.stringify(joined[2]));
         await $('button=Back to design').click();
+    });
+    it('inverts isolation lines as native runtime colors change', async () => {
+        await $('.command-trigger').click();await $('input[aria-label="Search commands"]').setValue('new circuit');await $('.command-options button').click();
+        const center=await browser.execute(()=>{const r=document.querySelector('[data-testid="board"]')!.getBoundingClientRect();return {x:r.x+r.width/2,y:r.y+r.height/2};});
+        await $('button[aria-label="Clock"]').click();
+        for(const y of [12,44]) await browser.action('pointer').move({x:Math.round(center.x+12),y:Math.round(center.y+y)}).down().up().perform();
+        await $('button[aria-label="Isolation"]').click();
+        await browser.action('pointer').move({x:Math.round(center.x+12),y:Math.round(center.y+32)}).down().up().perform();
+        await expect($('.workspace-status')).toHaveText(expect.stringContaining('1 edges'));
+        const colors=()=>browser.execute(()=> {
+            const canvas=document.querySelector('canvas[aria-label="Circuit board"]') as HTMLCanvasElement,gl=canvas.getContext('webgl2')!,scale=canvas.width/canvas.getBoundingClientRect().width;
+            return [32,35].map(y=>{const pixel=new Uint8Array(4);gl.readPixels(Math.floor(canvas.width/2+3*scale),canvas.height-1-Math.floor(canvas.height/2+y*scale),1,1,gl.RGBA,gl.UNSIGNED_BYTE,pixel);return [...pixel];});
+        });
+        await $('button=Run circuit').click();await $('button[aria-label="Pause simulation"]').click();await $('button[aria-label="Reset simulation"]').click();
+        const before=await colors();
+        for(const channel of [0,1,2]) expect(Math.abs(before[0][channel]+before[1][channel]-255)).toBeLessThanOrEqual(2);
+        await $('button[aria-label="Next tick"]').click();
+        await browser.waitUntil(async()=>JSON.stringify(await colors())!==JSON.stringify(before));
+        const after=await colors();
+        for(const channel of [0,1,2]) expect(Math.abs(after[0][channel]+after[1][channel]-255)).toBeLessThanOrEqual(2);
+        await browser.saveScreenshot(buildPath('DesktopIsolationColorCapture.png'));await $('button=Back to design').click();
     });
     it('round-trips v2 archives through real native IPC', async () => {
         const file = buildPath('DesktopProject.ocb');

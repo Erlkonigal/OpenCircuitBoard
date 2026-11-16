@@ -17,7 +17,7 @@ class ThumbnailRenderer {
     private async init() {
         if (this.App) return;
         const app = new Application();
-        await app.init({ width: Width, height: Height, resolution: 2, backgroundAlpha: 0, antialias: true, autoStart: false, preference: 'webgl', preserveDrawingBuffer: true });
+        await app.init({ width: Width, height: Height, resolution: 2, background: '#0c141d', antialias: true, autoStart: false, preference: 'webgl', useBackBuffer: true, preserveDrawingBuffer: true });
         this.App = app; this.World = new Container();
         this.Tiles = new TileRenderer(app.renderer, () => this.Redraw?.());
         this.World.addChild(this.Tiles.Layer); app.stage.addChild(this.World);

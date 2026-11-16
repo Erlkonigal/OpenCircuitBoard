@@ -37,7 +37,6 @@ test('independent edges support drawing, erasing, undo, edge-only selection, per
 test('latch dividers render in both modes and Trace variants are pure color in canvas and previews',async({page})=>{
     const c=await ready(page);await page.getByRole('button',{name:'Latch',exact:true}).click();
     for(const y of [0,1]) await drag(page,c.x+1,c.y+y*32+12,c.x+95,c.y+y*32+12);
-    await page.getByRole('button',{name:'Isolation',exact:true}).click();await drag(page,c.x+1,c.y+32,c.x+95,c.y+32);
     const boundaryPixels = () => page.locator('canvas[aria-label="Circuit board"]').evaluate(element => {
         const canvas = element as HTMLCanvasElement, gl = canvas.getContext('webgl2')!;
         const scale = canvas.width / canvas.getBoundingClientRect().width;
@@ -49,12 +48,15 @@ test('latch dividers render in both modes and Trace variants are pure color in c
     });
     for (const [mode, capture] of [['2.5D','IsolationCapture.png'],['2D','IsolationFlatCapture.png']]) {
         await page.getByText(mode,{exact:true}).click();await settle(page);
+        const background = await boundaryPixels();
+        await page.getByRole('button',{name:'Isolation',exact:true}).click();await drag(page,c.x+1,c.y+32,c.x+95,c.y+32);await settle(page);
         const colors = await boundaryPixels();
-        expect(colors).toEqual(Array.from({length:3},()=>[225,207,154,255]));
+        colors.forEach((color,index)=>color.forEach((value,channel)=>expect(Math.abs(value - (channel === 3 ? 255 : 255-background[index][channel]))).toBeLessThanOrEqual(2)));
         await page.mouse.move(c.x+44,c.y+32);
         await page.evaluate(()=>new Promise<void>(resolve=>requestAnimationFrame(()=>requestAnimationFrame(()=>resolve()))));
         expect(await boundaryPixels()).toEqual(colors);
         await page.screenshot({path:buildPath(capture)});
+        await page.keyboard.press('Control+z');await settle(page);
     }
     await page.getByRole('button',{name:'Trace',exact:true}).click();
     for(const [i,id] of ['trace','traceRed','traceGreen','traceBlue','traceCyan','traceMagenta'].entries()){
@@ -68,6 +70,58 @@ test('latch dividers render in both modes and Trace variants are pure color in c
     for(const range of ranges)expect(range).toEqual([0,0,0]);
     await page.keyboard.down('Shift');await drag(page,c.x-95,c.y+97,c.x+95,c.y+126);await page.keyboard.up('Shift');await page.keyboard.press('Control+c');await expect(page.locator('.clipboard-thumbnail')).toHaveAttribute('data-ready','true');
     await settle(page);await page.screenshot({path:buildPath('TraceColorOnlyCapture.png')});
+});
+
+test('isolation inverts empty space, on/off materials, intersections and blueprint thumbnails', async ({page}) => {
+    const errors: string[] = []; page.on('pageerror',error=>errors.push(error.message));
+    await page.addInitScript(() => {
+        const ids = ['trace','traceRed','traceBlue','traceGreen','traceMagenta'];
+        const tiles = [-1,0].flatMap(y=>ids.map((toolId,index)=>({x:index-3,y,toolId,isOn:index!==4})));
+        const isolationEdges = Array.from({length:6},(_,x)=>({x,y:1,axis:'horizontal'}));
+        isolationEdges.push({x:3,y:0,axis:'vertical'},{x:3,y:1,axis:'vertical'});
+        (window as unknown as {__TAURI_INTERNALS__:unknown}).__TAURI_INTERNALS__ = {invoke:async(command:string)=> {
+            if(command==='recentProjects') return ['Contrast.ocb'];
+            if(command!=='openProject') throw Error(command);
+            return {board:{selectedTool:'or',clockHoldTicks:1,latchInitialState:true,grid:{originX:-20,originY:-14,width:40,height:28},tiles},
+                blueprints:[{id:'contrast',name:'Contrast',width:6,height:2,tiles:tiles.map(tile=>({...tile,x:tile.x+3,y:tile.y+1})),isolationEdges}]};
+        }};
+    });
+    const c = await ready(page);
+    await page.locator('.project-switcher').click();await page.getByRole('menuitem',{name:'Contrast.ocb',exact:true}).click();
+    await expect(page.locator('.workspace-status')).toContainText('10 cells');
+    const pixels = () => page.locator('canvas[aria-label="Circuit board"]').evaluate(element=> {
+        const canvas=element as HTMLCanvasElement,gl=canvas.getContext('webgl2')!,scale=canvas.width/canvas.getBoundingClientRect().width;
+        return [-84,-52,-20,0,12,44,76].map(x=>{const pixel=new Uint8Array(4);gl.readPixels(Math.floor(canvas.width/2+x*scale),canvas.height-1-Math.floor(canvas.height/2),1,1,gl.RGBA,gl.UNSIGNED_BYTE,pixel);return [...pixel];});
+    });
+    for(const mode of ['2.5D','2D']) {
+        await page.getByText(mode,{exact:true}).click();await settle(page);
+        const before=await pixels();
+        await page.getByRole('button',{name:'Isolation',exact:true}).click();
+        await drag(page,c.x-95,c.y,c.x+95,c.y);
+        await drag(page,c.x,c.y-31,c.x,c.y+31);await settle(page);
+        const after=await pixels();
+        after.forEach((pixel,i)=>pixel.forEach((value,channel)=>expect(Math.abs(value-(channel===3?255:255-before[i][channel]))).toBeLessThanOrEqual(2)));
+        await page.getByRole('button',{name:'Show blueprints',exact:true}).click();await settle(page);
+        await expect(page.locator('.blueprint-entry canvas')).toHaveAttribute('data-ready','true');
+        const thumbnail=await page.locator('.blueprint-entry canvas').evaluate((element,mode)=> {
+            const canvas=element as HTMLCanvasElement,context=canvas.getContext('2d')!,depth=mode==='2.5D'?.375:0;
+            const left=100-(3-depth/2)*20,top=46-(1+depth/2)*20;
+            return Array.from({length:6},(_,index)=>[0,4].map(dy=>[...context.getImageData(Math.floor((left+index*20+10)*2),Math.floor((top+20+dy)*2),1,1).data]));
+        },mode);
+        for(const [edge,face] of thumbnail) for(const channel of [0,1,2]) expect(Math.abs(edge[channel]-(255-face[channel]))).toBeLessThanOrEqual(2);
+        if(mode==='2D') {
+            const outside=await page.locator('.blueprint-entry canvas').evaluate(element=> {
+                const context=(element as HTMLCanvasElement).getContext('2d')!;
+                return [[38,58],[52,69]].map(([x,y])=>[...context.getImageData(x*2,y*2,1,1).data]);
+            });
+            expect(outside).toEqual([[12,20,29,255],[12,20,29,255]]);
+        }
+        await page.screenshot({path:buildPath(mode==='2D'?'IsolationContrastFlatCapture.png':'IsolationContrastCapture.png')});
+        await page.getByRole('button',{name:'Show components',exact:true}).click();
+        await page.keyboard.press('Control+z');await page.keyboard.press('Control+z');await settle(page);
+        expect(await pixels()).toEqual(before);
+    }
+    expect(errors).toEqual([]);
 });
 
 test('large sparse boundaries remain chunked and are hidden in aggregate LOD',async({page})=>{

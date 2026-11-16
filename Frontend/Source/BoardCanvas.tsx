@@ -5,7 +5,7 @@ import { CellSize as Size, ShadowMargin } from './TileGeometry';
 import { useEditor } from './EditorStore';
 import { cellKey, contains, edgeInGrid, edgeKey, ToolIds, lineCells, parseKey, type Grid, type IsolationEdge, type Point, type Tile } from './Model';
 import { edgeLine, nearestEdge } from './IsolationStore';
-import { IsolationColor, IsolationWidth } from './IsolationRenderer';
+import { createIsolationFilter, IsolationColor, IsolationWidth } from './IsolationRenderer';
 export interface CameraCommand {
     action: 'none' | 'in' | 'out' | 'fit';
     sequence: number;
@@ -49,22 +49,24 @@ export function BoardCanvas({ onLatch, onSettings, onCursor, onZoom, cameraComma
         let frame = 0;
         let tileRenderer: TileRenderer | undefined;
         let patternTexture: Texture | undefined;
+        const isolationCursorFilter = createIsolationFilter(.55);
         void (async () => {
-            await app.init({ background: '#0c1219', antialias: true, resolution: window.devicePixelRatio || 1, autoDensity: true, autoStart: false, preference: 'webgl', preserveDrawingBuffer: true });
+            await app.init({ background: '#0c1219', antialias: true, resolution: window.devicePixelRatio || 1, autoDensity: true, autoStart: false, preference: 'webgl', useBackBuffer: true, preserveDrawingBuffer: true });
             if (disposed) {
                 app.destroy(true);
                 return;
             }
             element.appendChild(app.canvas);
             app.canvas.setAttribute('aria-label', 'Circuit board');
-            const world = new Container(), board = new Graphics(), overlay = new Graphics();
+            const world = new Container(), board = new Graphics(), overlay = new Graphics(), isolationCursor = new Graphics();
+            isolationCursor.filters = [isolationCursorFilter];
             tileRenderer = new TileRenderer(app.renderer, () => requestDraw.current());
             app.stage.addChild(world);
             const motif = new Graphics().poly([0, 64, 96, 8, 192, 64, 192, 176, 96, 232, 0, 176]).stroke({ color: '#304638', alpha: .15, width: 2 });
             patternTexture = app.renderer.generateTexture({ target: motif, frame: new Rectangle(0, 0, 256, 256), resolution: 1 });
             motif.destroy();
             const pattern = new TilingSprite({ texture: patternTexture, width: 256, height: 256 });
-            world.addChild(board, pattern, tileRenderer.Layer, overlay);
+            world.addChild(board, pattern, tileRenderer.Layer, overlay, isolationCursor);
             const draw = () => {
                 frame = 0;
                 if (disposed)
@@ -93,15 +95,16 @@ export function BoardCanvas({ onLatch, onSettings, onCursor, onZoom, cameraComma
                 element.dataset.renderObjects = String(tileRenderer!.Count);
                 element.dataset.colorReady = String(tileRenderer!.Ready);
                 overlay.clear(); overlay.position.set(v.x, v.y);
+                isolationCursor.clear(); isolationCursor.position.set(v.x, v.y);
                 const rectangle = (bounds: Grid, color: string, fill = false) => { overlay.rect(bounds.originX * Size - v.x, bounds.originY * Size - v.y, bounds.width * Size, bounds.height * Size); if (fill)
                     overlay.fill({ color, alpha: .08 }); overlay.stroke({ color, width: 2 / v.zoom }); };
                 if (s.EditTool === 'ink' && hover.current && !s.Simulating && !s.PasteAnchor && !s.Selection && contains(g, hover.current))
                     rectangle({ originX: hover.current.x, originY: hover.current.y, width: 1, height: 1 }, '#f2c94c', true);
                 if (s.EditTool === 'isolation' && !s.Simulating && !s.PasteAnchor && !s.Selection && !drag.current && v.zoom * Size >= 12 && isolationHover.current && edgeInGrid(isolationHover.current, g) && !s.Isolation.get(edgeKey(isolationHover.current))) {
                     const edge = isolationHover.current;
-                    overlay.moveTo(edge.x * Size - v.x, edge.y * Size - v.y)
+                    isolationCursor.moveTo(edge.x * Size - v.x, edge.y * Size - v.y)
                         .lineTo((edge.x + Number(edge.axis === 'horizontal')) * Size - v.x, (edge.y + Number(edge.axis === 'vertical')) * Size - v.y)
-                        .stroke({ color: IsolationColor, width: IsolationWidth / v.zoom, alpha: .55, cap: 'butt' });
+                        .stroke({ color: IsolationColor, width: IsolationWidth / v.zoom, cap: 'butt' });
                 }
                 if (s.Selection)
                     rectangle(s.Selection.bounds, '#82baff', true);
@@ -143,7 +146,7 @@ export function BoardCanvas({ onLatch, onSettings, onCursor, onZoom, cameraComma
             requestDraw.current();
         })().catch(error => { element.dataset.renderError = String(error); useEditor.getState().log(String(error)); });
         return () => { disposed = true; unsubscribe(); observer?.disconnect(); cancelAnimationFrame(frame); requestDraw.current = () => { }; tileRenderer?.destroy(); if (app.renderer)
-            app.destroy(true, { children: true }); patternTexture?.destroy(true); };
+            app.destroy(true, { children: true }); patternTexture?.destroy(true); isolationCursorFilter.destroy(); };
     }, []);
     useEffect(() => { if (!cameraCommand || cameraCommand.action === 'none')
         return; const v = view.current, g = useEditor.getState().Board.grid, min = minimumZoom(g, v.width, v.height); if (cameraCommand.action === 'fit') {

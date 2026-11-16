@@ -398,7 +398,7 @@ export class TileRenderer {
             this.Preview.Layer.position.set(offset.x * CellSize, offset.y * CellSize);
             const previewView = { ...view, x: view.x - offset.x * CellSize, y: view.y - offset.y * CellSize };
             this.PreviewIsolation.Layer.position.copyFrom(this.Preview.Layer.position);
-            this.PreviewIsolation.draw(scene.preview.Isolation, previewView, scene.previewValid ? 0xffffff : 0xff657e);
+            this.PreviewIsolation.draw(scene.preview.Isolation, previewView);
             this.Preview.draw(scene.preview.Source, tile => this.material(tile.toolId, tile.isOn), previewView, scene.mode, null, scene.previewValid ? 0xffffff : 0xff657e);
         }
         else { this.Preview.clear(); this.PreviewIsolation.clear(); }
