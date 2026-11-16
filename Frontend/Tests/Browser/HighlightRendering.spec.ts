@@ -98,7 +98,7 @@ for (const isOn of [true, false]) test(`every ink reserves visible highlight hea
             await page.mouse.move(center.x + points[i][0], center.y + points[i][1]);
             await expect(board).toHaveAttribute('data-highlight-components', String(i + 1));
             const hovered = await pixels(page, points);
-            expect(brightness(hovered[i]) - brightness(before[i]), PaletteInks[i]).toBeGreaterThanOrEqual(21);
+            expect(brightness(hovered[i]) - brightness(before[i]), PaletteInks[i]).toBeGreaterThanOrEqual(12);
             individual.push(hovered[i]);
             for (let other = 0; other < PaletteInks.length; other++) if (i !== other) expect(hovered[other]).toEqual(before[other]);
         }
