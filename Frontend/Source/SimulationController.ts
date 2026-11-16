@@ -7,6 +7,7 @@ export function useSimulation(report: (error: unknown) => void) {
     const latest = useRef<Native.Frame | null>(null);
     const generation = useRef(0);
     const queue = useRef(Promise.resolve());
+    const polling = useRef(false);
     const simulating = useEditor(state => state.Simulating);
     const accept = useCallback((next: Native.Frame | null) => {
         if (!next)
@@ -19,12 +20,17 @@ export function useSimulation(report: (error: unknown) => void) {
         Native.applyFrame(next);
     }, []);
     const command = useCallback((action: string, value = 0) => {
+        if (action === 'poll') {
+            if (polling.current)
+                return queue.current;
+            polling.current = true;
+        }
         const token = generation.current;
         queue.current = queue.current.then(async () => {
-            if (token !== generation.current || !latest.current)
+            if (token !== generation.current || !latest.current || (action === 'poll' && !latest.current.running))
                 return;
             try {
-                const next = await Native.simulation(action, latest.current.session, value);
+                const next = await Native.simulation(action, latest.current.session, action === 'poll' ? latest.current.sequence : value);
                 if (token === generation.current)
                     accept(next);
             }
@@ -32,17 +38,22 @@ export function useSimulation(report: (error: unknown) => void) {
                 if (token !== generation.current)
                     return;
                 generation.current++;
+                setStarting(false);
                 latest.current = null;
                 setFrame(null);
                 useEditor.setState({ Simulating: false, Runtime: new Map(), RuntimeGrid: null });
                 report(error);
                 await Native.simulation('release', 0).catch(() => { });
             }
+        }).finally(() => {
+            if (action === 'poll')
+                polling.current = false;
         });
         return queue.current;
     }, [accept, report]);
     const stop = useCallback(async () => {
         generation.current++;
+        setStarting(false);
         latest.current = null;
         setFrame(null);
         useEditor.setState({ Simulating: false, Runtime: new Map(), RuntimeGrid: null });
@@ -69,27 +80,30 @@ export function useSimulation(report: (error: unknown) => void) {
         }
         catch (error) {
             if (token === generation.current) {
+                latest.current = null;
+                setFrame(null);
                 useEditor.setState({ Simulating: false, Runtime: new Map(), RuntimeGrid: null });
                 report(error);
             }
         }
         finally {
-            setStarting(false);
+            if (token === generation.current)
+                setStarting(false);
         }
     }, [accept, command, report]);
+    const running = frame?.running ?? false;
     useEffect(() => {
-        if (!simulating)
+        if (!simulating || !running)
             return;
-        let cancelled = false;
-        let timer: number;
-        const poll = async () => {
-            await command('poll', latest.current?.sequence ?? 0);
-            if (!cancelled)
-                timer = window.setTimeout(poll, 100);
+        let animation = 0;
+        const poll = () => {
+            // Commands share one serial queue; at most one poll may wait or run.
+            void command('poll');
+            animation = requestAnimationFrame(poll);
         };
-        timer = window.setTimeout(poll, 100);
-        return () => { cancelled = true; window.clearTimeout(timer); };
-    }, [simulating, command]);
+        animation = requestAnimationFrame(poll);
+        return () => cancelAnimationFrame(animation);
+    }, [simulating, running, command]);
     useEffect(() => () => {
         generation.current++;
         if (Native.isDesktop())

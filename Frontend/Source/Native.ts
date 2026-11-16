@@ -71,10 +71,14 @@ export function applyFrame(frame: Frame) {
     const dirty = new Map<string, { x: number; y: number }>();
     for (let i = 0; i < frame.data.length; i += 2) {
         const index = frame.data[i];
+        if (grid.states[index] === frame.data[i + 1])
+            continue;
         grid.states[index] = frame.data[i + 1];
         const x = Math.floor((grid.originX + index % grid.width) / 64), y = Math.floor((grid.originY + Math.floor(index / grid.width)) / 64);
         dirty.set(`${x},${y}`, { x, y });
     }
+    if (!dirty.size)
+        return;
     const versions = grid.chunkVersions?.slice();
     const cx = Math.floor(grid.originX / 64), cy = Math.floor(grid.originY / 64), wide = Math.floor((grid.originX + grid.width - 1) / 64) - cx + 1;
     if (versions) for (const point of dirty.values()) versions[(point.y - cy) * wide + point.x - cx]++;

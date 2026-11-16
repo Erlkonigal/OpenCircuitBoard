@@ -1,5 +1,6 @@
 import { browser, $, expect } from '@wdio/globals';
 import { Key } from 'webdriverio';
+import { writeFile } from 'node:fs/promises';
 import { buildPath } from '../Paths';
 describe('Native circuit workspace', () => {
     it('renders the redesigned desktop workspace', async () => {
@@ -59,6 +60,40 @@ describe('Native circuit workspace', () => {
             await $('button[aria-label="Pause simulation"]').click();
             await $('button=Back to design').click();
         }
+    });
+    it('polls at the native display cadence without accumulating IPC requests', async () => {
+        await $('.command-trigger').click(); await $('input[aria-label="Search commands"]').setValue('new circuit'); await $('.command-options button').click();
+        await $('button[aria-label="Clock"]').click(); await $('[data-testid="board"]').click();
+        await $('input[aria-label="Ticks per second"]').setValue('120'); await browser.keys('Tab');
+        await $('button=Run circuit').click();
+        const metrics = await browser.execute(async () => {
+            const original = window.fetch, pollTimes: number[] = [], frameTimes: number[] = [];
+            let active = 0, maxActive = 0;
+            window.fetch = async (...args) => {
+                const url = args[0] instanceof Request ? args[0].url : String(args[0]);
+                const body = args[1]?.body;
+                const poll = url.endsWith('/simulationCommand') && typeof body === 'string' && JSON.parse(body).action === 'poll';
+                if (poll) { pollTimes.push(performance.now()); active++; maxActive = Math.max(maxActive, active); }
+                try { return await original(...args); }
+                finally { if (poll) active--; }
+            };
+            try {
+                await new Promise<void>(resolve => {
+                    const sample = (time: number) => { frameTimes.push(time); if (frameTimes.length < 90) requestAnimationFrame(sample); else resolve(); };
+                    requestAnimationFrame(sample);
+                });
+                return { pollTimes, frameTimes, maxActive };
+            }
+            finally { window.fetch = original; }
+        });
+        const intervals = (times: number[]) => times.slice(1).map((time, i) => time - times[i]).sort((a, b) => a - b);
+        const pollIntervals = intervals(metrics.pollTimes), frameIntervals = intervals(metrics.frameTimes);
+        await writeFile(buildPath('DesktopRefreshMetrics.json'), JSON.stringify({ ...metrics, pollIntervals, frameIntervals }, null, 2));
+        expect(metrics.maxActive).toBe(1);
+        expect(metrics.pollTimes.length).toBeGreaterThan(metrics.frameTimes.length / 2);
+        expect(pollIntervals[Math.floor(pollIntervals.length / 2)]).toBeLessThan(frameIntervals[Math.floor(frameIntervals.length / 2)] * 2.5);
+        await browser.saveScreenshot(buildPath('DesktopRefreshSimulationCapture.png'));
+        await $('button[aria-label="Pause simulation"]').click(); await $('button=Back to design').click();
     });
     it('updates the rendered latch state through native simulation IPC', async () => {
         await $('.command-trigger').click();

@@ -6,7 +6,7 @@ import { useEditor } from './EditorStore';
 import { cellKey, contains, ToolIds, type Grid, type Point } from './Model';
 import { editorInput } from './EditorInput';
 import { selectionCount } from './Selection';
-import { ComponentHighlight } from './ComponentHighlight';
+import { ComponentHighlight, drawMarquee } from './ComponentHighlight';
 export interface CameraCommand {
     action: 'none' | 'in' | 'out' | 'fit';
     sequence: number;
@@ -40,7 +40,7 @@ export function BoardCanvas({ onLatch, onCursor, onZoom, cameraCommand }: Props)
         let frame = 0;
         let tileRenderer: TileRenderer | undefined;
         let patternTexture: Texture | undefined;
-        const selectedHighlight = new ComponentHighlight(0x82baff), hoverHighlight = new ComponentHighlight(0xf2c94c);
+        let selectedHighlight: ComponentHighlight | undefined, hoverHighlight: ComponentHighlight | undefined;
         const disconnect=editorInput.connect({View:view.current,world:worldPoint,cell:cellPoint,
             redraw:()=>requestDraw.current(),cursor:p=>callbacks.current.onCursor(p),latch:p=>callbacks.current.onLatch(p)});
         void (async () => {
@@ -53,6 +53,8 @@ export function BoardCanvas({ onLatch, onCursor, onZoom, cameraCommand }: Props)
             app.canvas.setAttribute('aria-label', 'Circuit board');
             const world = new Container(), board = new Graphics(), overlay = new Graphics();
             tileRenderer = new TileRenderer(app.renderer, () => requestDraw.current());
+            selectedHighlight = new ComponentHighlight('selected');
+            hoverHighlight = new ComponentHighlight('hover');
             app.stage.addChild(world);
             const motif = new Graphics().poly([0, 64, 96, 8, 192, 64, 192, 176, 96, 232, 0, 176]).stroke({ color: '#304638', alpha: .15, width: 2 });
             patternTexture = app.renderer.generateTexture({ target: motif, frame: new Rectangle(0, 0, 256, 256), resolution: 1 });
@@ -84,11 +86,11 @@ export function BoardCanvas({ onLatch, onCursor, onZoom, cameraCommand }: Props)
                 const ids=[...new Set([...(s.Selection?.ids??[]),...s.MergeIds])];
                 const hover=editorInput.Hover,hovered=hover?s.Tiles.get(cellKey(hover))?.componentId:undefined;
                 const hoverIds=hovered&&!ids.includes(hovered)&&!s.Preview&&s.EditTool!=='split'?[hovered]:[];
-                selectedHighlight.draw(s.Tiles,s.Components,ids,v);hoverHighlight.draw(s.Tiles,s.Components,hoverIds,v);
+                selectedHighlight!.draw(s.Tiles,s.Components,ids,v,s.Simulating?s.RuntimeGrid:null);hoverHighlight!.draw(s.Tiles,s.Components,hoverIds,v,s.Simulating?s.RuntimeGrid:null);
                 element.style.cursor=editorInput.cursor;
                 element.dataset.highlightComponents=[...ids,...hoverIds].join(',');
                 element.dataset.highlightCells=String([...ids,...hoverIds].reduce((count,id)=>count+s.Components.count(id),0));
-                element.dataset.highlightObjects=String(selectedHighlight.Count+hoverHighlight.Count);
+                element.dataset.highlightObjects=String(selectedHighlight!.Count+hoverHighlight!.Count);
                 element.dataset.mergeCount=String(s.MergeIds.length);
                 element.dataset.componentCount=String(s.Components.size);
                 element.dataset.selectionKind=s.Selection?.kind??'none';
@@ -102,10 +104,10 @@ export function BoardCanvas({ onLatch, onCursor, onZoom, cameraCommand }: Props)
                 overlay.clear(); overlay.position.set(v.x, v.y);
                 const rectangle = (bounds: Grid, color: string, fill = false) => { overlay.rect(bounds.originX * Size - v.x, bounds.originY * Size - v.y, bounds.width * Size, bounds.height * Size); if (fill)
                     overlay.fill({ color, alpha: .04 }); overlay.stroke({ color, width: 2 / v.zoom }); };
-                if(s.EditTool==='draw'&&hover&&!s.Simulating&&!s.Preview&&contains(g,hover))
-                    rectangle({originX:hover.x,originY:hover.y,width:1,height:1},'#f2c94c',true);
+                if(s.EditTool==='draw'&&hover&&!hovered&&!s.Simulating&&!s.Preview&&contains(g,hover))
+                    overlay.rect(hover.x*Size-v.x,hover.y*Size-v.y,Size,Size).fill({color:'#f0f8ff',alpha:.10});
                 if(s.Preview)rectangle(s.Preview.Bounds,s.PreviewValid?'#69e6a6':'#ff657e',true);
-                if(s.Marquee)rectangle(s.Marquee.Bounds,'#82baff',true);
+                if(s.Marquee)drawMarquee(overlay,s.Marquee.Bounds,v);
                 if(s.EditTool==='split'&&!s.Simulating) {
                     if(s.SplitPath?.Edges.size) {
                         for(const edge of s.SplitPath.Edges.values())overlay.moveTo(edge.Start.x*Size-v.x,edge.Start.y*Size-v.y).lineTo(edge.End.x*Size-v.x,edge.End.y*Size-v.y);
@@ -145,7 +147,7 @@ export function BoardCanvas({ onLatch, onCursor, onZoom, cameraCommand }: Props)
             element.dataset.renderReady = 'true';
             requestDraw.current();
         })().catch(error => { element.dataset.renderError = String(error); useEditor.getState().log(String(error)); });
-        return () => { disposed = true; disconnect(); unsubscribe(); observer?.disconnect(); cancelAnimationFrame(frame); requestDraw.current = () => { }; selectedHighlight.destroy(); hoverHighlight.destroy(); tileRenderer?.destroy(); if (app.renderer)
+        return () => { disposed = true; disconnect(); unsubscribe(); observer?.disconnect(); cancelAnimationFrame(frame); requestDraw.current = () => { }; selectedHighlight?.destroy(); hoverHighlight?.destroy(); tileRenderer?.destroy(); if (app.renderer)
             app.destroy(true, { children: true }); patternTexture?.destroy(true); };
     }, []);
     useEffect(() => { if (!cameraCommand || cameraCommand.action === 'none')

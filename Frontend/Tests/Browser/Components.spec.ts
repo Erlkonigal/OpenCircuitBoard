@@ -93,12 +93,12 @@ test('whole-region highlights preserve holes and leave touching independent comp
     await expect(page.locator('.workspace-status')).toContainText('11 cells');
     const pixels=()=>page.locator('canvas[aria-label="Circuit board"]').evaluate(element=>{
         const canvas=element as HTMLCanvasElement,gl=canvas.getContext('webgl2')!,scale=canvas.width/canvas.getBoundingClientRect().width;
-        return [[0,0],[1,1],[3,1]].map(([x,y])=>{const p=new Uint8Array(4);gl.readPixels(Math.floor(canvas.width/2+(x*32+8)*scale),canvas.height-1-Math.floor(canvas.height/2+(y*32+8)*scale),1,1,gl.RGBA,gl.UNSIGNED_BYTE,p);return [...p];});
+        return [[0,0],[1,1],[3,1],[0,-.25]].map(([x,y])=>{const p=new Uint8Array(4);gl.readPixels(Math.floor(canvas.width/2+(x*32+8)*scale),canvas.height-1-Math.floor(canvas.height/2+(y*32+8)*scale),1,1,gl.RGBA,gl.UNSIGNED_BYTE,p);return [...p];});
     });
     for(const mode of ['2D','2.5D']) {
         await page.getByText(mode,{exact:true}).click();await page.mouse.move(100,25);await settle(page);const before=await pixels();
         await hoverId(page,c.x+12,c.y+12,8);await settle(page);const after=await pixels();
-        expect(after[0]).not.toEqual(before[0]);expect(after[1]).toEqual(before[1]);expect(after[2]).toEqual(before[2]);
+        expect(after[0]).not.toEqual(before[0]);expect(after[1]).toEqual(before[1]);expect(after[2]).toEqual(before[2]);expect(after[3]).not.toEqual(before[3]);
         await page.screenshot({path:buildPath(mode==='2D'?'ComponentHoleFlatCapture.png':'ComponentHoleCapture.png')});
     }
 });
