@@ -28,16 +28,27 @@ export function gridLine(start: Point, end: Point): Point[] {
 /** Mutable geometry belongs only to the current gesture; it is never document data. */
 export class SplitPath {
     readonly Edges = new Map<string, CutEdge>();
-    Last: Point;
-    constructor(start: Point) { this.Last = { ...start }; }
+    private readonly Vertices: Point[];
+    private readonly Counts = new Map<string, number>();
+    constructor(start: Point) { this.Vertices = [{ ...start }]; }
+    get Last(): Point { return this.Vertices[this.Vertices.length - 1]; }
     append(point: Point) {
         const vertices = gridLine(this.Last, point);
         for (let i = 1; i < vertices.length; i++) {
             const a = vertices[i - 1], b = vertices[i];
             const x = Math.min(a.x, b.x), y = Math.min(a.y, b.y);
             const cells: [Point, Point] = a.y === b.y ? [{ x, y: y - 1 }, { x, y }] : [{ x: x - 1, y }, { x, y }];
-            this.Edges.set(connectionKey(...cells), { Start: a, End: b, Cells: cells });
+            const key = connectionKey(...cells), previous = this.Vertices[this.Vertices.length - 2];
+            if (previous?.x === b.x && previous.y === b.y) {
+                this.Vertices.pop();
+                const count = this.Counts.get(key)! - 1;
+                if (count) this.Counts.set(key, count);
+                else { this.Counts.delete(key); this.Edges.delete(key); }
+            } else {
+                this.Vertices.push(b);
+                this.Counts.set(key, (this.Counts.get(key) ?? 0) + 1);
+                if (!this.Edges.has(key)) this.Edges.set(key, { Start: a, End: b, Cells: cells });
+            }
         }
-        this.Last = { ...point };
     }
 }

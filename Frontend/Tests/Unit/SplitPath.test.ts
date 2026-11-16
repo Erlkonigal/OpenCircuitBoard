@@ -15,8 +15,37 @@ describe('Grid-edge split paths', () => {
         const a = { x: -5, y: 3 }, b = { x: 8, y: -2 }, forward = gridLine(a, b);
         expect(forward).toEqual(gridLine(b, a).reverse()); expect(forward).toHaveLength(19);
         for (let i = 1; i < forward.length; i++) expect(Math.abs(forward[i].x - forward[i - 1].x) + Math.abs(forward[i].y - forward[i - 1].y)).toBe(1);
-        const cut = path(a, b), keys = [...cut.Edges.keys()].sort(); cut.append(a); cut.append(b); expect([...cut.Edges.keys()].sort()).toEqual(keys);
+        const cut = path(a, b), keys = [...cut.Edges.keys()].sort(); cut.append(a); expect(cut.Edges.size).toBe(0); expect(cut.Last).toEqual(a); cut.append(b); expect([...cut.Edges.keys()].sort()).toEqual(keys);
         expect([...path(b, a).Edges.keys()].sort()).toEqual(keys);
+    });
+    it('retracts the tail one step at a time across corners and can grow in a new direction', () => {
+        const cut = path({ x: 0, y: 0 }, { x: 3, y: 0 }, { x: 3, y: 2 });
+        expect(cut.Edges.size).toBe(5); cut.append({ x: 3, y: 1 }); expect(cut.Edges.size).toBe(4);
+        cut.append({ x: 3, y: 0 }); cut.append({ x: 1, y: 0 }); expect(cut.Edges.size).toBe(1); expect(cut.Last).toEqual({ x: 1, y: 0 });
+        cut.append({ x: 1, y: 2 }); expect(cut.Edges.size).toBe(3); expect(cut.Last).toEqual({ x: 1, y: 2 });
+        expect([...cut.Edges.values()].map(edge => [edge.Start, edge.End])).toEqual([
+            [{ x: 0, y: 0 }, { x: 1, y: 0 }], [{ x: 1, y: 0 }, { x: 1, y: 1 }], [{ x: 1, y: 1 }, { x: 1, y: 2 }]
+        ]);
+    });
+    it('keeps an earlier occurrence of an edge when retracting an overlapping tail', () => {
+        const cut = path({ x: 0, y: 0 }, { x: 1, y: 0 }, { x: 1, y: 1 }, { x: 0, y: 1 }, { x: 0, y: 0 });
+        const loop = [...cut.Edges.keys()].sort(); expect(cut.Edges.size).toBe(4);
+        cut.append({ x: 1, y: 0 }); cut.append({ x: 0, y: 0 }); expect([...cut.Edges.keys()].sort()).toEqual(loop);
+        cut.append({ x: 0, y: 1 }); expect(cut.Edges.size).toBe(3);
+        cut.append({ x: 1, y: 1 }); cut.append({ x: 1, y: 0 }); cut.append({ x: 0, y: 0 }); expect(cut.Edges.size).toBe(0);
+    });
+    it('uses only the remaining line after backtracking and redirection', () => {
+        load(rectangle(0, 0, 5, 2));
+        const cut = path({ x: 2, y: 0 }, { x: 2, y: 2 }, { x: 2, y: 0 }, { x: 3, y: 0 }, { x: 3, y: 2 });
+        expect(s().splitAlong(cut)).toBe(true); expect(s().Components.size).toBe(2); expect(s().Components.count(7)).toBe(6);
+        expect(s().Tiles.get('2,0')!.componentId).toBe(7); expect(s().Tiles.get('3,0')!.componentId).not.toBe(7);
+    });
+    it('treats an entirely retracted line as an empty gesture and preserves redo', () => {
+        load(rectangle(0, 0, 4, 2)); s().splitAlong(path({ x: 2, y: 0 }, { x: 2, y: 2 })); s().undo();
+        const before = s().exportProject(), selection = s().Selection;
+        s().begin(); expect(s().splitAlong(path({ x: 2, y: 0 }, { x: 2, y: 2 }, { x: 2, y: 0 }))).toBe(false);
+        expect(s().exportProject()).toEqual(before); expect(s().Selection).toEqual(selection); expect(s().Undo).toHaveLength(0); expect(s().Redo).toHaveLength(1);
+        expect(s().Active).toBeNull(); expect(s().SplitNotice).toBe(''); expect(s().EditTool).toBe('split');
     });
     it('cuts a bent boundary without deleting cells and keeps the largest region identity', () => {
         load(rectangle(0, 0, 6, 4)); const before = s().exportProject();
@@ -28,7 +57,7 @@ describe('Grid-edge split paths', () => {
     });
     it('does not extend an incomplete line or persist any partial barrier', () => {
         load(rectangle(0, 0, 4, 4)); const before = s().exportProject();
-        for (const cut of [path({ x: 2, y: 0 }, { x: 2, y: 2 }), path({ x: 1, y: 1 }, { x: 3, y: 1 }), path({ x: 0, y: 0 }, { x: 4, y: 0 }), path({ x: 1, y: 1 })]) {
+        for (const cut of [path({ x: 2, y: 0 }, { x: 2, y: 2 }), path({ x: 1, y: 1 }, { x: 3, y: 1 }), path({ x: 0, y: 0 }, { x: 4, y: 0 })]) {
             expect(s().splitAlong(cut)).toBe(false); expect(s().exportProject()).toEqual(before); expect(s().Undo).toHaveLength(0);
             expect(s().SplitNotice).toContain('did not cut'); expect(s().EditTool).toBe('split');
         }
@@ -37,7 +66,7 @@ describe('Grid-edge split paths', () => {
         load(rectangle(0, 0, 3, 3));
         const loop = path({ x: 1, y: 1 }, { x: 2, y: 1 }, { x: 2, y: 2 }, { x: 1, y: 2 }, { x: 1, y: 1 });
         expect(s().splitAlong(loop)).toBe(true); expect(s().Components.count(7)).toBe(8); expect(s().Tiles.get('1,1')!.componentId).not.toBe(7);
-        s().undo(); const cross = path({ x: 1, y: 0 }, { x: 1, y: 3 }, { x: 1, y: 1 }, { x: 0, y: 1 }, { x: 3, y: 1 });
+        s().undo(); const cross = path({ x: 1, y: 0 }, { x: 1, y: 3 }, { x: -1, y: 3 }, { x: -1, y: 1 }, { x: 3, y: 1 });
         expect(s().splitAlong(cross)).toBe(true); expect(s().Components.size).toBe(4); expect(s().Tiles.size).toBe(9);
     });
     it('partitions every crossed component independently of the current selection', () => {

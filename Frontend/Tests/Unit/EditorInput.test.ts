@@ -44,11 +44,26 @@ describe('Pointer-first interaction state machine',()=>{
         const history=s().Undo.length;expect(s().mergeSelection()).toBe(true);expect(s().Components.size).toBe(2);expect(selectionCount(s())).toBe(6);expect(s().Undo.length).toBe(history+1);
         s().undo();expect(s().Components.size).toBe(3);expect(selectionCount(s())).toBe(6);
     });
-    it('supports Ctrl multiselect and moves the group after a screen-space threshold without changing IDs',()=>{
-        stroke(0,0,2);stroke(0,1,2);click(0);click(0,1,pointer(0,false,true));expect(selectionCount(s())).toBe(6);
+    it('supports Shift multiselect and moves the group after a screen-space threshold without changing IDs',()=>{
+        stroke(0,0,2);stroke(0,1,2);click(0);click(0,1,pointer(0,true));expect(selectionCount(s())).toBe(6);
         const ids=s().Selection,history=s().Undo.length;
         input.down(pointer(),point(0));input.move({x:point(0).x+3,y:point(0).y});expect(s().Preview).toBeNull();input.up(0,point(0));expect(s().Undo.length).toBe(history);
         input.down(pointer(),point(0));input.move(point(4,3));input.up(0,point(4,3));expect(s().Selection).toEqual(ids);expect(s().Tiles.has('4,3')).toBe(true);expect(s().Tiles.has('6,4')).toBe(true);expect(s().Undo.length).toBe(history+1);
+    });
+    it('ignores Ctrl and Meta as mouse selection modifiers while Shift still toggles',()=>{
+        stroke(0,0,2);stroke(0,1,2);click(0);
+        click(0,1,pointer(0,false,true));expect(s().Selection?.ids).toEqual([s().Tiles.get('0,1')!.componentId]);
+        click(0,0,{...pointer(),metaKey:true});expect(s().Selection?.ids).toEqual([s().Tiles.get('0,0')!.componentId]);
+        click(0,1,pointer(0,true));expect(selectionCount(s())).toBe(6);
+        click(0,0,pointer(0,false,true));expect(selectionCount(s())).toBe(6);
+        s().selectTool('clock');click(5,0,pointer(0,false,true));expect(s().Tiles.get('5,0')!.toolId).toBe('clock');
+    });
+    it('removes a complete cut by retracing and releases without an edit or failure hint',()=>{
+        stroke(0,0,4);click(0);const before=s().export(),selection=s().Selection,history=s().Undo.length;
+        input.execute('split',{x:0,y:0});input.down(pointer(),{x:128,y:0});input.move({x:128,y:64});expect(s().SplitPath?.Edges.size).toBe(1);
+        input.move({x:128,y:0});expect(s().SplitPath?.Edges.size).toBe(0);input.up(0,{x:128,y:0});
+        expect(s().export()).toEqual(before);expect(s().Selection).toEqual(selection);expect(s().Undo.length).toBe(history);
+        expect(s().Active).toBeNull();expect(s().Gesture).toBe('idle');expect(s().EditTool).toBe('split');expect(s().SplitNotice).toBe('');
     });
     it('cancels painting, movement, resizing and marquee without changing cells, selection or history',()=>{
         stroke(0,0,2);click(0);const before=s().export(),selection=s().Selection,history=s().Undo.length;

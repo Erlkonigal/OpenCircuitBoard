@@ -261,4 +261,28 @@ describe('Native circuit workspace', () => {
         await browser.saveScreenshot(buildPath('DesktopDrawMergeSplitCapture.png'));await $('button=Back to design').click();
     });
 
+    it('uses Shift alone for multiselection and retracts Split previews in the native window',async()=>{
+        await browser.refresh();await browser.waitUntil(async()=>await $('[data-testid="board"]').getAttribute('data-render-ready')==='true');
+        await $('.command-trigger').click();await $('input[aria-label="Search commands"]').setValue('new circuit');await $('.command-options button').click();
+        const c=await browser.execute(()=>{const r=document.querySelector('[data-testid="board"]')!.getBoundingClientRect();return {x:Math.round(r.x+r.width/2),y:Math.round(r.y+r.height/2)};});
+        const board=$('[data-testid="board"]');
+        const click=(x:number,y:number)=>browser.action('pointer').move({x:c.x+x,y:c.y+y}).down().up().perform();
+        const drag=(y:number)=>browser.action('pointer').move({x:c.x+12,y:c.y+y}).down().move({x:c.x+140,y:c.y+y,duration:250}).up().perform();
+        await $('button[aria-label="Clock"]').click();await drag(12);await drag(44);await browser.keys('q');await click(12,12);
+        await browser.action('key').down(Key.Control).perform(true);await click(12,44);await browser.action('key').up(Key.Control).perform();await expect(board).toHaveAttribute('data-selection-cells','5');
+        await browser.action('key').down(Key.Shift).perform(true);await click(12,12);await browser.action('key').up(Key.Shift).perform();await expect(board).toHaveAttribute('data-selection-cells','10');
+        await $('button[aria-label="Merge selected components"]').click();await $('button[aria-label="Split"]').click();
+        const move=(x:number,y:number)=>browser.performActions([{type:'pointer',id:'split-pen',parameters:{pointerType:'mouse'},actions:[{type:'pointerMove',origin:'viewport',duration:120,x:c.x+x,y:c.y+y}]}]);
+        const down=()=>browser.performActions([{type:'pointer',id:'split-pen',parameters:{pointerType:'mouse'},actions:[{type:'pointerDown',button:0}]}]);
+        const up=async()=>{await browser.performActions([{type:'pointer',id:'split-pen',parameters:{pointerType:'mouse'},actions:[{type:'pointerUp',button:0}]}]);await browser.releaseActions();};
+        await move(64,0);await down();await move(64,64);await expect(board).toHaveAttribute('data-split-edges','2');
+        await move(64,32);await expect(board).toHaveAttribute('data-split-edges','1');await browser.saveScreenshot(buildPath('DesktopSplitBacktrackCapture.png'));
+        await move(64,0);await expect(board).toHaveAttribute('data-split-edges','0');await up();await expect(board).toHaveAttribute('data-component-count','1');
+        await expect(board).toHaveAttribute('data-edit-tool','split');await expect($('[role="toolbar"][aria-label="Split tool"]')).not.toHaveText(expect.stringContaining('did not cut'));
+        await browser.keys(['Control','z']);await expect(board).toHaveAttribute('data-component-count','2');
+        await browser.keys([Key.Control,Key.Shift,'z']);await expect(board).toHaveAttribute('data-component-count','1');
+        await move(64,0);await down();await move(64,64);await move(64,32);await move(96,32);await move(96,64);await expect(board).toHaveAttribute('data-split-edges','3');await up();
+        await expect(board).toHaveAttribute('data-component-count','2');await expect($('.workspace-status')).toHaveText(expect.stringContaining('10 cells'));
+    });
+
 });

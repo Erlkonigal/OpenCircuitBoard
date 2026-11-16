@@ -22,8 +22,6 @@ interface Adapter {
 interface PointerInput {
     button: number;
     shiftKey: boolean;
-    ctrlKey: boolean;
-    metaKey: boolean;
 }
 interface BaseGesture {
     Start: Point;
@@ -169,13 +167,6 @@ export class EditorInput {
             return;
         }
         const id = s.Tiles.get(cellKey(cell))?.componentId;
-        if (event.ctrlKey || event.metaKey) {
-            if (id) {
-                const ids = s.Selection?.ids ?? [];
-                s.selectComponents(ids.includes(id) ? ids.filter(n => n !== id) : [...ids, id]);
-            }
-            return;
-        }
         s.begin();
         if (selectionContains(s, cell))
             this.start({ ...base, Kind: 'pendingMove' });

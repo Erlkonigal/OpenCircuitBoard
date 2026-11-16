@@ -264,6 +264,11 @@ export const useEditor = create<State>((set, get) => ({
         const s = get();
         if (s.Simulating || s.EditTool !== 'split')
             return false;
+        if (!path.Edges.size) {
+            set({ ...EmptySplit });
+            get().commit();
+            return false;
+        }
         const ids = new Set<number>(), blocked = new Set(path.Edges.keys());
         for (const { Cells: [a, b] } of path.Edges.values()) {
             const first = s.Tiles.get(cellKey(a)), second = s.Tiles.get(cellKey(b));
