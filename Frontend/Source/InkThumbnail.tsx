@@ -1,12 +1,13 @@
 import { useEffect, useRef } from 'react';
 import { Application, Container } from 'pixi.js';
+import { isolationSource } from './IsolationStore';
 import { inkSource } from './CellStore';
 import { RenderBudget } from './ColorCache';
 import { TileRenderer } from './TileRenderer';
 import { useEditor } from './EditorStore';
 import { ToolIds, type ClipboardItem, type RenderMode } from './Model';
 const Width = 200, Height = 92;
-const Images = new WeakMap<readonly unknown[], Map<RenderMode, HTMLCanvasElement>>();
+const Images = new WeakMap<ClipboardItem, Map<RenderMode, HTMLCanvasElement>>();
 class ThumbnailRenderer {
     private App?: Application;
     private Tiles?: TileRenderer;
@@ -25,7 +26,7 @@ class ThumbnailRenderer {
     render(item: ClipboardItem, mode: RenderMode, active: () => boolean): Promise<HTMLCanvasElement | null> {
         const run = async () => {
             if (!active()) return null;
-            const existing = Images.get(item.tiles), cached = existing?.get(mode);
+            const existing = Images.get(item), cached = existing?.get(mode);
             if (cached) { RenderBudget.touch(cached, Width * Height * 16, () => existing!.delete(mode)); return cached; }
             await this.init();
             const app = this.App!, tiles = this.Tiles!, world = this.World!;
@@ -36,7 +37,7 @@ class ThumbnailRenderer {
             const source = inkSource(item);
             const draw = () => {
                 world.scale.set(view.zoom); world.position.set(Width / 2 - x * view.zoom, Height / 2 - y * view.zoom);
-                tiles.draw({ occupied: source, preview: null, previewValid: true, simulating: false, runtime: null, mode }, view);
+                tiles.draw({ occupied: source, isolation: isolationSource(item), preview: null, previewValid: true, simulating: false, runtime: null, mode }, view);
             };
             await new Promise<void>((resolve, reject) => {
                 const timeout = window.setTimeout(() => { this.Redraw = undefined; reject(Error('ThumbnailRenderTimeout')); }, 30000);
@@ -52,8 +53,8 @@ class ThumbnailRenderer {
             app.render();
             const canvas = document.createElement('canvas'); canvas.width = Width * 2; canvas.height = Height * 2;
             canvas.getContext('2d')!.drawImage(app.canvas, 0, 0);
-            let modes = Images.get(item.tiles);
-            if (!modes) { modes = new Map(); Images.set(item.tiles, modes); }
+            let modes = Images.get(item);
+            if (!modes) { modes = new Map(); Images.set(item, modes); }
             modes.set(mode, canvas);
             const savedModes = modes;
             RenderBudget.touch(canvas, canvas.width * canvas.height * 4, () => savedModes.delete(mode));

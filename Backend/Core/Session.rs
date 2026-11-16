@@ -372,7 +372,7 @@ mod tests {
             Kinds: vec![26, 15, 1, 16, 17],
             InitialStates: vec![0; 5],
             ClockHoldTicks: vec![1; 5],
-            MeshIds: vec![1; 5],
+            IsolationMasks: vec![0; 5],
         }
     }
     fn u32At(frame: &[u8], offset: usize) -> u32 {

@@ -37,7 +37,11 @@ fn replayLegacyCore() {
                 Kinds: expand(&v["kinds"]),
                 InitialStates: expand(&v["initialStates"]),
                 ClockHoldTicks: expand(&v["clockHoldTicks"]),
-                MeshIds: expand(&v["meshIds"]),
+                IsolationMasks: vec![
+                    0;
+                    v["width"].as_u64().unwrap() as usize
+                        * v["height"].as_u64().unwrap() as usize
+                ],
             };
             let result = SimulationCore::compileWithOrdering(input, *ordering.get(&id).unwrap());
             assert_eq!(

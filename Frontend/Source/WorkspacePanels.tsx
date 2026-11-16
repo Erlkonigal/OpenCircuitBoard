@@ -1,9 +1,9 @@
 import { memo, useEffect, useMemo, useState } from 'react';
 import { useShallow } from 'zustand/react/shallow';
 import { ActionIcon, Badge, Button, Group, Modal, NumberInput, ScrollArea, SegmentedControl, TextInput, Tooltip } from '@mantine/core';
-import { ArrowDownLeft, ArrowUpRight, ChevronRight, Clipboard, Copy, Grid2X2, Layers3, Search, Settings2, Trash2, X } from 'lucide-react';
+import { ArrowDownLeft, ArrowUpRight, BetweenVerticalStart, ChevronRight, Clipboard, Copy, Grid2X2, Layers3, Search, Settings2, Trash2, X } from 'lucide-react';
 import { useEditor } from './EditorStore';
-import { cellKey, iconUrl, Inks, inkColor, paletteId, type ClipboardItem, type Grid, type Point, type Tile } from './Model';
+import { cellKey, iconUrl, Inks, inkColor, paletteId, ToolIds, type ClipboardItem, type Grid, type Point, type Tile } from './Model';
 import type { Frame } from './Native';
 import { InkThumbnail } from './InkThumbnail';
 export function ToolGlyph({ id, size = 18 }: {
@@ -13,30 +13,33 @@ export function ToolGlyph({ id, size = 18 }: {
     return <span className="tool-glyph" aria-hidden style={{ width: size, height: size, backgroundColor: inkColor(id), maskImage: `url("${iconUrl(id)}")` }}/>;
 }
 export const ComponentLibrary = memo(function ComponentLibrary() {
+    const editTool = useEditor(state => state.EditTool);
     const selected = useEditor(state => state.Board.selectedTool);
     const simulating = useEditor(state => state.Simulating);
     const [query, setQuery] = useState('');
     const categories = ['Space Optimization', 'Trace', 'Gates', 'General Components'];
     const names: Record<string, string> = { 'Space Optimization': 'Routing', Trace: 'Connections', Gates: 'Logic gates', 'General Components': 'Sources & output' };
     const matching = Inks.filter(ink => `${ink.title} ${ink.category}`.toLowerCase().includes(query.toLowerCase().trim()));
+    const showIsolation = !query.trim() || 'isolation boundary'.includes(query.toLowerCase().trim());
     return <>
-    <div className="panel-heading"><div><span className="eyebrow">BUILD YOUR CIRCUIT</span><h2>Components</h2></div><Badge size="sm" variant="light" color="gray">27</Badge></div>
+    <div className="panel-heading"><div><span className="eyebrow">BUILD YOUR CIRCUIT</span><h2>Components</h2></div><Badge size="sm" variant="light" color="gray">{ToolIds.length - 1}</Badge></div>
     <div className="library-search"><TextInput aria-label="Search components" placeholder="Find a component..." size="xs" leftSection={<Search size={14}/>} value={query} onChange={event => setQuery(event.currentTarget.value)}/></div>
     <ScrollArea className="panel-scroll" offsetScrollbars>
       <div className="component-groups">
+        {showIsolation && <section className="component-group"><h3>Tools</h3><button type="button" className={`component-button isolation-button ${editTool === 'isolation' ? 'active' : ''}`} aria-label="Isolation" aria-pressed={editTool === 'isolation'} disabled={simulating} onClick={() => useEditor.getState().selectTool('isolation')}><BetweenVerticalStart size={18}/><span>Isolation</span></button></section>}
         {categories.map(category => {
             const inks = matching.filter(ink => ink.category === category);
             if (!inks.length)
                 return null;
             return <section className="component-group" key={category}><h3>{names[category]}</h3><div className="component-grid">{inks.map(ink => {
-                    const active = paletteId(selected) === ink.id;
+                    const active = editTool === 'ink' && paletteId(selected) === ink.id;
                     return <Tooltip key={ink.id} label={ink.title} position="right" openDelay={600}><button type="button" className={`component-button ${active ? 'active' : ''}`} aria-label={ink.title} aria-pressed={active} disabled={simulating} onClick={() => useEditor.getState().selectTool(active ? selected : ink.id)}><ToolGlyph id={active ? selected : ink.id}/><span>{ink.title}</span>{active && <span className="component-active-dot"/>}</button></Tooltip>;
                 })}</div></section>;
         })}
-        {!matching.length && <div className="panel-empty"><Search size={22}/><p>No matching components</p><small>Try a name such as clock or trace.</small></div>}
+        {!matching.length && !showIsolation && <div className="panel-empty"><Search size={22}/><p>No matching components</p><small>Try a name such as clock or trace.</small></div>}
       </div>
     </ScrollArea>
-    <div className="library-note"><ArrowDownLeft size={14}/><span>Choose a component, then draw.</span></div>
+    <div className="library-note"><ArrowDownLeft size={14}/><span>{editTool === 'isolation' ? 'Left-drag an edge to isolate. Right-drag to erase.' : 'Choose a component, then draw.'}</span></div>
   </>;
 });
 export function ClipboardLibrary({ cursor, onSaveBlueprint }: {
@@ -48,7 +51,7 @@ export function ClipboardLibrary({ cursor, onSaveBlueprint }: {
     const simulating = useEditor(state => state.Simulating);
     return <>
     <div className="panel-heading"><div><span className="eyebrow">REUSE & REPEAT</span><h2>Clipboard</h2></div><Badge size="sm" variant="light" color="gray">{entries.length}/4</Badge></div>
-    <ScrollArea className="panel-scroll" offsetScrollbars><div className="clipboard-list">{entries.map((item, index) => <button type="button" className={`clipboard-entry ${selected === index ? 'active' : ''}`} key={index} aria-label={`Clipboard item ${index + 1}`} onClick={() => useEditor.setState({ ClipboardIndex: index })}><div className="clipboard-entry-title"><strong>{index === 0 ? 'Latest selection' : `Selection ${index + 1}`}</strong><span>{item.tiles.length} cells</span></div><InkThumbnail item={item}/><div className="clipboard-entry-meta"><span>{item.width} x {item.height}</span><span>{selected === index ? 'Ready to paste' : 'Select to use'}</span></div></button>)}{!entries.length && <div className="panel-empty"><Clipboard size={26}/><p>A place for your building blocks</p><small>Select cells and press Ctrl+C to keep a copy here.</small></div>}</div></ScrollArea>
+    <ScrollArea className="panel-scroll" offsetScrollbars><div className="clipboard-list">{entries.map((item, index) => <button type="button" className={`clipboard-entry ${selected === index ? 'active' : ''}`} key={index} aria-label={`Clipboard item ${index + 1}`} onClick={() => useEditor.setState({ ClipboardIndex: index })}><div className="clipboard-entry-title"><strong>{index === 0 ? 'Latest selection' : `Selection ${index + 1}`}</strong><span>{item.tiles.length} cells{item.isolationEdges?.length ? ` | ${item.isolationEdges.length} edges` : ''}</span></div><InkThumbnail item={item}/><div className="clipboard-entry-meta"><span>{item.width} x {item.height}</span><span>{selected === index ? 'Ready to paste' : 'Select to use'}</span></div></button>)}{!entries.length && <div className="panel-empty"><Clipboard size={26}/><p>A place for your building blocks</p><small>Select cells and press Ctrl+C to keep a copy here.</small></div>}</div></ScrollArea>
     <div className="panel-bottom"><Button fullWidth mb="xs" size="xs" variant="default" disabled={selected < 0 || simulating} onClick={onSaveBlueprint}>Save as blueprint</Button><Button fullWidth size="xs" variant="light" leftSection={<Copy size={14}/>} disabled={selected < 0 || simulating} onClick={() => useEditor.getState().paste(cursor)}>Paste selection <kbd>Ctrl V</kbd></Button></div>
   </>;
 }
@@ -69,7 +72,7 @@ export function BlueprintLibrary({ onCreate }: { onCreate: (fromClipboard: boole
       <div className="library-search"><TextInput aria-label="Search blueprints" placeholder="Find a blueprint..." size="xs" leftSection={<Search size={14}/>} value={query} onChange={event => { setQuery(event.currentTarget.value); setScroll(0); }}/></div>
       <ScrollArea className="panel-scroll" onScrollPositionChange={({ y }) => setScroll(y)}><div className="blueprint-list" style={{ height: matching.length * rowHeight }}>
         {matching.slice(start, end).map((item, index) => <div className="blueprint-entry" key={item.id} style={{ position: 'absolute', top: (start + index) * rowHeight, height: rowHeight - 10 }}>
-          <button type="button" className="blueprint-use" aria-pressed={current?.tiles === item.tiles} aria-label={`Copy blueprint ${item.name}`} disabled={simulating} onClick={() => useEditor.getState().useBlueprint(item.id)}><strong>{item.name}</strong><InkThumbnail item={item}/><span>{item.width} x {item.height} | {item.tiles.length.toLocaleString()} cells</span></button>
+          <button type="button" className="blueprint-use" aria-pressed={current?.tiles === item.tiles} aria-label={`Copy blueprint ${item.name}`} disabled={simulating} onClick={() => useEditor.getState().useBlueprint(item.id)}><strong>{item.name}</strong><InkThumbnail item={item}/><span>{item.width} x {item.height} | {item.tiles.length.toLocaleString()} cells{item.isolationEdges?.length ? ` | ${item.isolationEdges.length} edges` : ''}</span></button>
           <div className="blueprint-actions"><Tooltip label="Rename blueprint"><ActionIcon size="sm" variant="subtle" aria-label={`Rename blueprint ${item.name}`} disabled={simulating} onClick={() => { setRenaming(item.id); setName(item.name); }}><Settings2 size={13}/></ActionIcon></Tooltip><Tooltip label="Delete blueprint"><ActionIcon size="sm" variant="subtle" color="red" aria-label={`Delete blueprint ${item.name}`} disabled={simulating} onClick={() => useEditor.getState().deleteBlueprint(item.id)}><Trash2 size={13}/></ActionIcon></Tooltip></div>
         </div>)}
       </div>{!matching.length && <div className="panel-empty"><Layers3 size={24}/><p>{entries.length ? 'No matching blueprints' : 'Keep reusable circuits here'}</p><small>Save a selection or clipboard item, then select it and use Ctrl+V.</small></div>}</ScrollArea>
@@ -91,9 +94,6 @@ export function ToolSettings({ id, selection = false }: {
     if (family === 'clock')
         return <NumberInput label="Clock hold" description="Ticks before switching state" aria-label="Clock hold" min={1} max={2147483647} allowDecimal={false} size="xs" value={tile?.clockHoldTicks ?? board.clockHoldTicks} disabled={simulating} onChange={value => { if (typeof value === 'number')
             configure({ clockHoldTicks: value }); }}/>;
-    if (family === 'mesh')
-        return <NumberInput label="Mesh ID" description="Matching IDs share a connection" aria-label="Mesh ID" min={1} max={2147483647} allowDecimal={false} size="xs" value={tile?.meshId ?? board.meshId} disabled={simulating} onChange={value => { if (typeof value === 'number')
-            configure({ meshId: value }); }}/>;
     if (family === 'latch')
         return <div className="field-stack"><label>Initial state</label><SegmentedControl fullWidth size="xs" disabled={simulating} value={(tile?.isOn ?? board.latchInitialState) ? 'on' : 'off'} data={[{ label: 'On', value: 'on' }, { label: 'Off', value: 'off' }]} onChange={value => configure({ isOn: value === 'on' })}/><small>The state used when simulation starts.</small></div>;
     const variants = Inks.find(ink => ink.id === family)?.variants;
@@ -115,7 +115,7 @@ function BoardProperties() {
     const changed = fields.some(([field]) => draft[field] !== grid[field]);
     const apply = () => {
         if (!useEditor.getState().resize(draft)) {
-            setError('Keep at least 4 x 4 cells and include all components.');
+            setError('Keep at least 4 x 4 cells and include all components and isolation edges.');
             return;
         }
         useEditor.getState().commit();
@@ -128,18 +128,21 @@ export function Inspector({ frame, onSaveBlueprint }: {
     onSaveBlueprint: () => void;
     frame: Frame | null;
 }) {
-    const state = useEditor(useShallow(state => ({ Board: state.Board, Selection: state.Selection, Tiles: state.Tiles, Simulating: state.Simulating, copy: state.copy, deleteSelection: state.deleteSelection, select: state.select })));
+    const state = useEditor(useShallow(state => ({ Board: state.Board, Isolation: state.Isolation, EditTool: state.EditTool, Selection: state.Selection, Tiles: state.Tiles, Simulating: state.Simulating, copy: state.copy, deleteSelection: state.deleteSelection, select: state.select })));
     const selected = useMemo(() => state.Selection?.cells.map(key => state.Tiles.get(key)).filter((tile): tile is Tile => !!tile) ?? [], [state.Selection, state.Tiles]);
+    const edgeCount = state.Selection?.isolationEdges?.length ?? 0;
+    const selectionPresent = !!state.Selection;
+    const isolationTool = state.EditTool === 'isolation' && !selectionPresent;
     const homogeneous = useMemo(() => selected.length > 0 && selected.every(tile => paletteId(tile.toolId) === paletteId(selected[0].toolId)), [selected]);
     const id = homogeneous ? selected[0].toolId : state.Board.selectedTool;
     const title = Inks.find(ink => ink.id === paletteId(id))?.title ?? id;
     return <>
     <div className="panel-heading inspector-heading"><div><span className="eyebrow">FINE TUNE</span><h2>Inspector</h2></div><Settings2 size={17}/></div>
     <ScrollArea className="panel-scroll" offsetScrollbars>
-      <section className="inspector-section"><div className="section-topline"><h3>{selected.length ? 'Selection' : 'Active component'}</h3>{selected.length > 0 && <Badge size="xs" variant="light" color="teal">{selected.length} cells</Badge>}</div>
-        <div className="active-component"><div className="active-component-symbol"><ToolGlyph id={id} size={23}/></div><div><strong>{homogeneous || !selected.length ? title : 'Mixed components'}</strong><small>{selected.length ? 'Changes apply to selected cells' : 'Click or drag to place'}</small></div></div>
-        {homogeneous || !selected.length ? <ToolSettings key={`${id}:${!!selected.length}`} id={id} selection={homogeneous}/> : <p className="property-description">Select a single component type to edit its properties.</p>}
-        {selected.length > 0 && <Group mt="md" gap={6}><Button size="xs" variant="default" leftSection={<Copy size={12}/>} disabled={state.Simulating} onClick={() => state.copy()}>Copy</Button><Button size="xs" variant="subtle" color="red" leftSection={<Trash2 size={12}/>} disabled={state.Simulating} onClick={state.deleteSelection}>Delete</Button><Button size="xs" variant="subtle" disabled={state.Simulating} onClick={onSaveBlueprint}>Save blueprint</Button><ActionIcon ml="auto" size="sm" variant="subtle" color="gray" aria-label="Clear selection" onClick={() => state.select(null)}><X size={13}/></ActionIcon></Group>}
+      <section className="inspector-section"><div className="section-topline"><h3>{selectionPresent ? 'Selection' : isolationTool ? 'Isolation tool' : 'Active component'}</h3>{selectionPresent && <Badge size="xs" variant="light" color="teal">{selected.length} cells{edgeCount ? ` | ${edgeCount} edges` : ''}</Badge>}</div>
+        <div className="active-component"><div className="active-component-symbol">{isolationTool || (selectionPresent && !selected.length) ? <BetweenVerticalStart size={23}/> : <ToolGlyph id={id} size={23}/>}</div><div><strong>{isolationTool || (selectionPresent && !selected.length) ? 'Isolation' : homogeneous || !selected.length ? title : 'Mixed components'}</strong><small>{selectionPresent ? edgeCount ? 'Selection includes perimeter edges' : 'Drag selection to move' : isolationTool ? 'Draw on grid edges' : 'Click or drag to place'}</small></div></div>
+        {isolationTool || (selectionPresent && !selected.length) ? <p className="property-description">Blocks merging and signal connections across the edge. Left-drag to add; right-drag to erase. Zoom in to at least 12 pixels per cell to edit.</p> : homogeneous || !selected.length ? <ToolSettings key={`${id}:${!!selected.length}`} id={id} selection={homogeneous}/> : <p className="property-description">Select a single component type to edit its properties.</p>}
+        {selectionPresent && <Group mt="md" gap={6}><Button size="xs" variant="default" leftSection={<Copy size={12}/>} disabled={state.Simulating} onClick={() => state.copy()}>Copy</Button><Button size="xs" variant="subtle" color="red" leftSection={<Trash2 size={12}/>} disabled={state.Simulating} onClick={state.deleteSelection}>Delete</Button><Button size="xs" variant="subtle" disabled={state.Simulating} onClick={onSaveBlueprint}>Save blueprint</Button><ActionIcon ml="auto" size="sm" variant="subtle" color="gray" aria-label="Clear selection" onClick={() => state.select(null)}><X size={13}/></ActionIcon></Group>}
       </section>
       {frame && <section className="inspector-section simulation-summary"><h3><Layers3 size={14}/>Live simulation</h3><div className="metric-grid"><div><span>Current tick</span><strong>{frame.tick.toLocaleString()}</strong></div><div><span>Throughput</span><strong>{Math.round(frame.tps).toLocaleString()}<small> TPS</small></strong></div></div><div className="capacity-row"><span>Measured capacity</span><span>{Math.round(frame.capacity).toLocaleString()} TPS</span></div></section>}
       <BoardProperties />

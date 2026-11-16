@@ -24,15 +24,13 @@ fn roundTripAndAtomicOverwrite() {
             ToolId: "clock".into(),
             IsOn: true,
             ClockHoldTicks: Some(4),
-            MeshId: None,
         },
         Tile {
             X: 0,
             Y: 0,
-            ToolId: "mesh".into(),
+            ToolId: "latch".into(),
             IsOn: false,
             ClockHoldTicks: None,
-            MeshId: Some(17),
         },
     ];
     save(
@@ -62,7 +60,7 @@ fn versionAndLegacyDefaults() {
     let file = path("legacy");
     archive(
         &file,
-        &serde_json::json!({"formatVersion":2,"board":{"selectedTool":"or","clockHoldTicks":4,"meshId":7,"tiles":[{"x":0,"y":0,"toolId":"clock"}]}}),
+        &serde_json::json!({"formatVersion":2,"board":{"selectedTool":"or","clockHoldTicks":4,"tiles":[{"x":0,"y":0,"toolId":"clock"}]}}),
     );
     let board = load(&file).unwrap().Board;
     assert_eq!(board.Grid, Grid::default());
@@ -90,7 +88,6 @@ fn invalidBoardDoesNotReplaceExistingFile() {
         ToolId: "or".into(),
         IsOn: true,
         ClockHoldTicks: None,
-        MeshId: None,
     }];
     assert!(
         save(
@@ -125,7 +122,6 @@ fn inputCropsToOccupiedBoundsAndKeepsKindIds() {
             ToolId: "latch".into(),
             IsOn: false,
             ClockHoldTicks: None,
-            MeshId: None,
         },
         Tile {
             X: 1,
@@ -133,7 +129,6 @@ fn inputCropsToOccupiedBoundsAndKeepsKindIds() {
             ToolId: "clock".into(),
             IsOn: true,
             ClockHoldTicks: Some(5),
-            MeshId: None,
         },
     ];
     let (input, origin) = board.compileInput().unwrap();
@@ -148,7 +143,7 @@ fn missingTileStatesInheritLegacyDefaults() {
     let file = path("legacy-latch");
     archive(
         &file,
-        &serde_json::json!({"formatVersion":2,"board":{"latchInitialState":false,"tiles":[{"x":0,"y":0,"toolId":"latch"},{"x":1,"y":0,"toolId":"mesh"}]}}),
+        &serde_json::json!({"formatVersion":2,"board":{"latchInitialState":false,"tiles":[{"x":0,"y":0,"toolId":"latch"},{"x":1,"y":0,"toolId":"latch"}]}}),
     );
     let board = load(&file).unwrap().Board;
     assert!(!board.Tiles[0].IsOn);
@@ -165,6 +160,7 @@ fn blueprintsRoundTripAndRejectInvalidSnapshots() {
         Name: "Clock pair".into(),
         Width: 3,
         Height: 2,
+        IsolationEdges: vec![],
         Tiles: vec![
             Tile {
                 X: 0,
@@ -172,15 +168,13 @@ fn blueprintsRoundTripAndRejectInvalidSnapshots() {
                 ToolId: "clock".into(),
                 IsOn: false,
                 ClockHoldTicks: Some(9),
-                MeshId: None,
             },
             Tile {
                 X: 2,
                 Y: 1,
-                ToolId: "mesh".into(),
+                ToolId: "latch".into(),
                 IsOn: false,
                 ClockHoldTicks: None,
-                MeshId: Some(17),
             },
         ],
     });
@@ -207,5 +201,98 @@ fn blueprintsRoundTripAndRejectInvalidSnapshots() {
         &serde_json::json!({"formatVersion":2,"board":{},"blueprints":[{"id":"x","name":"Invalid","width":1,"height":1,"tiles":[]}]}),
     );
     assert_eq!(load(&file).unwrap_err(), "ProjectBlueprintInvalid");
+    fs::remove_file(file).unwrap();
+}
+
+#[test]
+fn isolationRoundTripsIncludingEmptySpaceAndBlueprintPerimeters() {
+    let file = path("isolation");
+    let mut project = ProjectDocument::default();
+    let edge = IsolationEdge {
+        X: -2,
+        Y: 1,
+        Axis: EdgeAxis::Vertical,
+    };
+    project.Board.IsolationEdges = vec![edge.clone(), edge.clone()];
+    project.Blueprints.push(Blueprint {
+        Id: "divider".into(),
+        Name: "Divider".into(),
+        Width: 1,
+        Height: 2,
+        Tiles: vec![],
+        IsolationEdges: vec![IsolationEdge {
+            X: 1,
+            Y: 1,
+            Axis: EdgeAxis::Vertical,
+        }],
+    });
+    save(&file, &project).unwrap();
+    project.Board.IsolationEdges.pop();
+    assert_eq!(load(&file).unwrap(), project);
+    project.Board.IsolationEdges.push(IsolationEdge {
+        X: 20,
+        Y: 14,
+        Axis: EdgeAxis::Horizontal,
+    });
+    assert_eq!(save(&file, &project).unwrap_err(), "ProjectBoardInvalid");
+    fs::remove_file(file).unwrap();
+}
+#[test]
+fn isolationCompilesToCroppedCanonicalMasks() {
+    let mut board = Board::default();
+    board.Tiles = vec![
+        Tile {
+            X: -2,
+            Y: -1,
+            ToolId: "latch".into(),
+            IsOn: false,
+            ClockHoldTicks: None,
+        },
+        Tile {
+            X: -1,
+            Y: 0,
+            ToolId: "latch".into(),
+            IsOn: false,
+            ClockHoldTicks: None,
+        },
+    ];
+    board.IsolationEdges = vec![
+        IsolationEdge {
+            X: -1,
+            Y: -1,
+            Axis: EdgeAxis::Vertical,
+        },
+        IsolationEdge {
+            X: -2,
+            Y: 0,
+            Axis: EdgeAxis::Horizontal,
+        },
+        IsolationEdge {
+            X: 5,
+            Y: 5,
+            Axis: EdgeAxis::Vertical,
+        },
+    ];
+    let (data, origin) = board.compileInput().unwrap();
+    assert_eq!(origin, (-2, -1));
+    assert_eq!(data.IsolationMasks, vec![3, 0, 0, 0]);
+    assert_eq!(toolKind("read"), Some(15));
+    assert_eq!(toolKind("latch"), Some(25));
+}
+#[test]
+fn unknownModulesFailUniformlyInBoardsAndBlueprints() {
+    let file = path("unknown");
+    for kind in ["mesh", "undefined"] {
+        archive(
+            &file,
+            &serde_json::json!({"formatVersion":2,"board":{"tiles":[{"x":0,"y":0,"toolId":kind}]}}),
+        );
+        assert_eq!(load(&file).unwrap_err(), "ProjectBoardInvalid");
+        archive(
+            &file,
+            &serde_json::json!({"formatVersion":2,"board":{},"blueprints":[{"id":"x","name":"Bad","width":1,"height":1,"tiles":[{"x":0,"y":0,"toolId":kind,"isOn":false}]}]}),
+        );
+        assert_eq!(load(&file).unwrap_err(), "ProjectBlueprintInvalid");
+    }
     fs::remove_file(file).unwrap();
 }

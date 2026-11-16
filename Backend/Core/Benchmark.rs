@@ -31,7 +31,7 @@ fn main() {
         Kinds: vec![0; count],
         InitialStates: vec![0; count],
         ClockHoldTicks: vec![1; count],
-        MeshIds: vec![0; count],
+        IsolationMasks: vec![0; count],
     };
     for lane in 0..lanes {
         if unary {

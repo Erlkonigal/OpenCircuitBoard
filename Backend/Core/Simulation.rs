@@ -11,7 +11,7 @@ pub struct CompileInput {
     pub Kinds: Vec<i32>,
     pub InitialStates: Vec<i32>,
     pub ClockHoldTicks: Vec<i32>,
-    pub MeshIds: Vec<i32>,
+    pub IsolationMasks: Vec<i32>,
 }
 #[derive(Clone, Debug, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -284,7 +284,7 @@ impl SimulationCore {
             &input.Kinds,
             &input.InitialStates,
             &input.ClockHoldTicks,
-            &input.MeshIds,
+            &input.IsolationMasks,
         ]
         .iter()
         .any(|v| v.len() != count)
@@ -302,19 +302,19 @@ impl SimulationCore {
         hash(width as i32);
         hash(height as i32);
         for cell in 0..count {
-            if !(0..=27).contains(&kinds[cell]) {
+            if !matches!(kinds[cell], 0..=13 | 15..=27) {
                 return Err(fail(Some(cell), "unknown_kind"));
             }
             if kinds[cell] == 26 && input.ClockHoldTicks[cell] <= 0 {
                 return Err(fail(Some(cell), "invalid_clock_hold_ticks"));
             }
-            if kinds[cell] == 14 && input.MeshIds[cell] <= 0 {
-                return Err(fail(Some(cell), "missing_mesh_id"));
+            if !(0..=3).contains(&input.IsolationMasks[cell]) {
+                return Err(fail(Some(cell), "invalid_isolation_mask"));
             }
             hash(kinds[cell]);
             hash(input.InitialStates[cell]);
             hash(input.ClockHoldTicks[cell]);
-            hash(input.MeshIds[cell]);
+            hash(input.IsolationMasks[cell]);
         }
         let neighbor = |cell: usize, dx: i32, dy: i32| -> Option<usize> {
             let x = (cell % width) as i32 + dx;
@@ -322,7 +322,13 @@ impl SimulationCore {
             if x < 0 || y < 0 || x >= width as i32 || y >= height as i32 {
                 None
             } else {
-                Some(y as usize * width + x as usize)
+                let next = y as usize * width + x as usize;
+                let (owner, bit) = if dx != 0 {
+                    (cell.min(next), 1)
+                } else {
+                    (cell.min(next), 2)
+                };
+                (input.IsolationMasks[owner] & bit == 0).then_some(next)
             }
         };
         let directions = [(-1, 0), (1, 0), (0, -1), (0, 1)];
@@ -408,26 +414,6 @@ impl SimulationCore {
                 }
             }
         }
-        let mut meshes = HashMap::new();
-        let mut meshAnchors = HashMap::new();
-        for cell in 0..count {
-            if kinds[cell] != 14 {
-                continue;
-            }
-            let mut channels = [usize::MAX; 6];
-            for (dx, dy) in directions {
-                if let Some(n) = neighbor(cell, dx, dy) {
-                    if isTrace(kinds[n]) {
-                        let c = color(kinds[n]);
-                        let key = (input.MeshIds[cell], c);
-                        let anchor = *meshAnchors.entry(key).or_insert_with(|| conductors.add());
-                        channels[c] = anchor;
-                        conductors.unite(anchor, n);
-                    }
-                }
-            }
-            meshes.insert(cell, channels);
-        }
         let mut networkRoots = HashMap::new();
         let mut networkByCell = vec![usize::MAX; count];
         let mut getNetwork = |node: usize| {
@@ -440,11 +426,6 @@ impl SimulationCore {
         for cell in 0..count {
             if isConductor(kinds[cell]) {
                 networkByCell[cell] = getNetwork(cell);
-            }
-            if let Some(channels) = meshes.get_mut(&cell) {
-                for n in channels {
-                    *n = getNetwork(*n);
-                }
             }
             if let Some(channels) = cross.get_mut(&cell) {
                 for n in channels {
@@ -666,13 +647,6 @@ impl SimulationCore {
                 13 => {
                     for &n in &cross[&cell] {
                         unique(nodes, resolve(mapRaw(componentCount + n)));
-                    }
-                }
-                14 => {
-                    for &n in &meshes[&cell] {
-                        if n != usize::MAX {
-                            unique(nodes, resolve(mapRaw(componentCount + n)));
-                        }
                     }
                 }
                 15 => nodes.push(resolve(mapRaw(readNode(readByCell[cell])))),
@@ -1340,5 +1314,116 @@ pub struct Snapshot {
 impl Snapshot {
     pub fn byteCount(&self) -> usize {
         32 + self.States.len() * 6
+    }
+}
+
+#[cfg(test)]
+mod isolationTests {
+    use super::*;
+    fn input(width: usize, height: usize, kinds: Vec<i32>) -> CompileInput {
+        CompileInput {
+            Width: width,
+            Height: height,
+            Kinds: kinds,
+            InitialStates: vec![0; width * height],
+            ClockHoldTicks: vec![1; width * height],
+            IsolationMasks: vec![0; width * height],
+        }
+    }
+    #[test]
+    fn adjacentLatchesSplitOnlyAtBlockedEdges() {
+        for (width, height, bit) in [(2, 1, 1), (1, 2, 2)] {
+            let mut data = input(width, height, vec![25, 25]);
+            let mut joined = SimulationCore::compile(data.clone()).unwrap();
+            joined.toggleLatch(0).unwrap();
+            assert_eq!(joined.states(), &[1, 1]);
+            data.IsolationMasks[0] = bit;
+            let mut split = SimulationCore::compile(data).unwrap();
+            split.toggleLatch(0).unwrap();
+            assert_eq!(split.states(), &[1, 0]);
+            let snapshot = split.capture();
+            split.toggleLatch(1).unwrap();
+            assert_eq!(split.states(), &[1, 1]);
+            split.restore(&snapshot).unwrap();
+            assert_eq!(split.states(), &[1, 0]);
+            assert!(joined.restore(&snapshot).is_err());
+            split.resetSilent();
+            assert_eq!(split.states(), &[0, 0]);
+        }
+    }
+    #[test]
+    fn parallelLanesIsolatePortsConductorsAndDevices() {
+        for conductor in [1, 2, 3, 4, 5, 6] {
+            let mut data = input(
+                5,
+                2,
+                vec![25, 15, conductor, 16, 17, 25, 15, conductor, 16, 17],
+            );
+            data.IsolationMasks[..5].fill(2);
+            let mut core = SimulationCore::compile(data).unwrap();
+            core.toggleLatch(0).unwrap();
+            core.advanceSilent(1);
+            assert_eq!(
+                core.states(),
+                &[1, 1, 1, 1, 1, 0, 0, 0, 0, 0],
+                "kind {conductor}"
+            );
+            core.toggleLatch(5).unwrap();
+            core.advanceSilent(1);
+            assert_eq!(core.states(), &[1; 10]);
+        }
+        // Cross and Bus cells connect through matching traces on either side.
+        for connector in [10, 13] {
+            let mut data = input(
+                7,
+                2,
+                vec![
+                    25, 15, 1, connector, 1, 16, 17, 25, 15, 1, connector, 1, 16, 17,
+                ],
+            );
+            data.IsolationMasks[..7].fill(2);
+            let mut core = SimulationCore::compile(data).unwrap();
+            core.toggleLatch(0).unwrap();
+            core.advanceSilent(1);
+            assert_eq!(core.states(), &[1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0]);
+        }
+    }
+    #[test]
+    fn barriersCutSignalBindingsAndAllowAlternateRoutes() {
+        for owner in 0..4 {
+            let mut data = input(5, 1, vec![25, 15, 1, 16, 17]);
+            data.IsolationMasks[owner] = 1;
+            assert!(
+                SimulationCore::compile(data).is_err(),
+                "port on either side of barrier must be validated"
+            );
+        }
+        let mut data = input(2, 2, vec![25; 4]);
+        data.IsolationMasks[0] = 1;
+        let mut core = SimulationCore::compile(data.clone()).unwrap();
+        core.toggleLatch(0).unwrap();
+        assert_eq!(core.states(), &[1; 4]);
+        data.IsolationMasks[2] = 1;
+        let mut core = SimulationCore::compile(data).unwrap();
+        core.toggleLatch(0).unwrap();
+        assert_eq!(core.states(), &[1, 0, 1, 0]);
+    }
+    #[test]
+    fn undefinedKindsAndInvalidMasksUseGenericValidation() {
+        for kind in [-1, 14, 28, 999] {
+            let error = SimulationCore::compile(input(1, 1, vec![kind]))
+                .err()
+                .unwrap();
+            assert_eq!(error.ErrorReason, "unknown_kind");
+            assert_eq!((error.ErrorX, error.ErrorY), (0, 0));
+        }
+        for mask in [-1, 4, 16] {
+            let mut data = input(1, 1, vec![25]);
+            data.IsolationMasks[0] = mask;
+            assert_eq!(
+                SimulationCore::compile(data).err().unwrap().ErrorReason,
+                "invalid_isolation_mask"
+            );
+        }
     }
 }

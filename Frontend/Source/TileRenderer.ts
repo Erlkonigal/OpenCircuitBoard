@@ -1,5 +1,7 @@
 import { AlphaFilter, Assets, BlurFilter, Container, FillGradient, Graphics, GraphicsContext, Matrix, Rectangle, RenderTexture, Sprite, type Renderer, type Texture } from 'pixi.js';
-import { cellKey, iconUrl, inkColor, type Tile, type RenderMode, type Grid } from './Model';
+import { cellKey, hasGlyph, iconUrl, inkColor, type Tile, type RenderMode, type Grid } from './Model';
+import { IsolationStore } from './IsolationStore';
+import { IsolationRenderer } from './IsolationRenderer';
 import { CellStore } from './CellStore';
 import { ColorCache } from './ColorCache';
 import { colorKey, colorLevel, detailLevel } from './ColorPyramid';
@@ -15,6 +17,7 @@ export interface TileView {
 }
 export interface TileScene {
     occupied: CellStore;
+    isolation?: IsolationStore;
     preview: import('./EditorStore').PlacementPreview | null;
     previewValid: boolean;
     simulating: boolean;
@@ -295,6 +298,12 @@ export class TileRenderer {
     private readonly Icons = new Map<string, Texture>();
     private readonly Retired: Texture[] = [];
     private Disposed = false;
+    private readonly Isolation = new IsolationRenderer();
+    private readonly MovingIsolation = new IsolationRenderer(.2);
+    private readonly PreviewIsolation = new IsolationRenderer(.5);
+    private BoardIsolation?: IsolationStore;
+    private OriginalIsolation?: IsolationStore;
+    private SolidIsolation?: IsolationStore;
 
     private BoardSource?: CellStore;
     private MovingSource?: CellStore;
@@ -303,10 +312,10 @@ export class TileRenderer {
         this.Solid = new TileGroup(Renderer, redraw);
         this.Moving = new TileGroup(Renderer, redraw, .2);
         this.Preview = new TileGroup(Renderer, redraw, .5);
-        this.Layer.addChild(this.Solid.Layer, this.Moving.Layer, this.Preview.Layer);
+        this.Layer.addChild(this.Solid.Layer, this.Moving.Layer, this.Preview.Layer, this.Isolation.Layer, this.MovingIsolation.Layer, this.PreviewIsolation.Layer);
     }
     async loadIcons(ids: Iterable<string>) {
-        await Promise.all([...ids].flatMap(id => [true, false].map(async on => {
+        await Promise.all([...ids].filter(hasGlyph).flatMap(id => [true, false].map(async on => {
             try {
                 const texture = await Assets.load<Texture>(iconUrl(id, on));
                 if (!this.Disposed)
@@ -326,7 +335,7 @@ export class TileRenderer {
         const face = new Container();
         face.addChild(new Graphics().rect(0, 0, CellSize, CellSize).fill(on ? color : mixColor(BoardColor, color, .28)));
         const icon = this.Icons.get(`${tool}:${on}`);
-        if (icon) {
+        if (icon && hasGlyph(tool)) {
             const sprite = new Sprite(icon);
             sprite.width = CellSize;
             sprite.height = CellSize;
@@ -361,9 +370,17 @@ export class TileRenderer {
     }
     get Ready() { return this.Solid.Ready && (!this.Moving.Layer.visible || this.Moving.Ready) && (!this.Preview.Layer.visible || this.Preview.Ready); }
     get Count() { return this.Solid.Count + (this.Moving.Layer.visible ? this.Moving.Count : 0) + (this.Preview.Layer.visible ? this.Preview.Count : 0); }
+    get EdgeCount() { return this.Isolation.Count + this.MovingIsolation.Count + this.PreviewIsolation.Count; }
     get Lod() { return this.Solid.Lod; }
     draw(scene: TileScene, view: TileView) {
         const moving = scene.preview?.Kind === 'move' ? scene.preview.Source : undefined;
+        const movingEdges = scene.preview?.Kind === 'move' ? scene.preview.Isolation : undefined;
+        if (scene.isolation !== this.BoardIsolation || movingEdges !== this.OriginalIsolation) {
+            this.SolidIsolation = movingEdges ? scene.isolation?.update(movingEdges.values(), true) : scene.isolation;
+            this.BoardIsolation = scene.isolation; this.OriginalIsolation = movingEdges;
+        }
+        this.Isolation.draw(this.SolidIsolation, view);
+        this.MovingIsolation.draw(movingEdges, view);
         if (this.BoardSource !== scene.occupied || this.MovingSource !== moving) {
             this.SolidSource = moving ? scene.occupied.update((function* () { for (const key of moving.keys()) yield [key, undefined] as const; })()) : scene.occupied;
             this.BoardSource = scene.occupied; this.MovingSource = moving;
@@ -380,18 +397,22 @@ export class TileRenderer {
             const offset = scene.preview.Offset;
             this.Preview.Layer.position.set(offset.x * CellSize, offset.y * CellSize);
             const previewView = { ...view, x: view.x - offset.x * CellSize, y: view.y - offset.y * CellSize };
+            this.PreviewIsolation.Layer.position.copyFrom(this.Preview.Layer.position);
+            this.PreviewIsolation.draw(scene.preview.Isolation, previewView, scene.previewValid ? 0xffffff : 0xff657e);
             this.Preview.draw(scene.preview.Source, tile => this.material(tile.toolId, tile.isOn), previewView, scene.mode, null, scene.previewValid ? 0xffffff : 0xff657e);
         }
-        else this.Preview.clear();
+        else { this.Preview.clear(); this.PreviewIsolation.clear(); }
         for (const texture of this.Retired) texture.destroy(true);
         this.Retired.length = 0;
     }
     release() {
         this.BoardSource = undefined; this.MovingSource = undefined; this.SolidSource = new CellStore();
+        this.Isolation.clear(); this.MovingIsolation.clear(); this.PreviewIsolation.clear(); this.BoardIsolation = undefined; this.OriginalIsolation = undefined; this.SolidIsolation = undefined;
         this.Solid.clear(); this.Moving.clear(); this.Preview.clear();
     }
     destroy() {
         this.Disposed = true;
+        this.Isolation.destroy(); this.MovingIsolation.destroy(); this.PreviewIsolation.destroy();
         this.Solid.destroy();
         this.Moving.destroy();
         this.Preview.destroy();

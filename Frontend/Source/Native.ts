@@ -1,7 +1,7 @@
 import { invoke } from '@tauri-apps/api/core';
 import { open, save } from '@tauri-apps/plugin-dialog';
 import { useEditor } from './EditorStore';
-import { ToolIds, type Board, type ProjectDocument } from './Model';
+import { ToolKinds, validateBoard, type Board, type ProjectDocument } from './Model';
 export const isDesktop = () => !!(window as Window & {
     __TAURI_INTERNALS__?: unknown;
 }).__TAURI_INTERNALS__;
@@ -41,19 +41,27 @@ export function decodeFrame(buffer: ArrayBuffer): Frame {
     }
     return { session: d.getUint32(8, true), sequence: d.getUint32(12, true), tick: integer64(16), width, height, originX: d.getInt32(32, true), originY: d.getInt32(36, true), full, running: d.getUint32(44, true) !== 0, tps: d.getFloat64(48, true), capacity: d.getFloat64(72, true), first: integer64(56), last: integer64(64), data };
 }
-export function encodeBoard(board: Board) { const tiles = board.tiles; let minX = tiles[0]?.x ?? board.grid.originX, minY = tiles[0]?.y ?? board.grid.originY, maxX = minX, maxY = minY; for (const tile of tiles) {
+export function encodeBoard(board: Board) { board = validateBoard(board); const tiles = board.tiles; let minX = tiles[0]?.x ?? board.grid.originX, minY = tiles[0]?.y ?? board.grid.originY, maxX = minX, maxY = minY; for (const tile of tiles) {
     minX = Math.min(minX, tile.x);
     minY = Math.min(minY, tile.y);
     maxX = Math.max(maxX, tile.x);
     maxY = Math.max(maxY, tile.y);
 } const width = maxX - minX + 1, height = maxY - minY + 1, count = width * height; if (count > 1048576)
-    throw Error('SimulationGridTooLarge'); const bytes = new Uint8Array(24 + count * 16), data = new DataView(bytes.buffer); [0x4f434249, 1, width, height, minX, minY].forEach((v, i) => data.setInt32(i * 4, v, true)); for (let i = 0; i < count; i++) {
+    throw Error('SimulationGridTooLarge'); const bytes = new Uint8Array(24 + count * 16), data = new DataView(bytes.buffer); [0x4f434249, 2, width, height, minX, minY].forEach((v, i) => data.setInt32(i * 4, v, true)); for (let i = 0; i < count; i++) {
     data.setInt32(24 + (count * 2 + i) * 4, 1, true);
-    data.setInt32(24 + (count * 3 + i) * 4, 1, true);
 } for (const t of tiles) {
     const cell = (t.y - minY) * width + t.x - minX;
-    [ToolIds.indexOf(t.toolId), Number(t.isOn), t.clockHoldTicks ?? board.clockHoldTicks, t.meshId ?? board.meshId].forEach((v, i) => data.setInt32(24 + (count * i + cell) * 4, v, true));
-} return bytes; }
+    [ToolKinds[t.toolId], Number(t.isOn), t.clockHoldTicks ?? board.clockHoldTicks].forEach((v, i) => data.setInt32(24 + (count * i + cell) * 4, v, true));
+}
+for (const edge of board.isolationEdges ?? []) {
+    const x = edge.x - minX - Number(edge.axis === 'vertical'), y = edge.y - minY - Number(edge.axis === 'horizontal');
+    const bit = edge.axis === 'vertical' ? 1 : 2;
+    if (x >= 0 && y >= 0 && x < width && y < height && ((bit === 1 && x + 1 < width) || (bit === 2 && y + 1 < height))) {
+        const offset = 24 + (count * 3 + y * width + x) * 4;
+        data.setInt32(offset, data.getInt32(offset, true) | bit, true);
+    }
+}
+return bytes; }
 export async function compile(board: Board) { if (!isDesktop())
     throw Error('Simulation requires the Tauri desktop app. Start it with make run.'); return decodeFrame(await invoke<ArrayBuffer>('compileGrid', encodeBoard(board))); }
 export async function simulation(action: string, session: number, value = 0) { const bytes = await invoke<ArrayBuffer>('simulationCommand', { action, session, value }); return action === 'release' ? null : decodeFrame(bytes); }

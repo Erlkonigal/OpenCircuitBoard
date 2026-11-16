@@ -1,8 +1,12 @@
 # Legacy simulation baseline
 
 Recorded on Windows x86_64, 2026-11-15, from Git revision `7feac8f`.
-The fixture replays the complete existing `SimulationCoreTests.cpp` operation stream,
+The fixture was recorded from the existing `SimulationCoreTests.cpp` operation stream,
 plus 128 fixed-seed random boards (seed 20261115). Repeated arrays are run-length encoded.
+The active replay retains 597 state/delta comparisons. Sessions 39, 40, 46, 48, 49, and 81
+used the removed Mesh component (kind 14) and were retired with it; obsolete `meshIds`
+fields were dropped from the remaining records. Isolation masks default to zero for
+this legacy replay, preserving its original connectivity.
 It contains original inputs, compilation errors, visible states, deltas, latch operations,
 snapshot capture/restore operations, resets, and deferred presentation operations.
 
