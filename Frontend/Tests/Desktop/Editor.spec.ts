@@ -123,7 +123,7 @@ describe('Native circuit workspace', () => {
     it('keeps adjacent drawn lanes independent and merges complete latch regions through native simulation', async () => {
         await $('.command-trigger').click(); await $('input[aria-label="Search commands"]').setValue('new circuit'); await $('.command-options button').click();
         const center = await browser.execute(() => { const r = document.querySelector('[data-testid="board"]')!.getBoundingClientRect(); return {x:r.x+r.width/2,y:r.y+r.height/2}; });
-        for (const [index, tool] of ['Latch','Read','Trace','Write','Buffer'].entries()) {
+        for (const [index, tool] of ['Latch','Trace','Buffer'].entries()) {
             await $(`button[aria-label="${tool}"]`).click();
             if (tool === 'Latch') await $('label=Off').click();
             for (const row of [0,1]) await browser.action('pointer').move({x:Math.round(center.x+index*32+12),y:Math.round(center.y+row*32+12)}).down().up().perform();
@@ -131,7 +131,7 @@ describe('Native circuit workspace', () => {
         const pixels = () => browser.execute(() => {
             const canvas=document.querySelector('canvas[aria-label="Circuit board"]') as HTMLCanvasElement, gl=canvas.getContext('webgl2')!;
             const scale=canvas.width/canvas.getBoundingClientRect().width;
-            return [0,1].flatMap(row => [0,4].map(column => { const p=new Uint8Array(4); gl.readPixels(Math.floor(canvas.width/2+(column*32+3)*scale),canvas.height-1-Math.floor(canvas.height/2+(row*32+3)*scale),1,1,gl.RGBA,gl.UNSIGNED_BYTE,p); return [...p]; }));
+            return [0,1].flatMap(row => [0,2].map(column => { const p=new Uint8Array(4); gl.readPixels(Math.floor(canvas.width/2+(column*32+3)*scale),canvas.height-1-Math.floor(canvas.height/2+(row*32+3)*scale),1,1,gl.RGBA,gl.UNSIGNED_BYTE,p); return [...p]; }));
         });
         await $('button=Run circuit').click(); await $('button[aria-label="Pause simulation"]').click();
         const before=await pixels();
@@ -155,7 +155,7 @@ describe('Native circuit workspace', () => {
     });
     it('round-trips v2 archives through real native IPC', async () => {
         const file = buildPath('DesktopProject.ocb');
-        const board = { selectedTool: 'clock', clockHoldTicks: 3, latchInitialState: false, grid: { originX: -20, originY: -14, width: 40, height: 28 }, tiles: [{ x: -2, y: 1, toolId: 'clock', componentId: 1, isOn: true, clockHoldTicks: 3 }, { x: 0, y: 1, toolId: 'latch', componentId: 2, isOn: false }] };
+        const board = { circuitModel: 'booleanSwitch', selectedTool: 'clock', clockHoldTicks: 3, latchInitialState: false, grid: { originX: -20, originY: -14, width: 40, height: 28 }, tiles: [{ x: -2, y: 1, toolId: 'clock', componentId: 1, isOn: true, clockHoldTicks: 3 }, { x: 0, y: 1, toolId: 'latch', componentId: 2, isOn: false }] };
         const result = await browser.execute(async (file: string, project: typeof board) => {
             try {
                 const invoke = (window as unknown as Window & {
@@ -220,7 +220,7 @@ describe('Native circuit workspace', () => {
             const tiles: { x: number; y: number; toolId: string; componentId: number; isOn: boolean; clockHoldTicks: number }[] = [];
             for (let y = 0; y < 64; y++) for (let x = 0; x < 64; x++) tiles.push({ x, y, toolId: 'clock', componentId: 1, isOn: true, clockHoldTicks: 1 });
             const invoke = (window as unknown as { __TAURI_INTERNALS__: { invoke: (command: string, args: unknown) => Promise<unknown> } }).__TAURI_INTERNALS__.invoke;
-            return invoke('saveProject', { path: file, project: { board: { selectedTool: 'clock', clockHoldTicks: 1, latchInitialState: true,
+            return invoke('saveProject', { path: file, project: { board: { circuitModel: 'booleanSwitch', selectedTool: 'clock', clockHoldTicks: 1, latchInitialState: true,
                 grid: { originX: -512, originY: -512, width: 1024, height: 1024 }, tiles },
                 blueprints: [{ id: 'clocks', name: 'Clock array', width: 64, height: 64, tiles }] } });
         }, file);

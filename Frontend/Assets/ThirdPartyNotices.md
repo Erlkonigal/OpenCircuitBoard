@@ -19,13 +19,3 @@ INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
 LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
 OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
 PERFORMANCE OF THIS SOFTWARE.
-
-## Font Awesome Free
-
-`Inks/Read.svg` and `Inks/Write.svg` are derived from Font Awesome Free 7.3.0
-solid `r` and `w` assets.
-
-Copyright 2026 Fonticons, Inc.
-
-Icons are licensed under [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/).
-Font Awesome Free license: https://fontawesome.com/license/free.

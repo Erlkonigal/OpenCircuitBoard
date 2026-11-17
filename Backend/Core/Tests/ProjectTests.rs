@@ -1,379 +1,425 @@
 #![allow(non_snake_case)]
-use ocb_core::Project::*;
-use std::{fs, io::Write, path::PathBuf};
-use zip::{ZipWriter, write::SimpleFileOptions};
-fn path(name: &str) -> PathBuf {
-    std::env::temp_dir().join(format!("OcbProjectTest-{}-{name}.ocb", std::process::id()))
+use ocb_core::{
+    CompileInput,
+    Project::{self, Blueprint, Board, Grid, ProjectDocument, Tile},
+    SimulationCore,
+};
+fn tile(x: i32, y: i32, kind: &str, id: i32) -> Tile {
+    Tile {
+        X: x,
+        Y: y,
+        ToolId: kind.into(),
+        ComponentId: id,
+        ..Default::default()
+    }
 }
-fn archive(path: &std::path::Path, value: &serde_json::Value) {
-    let mut zip = ZipWriter::new(fs::File::create(path).unwrap());
-    zip.start_file("project.json", SimpleFileOptions::default())
-        .unwrap();
-    zip.write_all(serde_json::to_string(value).unwrap().as_bytes())
-        .unwrap();
-    zip.finish().unwrap();
+fn board(tiles: Vec<Tile>) -> Board {
+    Board {
+        Grid: Grid {
+            OriginX: -20,
+            OriginY: -20,
+            Width: 40,
+            Height: 40,
+        },
+        Tiles: tiles,
+        ..Default::default()
+    }
 }
-#[test]
-fn roundTripAndAtomicOverwrite() {
-    let file = path("roundtrip");
-    let mut board = Board::default();
-    board.Tiles = vec![
-        Tile {
-            X: -2,
-            Y: 1,
-            ToolId: "clock".into(),
-            ComponentId: 1,
-            IsOn: true,
-            ClockHoldTicks: Some(4),
-        },
-        Tile {
-            X: 0,
-            Y: 0,
-            ToolId: "latch".into(),
-            ComponentId: 2,
-            IsOn: false,
-            ClockHoldTicks: None,
-        },
-    ];
-    save(
-        &file,
-        &ProjectDocument {
-            Board: board.clone(),
-            Blueprints: vec![],
-        },
-    )
-    .unwrap();
-    board.Tiles.sort_by_key(|t| (t.Y, t.X));
-    assert_eq!(load(&file).unwrap().Board, board);
-    board.LatchInitialState = false;
-    save(
-        &file,
-        &ProjectDocument {
-            Board: board.clone(),
-            Blueprints: vec![],
-        },
-    )
-    .unwrap();
-    assert_eq!(load(&file).unwrap().Board, board);
-    fs::remove_file(file).unwrap();
-}
-#[test]
-fn versionAndLegacyDefaults() {
-    let file = path("legacy");
-    archive(
-        &file,
-        &serde_json::json!({"formatVersion":2,"board":{"selectedTool":"or","clockHoldTicks":4,"tiles":[{"x":0,"y":0,"toolId":"clock","componentId":1}]}}),
-    );
-    let board = load(&file).unwrap().Board;
-    assert_eq!(board.Grid, Grid::default());
-    assert_eq!(board.Tiles[0].ClockHoldTicks, Some(4));
-    archive(&file, &serde_json::json!({"formatVersion":1,"board":{}}));
-    assert_eq!(load(&file).unwrap_err(), "ProjectVersionUnsupported");
-    fs::remove_file(file).unwrap();
-}
-#[test]
-fn invalidBoardDoesNotReplaceExistingFile() {
-    let file = path("invalid");
-    let mut board = Board::default();
-    save(
-        &file,
-        &ProjectDocument {
-            Board: board.clone(),
-            Blueprints: vec![],
-        },
-    )
-    .unwrap();
-    let before = fs::read(&file).unwrap();
-    board.Tiles = vec![Tile {
-        X: 100,
-        Y: 0,
-        ToolId: "or".into(),
-        ComponentId: 3,
-        IsOn: true,
-        ClockHoldTicks: None,
-    }];
-    assert!(
-        save(
-            &file,
-            &ProjectDocument {
-                Board: board.clone(),
-                Blueprints: vec![]
-            }
-        )
-        .is_err()
-    );
-    assert_eq!(fs::read(&file).unwrap(), before);
-    fs::remove_file(file).unwrap();
-}
-#[test]
-fn malformedZipAndMissingEntry() {
-    let file = path("malformed");
-    fs::write(&file, "bad zip").unwrap();
-    assert_eq!(load(&file).unwrap_err(), "ProjectOpenFailed");
-    let writer = ZipWriter::new(fs::File::create(&file).unwrap());
-    writer.finish().unwrap();
-    assert_eq!(load(&file).unwrap_err(), "ProjectEntryMissing");
-    fs::remove_file(file).unwrap();
-}
-#[test]
-fn inputCropsToOccupiedBoundsAndKeepsKindIds() {
-    let mut board = Board::default();
-    board.Tiles = vec![
-        Tile {
-            X: -3,
-            Y: 2,
-            ToolId: "latch".into(),
-            ComponentId: 4,
-            IsOn: false,
-            ClockHoldTicks: None,
-        },
-        Tile {
-            X: 1,
-            Y: 2,
-            ToolId: "clock".into(),
-            ComponentId: 5,
-            IsOn: true,
-            ClockHoldTicks: Some(5),
-        },
-    ];
+fn compile(board: &Board) -> (SimulationCore, (i32, i32)) {
     let (input, origin) = board.compileInput().unwrap();
-    assert_eq!(origin, (-3, 2));
-    assert_eq!(input.Width, 5);
-    assert_eq!(input.Kinds, vec![25, 0, 0, 0, 26]);
-    assert_eq!(input.ClockHoldTicks[4], 5);
-    assert_eq!(
-        input.ComponentIds,
-        vec![
-            board.Tiles[0].ComponentId,
-            0,
-            0,
-            0,
-            board.Tiles[1].ComponentId
-        ]
-    );
+    (SimulationCore::compile(input).unwrap(), origin)
 }
-
-#[test]
-fn missingTileStatesInheritLegacyDefaults() {
-    let file = path("legacy-latch");
-    archive(
-        &file,
-        &serde_json::json!({"formatVersion":2,"board":{"latchInitialState":false,"tiles":[{"x":0,"y":0,"toolId":"latch","componentId":1},{"x":1,"y":0,"toolId":"latch","componentId":1}]}}),
-    );
-    let board = load(&file).unwrap().Board;
-    assert!(!board.Tiles[0].IsOn);
-    assert!(!board.Tiles[1].IsOn);
-    fs::remove_file(file).unwrap();
+fn state(core: &mut SimulationCore, origin: (i32, i32), x: i32, y: i32) -> u8 {
+    let cell = (y - origin.1) as usize * core.Width + (x - origin.0) as usize;
+    core.states()[cell]
 }
-
 #[test]
-fn blueprintsRoundTripAndRejectInvalidSnapshots() {
-    let file = path("blueprints");
-    let mut project = ProjectDocument::default();
-    project.Blueprints.push(Blueprint {
-        Id: "clock-pair".into(),
-        Name: "Clock pair".into(),
-        Width: 3,
-        Height: 2,
-        Tiles: vec![
-            Tile {
-                X: 0,
-                Y: 0,
-                ToolId: "clock".into(),
-                ComponentId: 6,
-                IsOn: false,
-                ClockHoldTicks: Some(9),
-            },
-            Tile {
-                X: 2,
-                Y: 1,
-                ToolId: "latch".into(),
-                ComponentId: 7,
-                IsOn: false,
-                ClockHoldTicks: None,
-            },
-        ],
-    });
-    save(&file, &project).unwrap();
-    assert_eq!(load(&file).unwrap(), project);
-    let original = fs::read(&file).unwrap();
-    for invalid in 0..5 {
-        let mut bad = project.clone();
-        match invalid {
-            0 => bad.Blueprints[0].Tiles[0].ClockHoldTicks = None,
-            1 => bad.Blueprints[0].Tiles[0].X = -1,
-            2 => bad.Blueprints[0].Name = " ".into(),
-            3 => bad.Blueprints.push(bad.Blueprints[0].clone()),
-            _ => {
-                let tile = bad.Blueprints[0].Tiles[0].clone();
-                bad.Blueprints[0].Tiles.push(tile);
-            }
-        }
-        assert_eq!(save(&file, &bad).unwrap_err(), "ProjectBlueprintInvalid");
-        assert_eq!(fs::read(&file).unwrap(), original);
-    }
-    archive(
-        &file,
-        &serde_json::json!({"formatVersion":2,"board":{},"blueprints":[{"id":"x","name":"Invalid","width":1,"height":1,"tiles":[]}]}),
-    );
-    assert_eq!(load(&file).unwrap_err(), "ProjectBlueprintInvalid");
-    fs::remove_file(file).unwrap();
-}
-
-#[test]
-fn unknownModulesFailUniformlyInBoardsAndBlueprints() {
-    let file = path("unknown");
-    for kind in ["mesh", "undefined"] {
-        archive(
-            &file,
-            &serde_json::json!({"formatVersion":2,"board":{"tiles":[{"x":0,"y":0,"toolId":kind,"componentId":1}]}}),
-        );
-        assert_eq!(load(&file).unwrap_err(), "ProjectBoardInvalid");
-        archive(
-            &file,
-            &serde_json::json!({"formatVersion":2,"board":{},"blueprints":[{"id":"x","name":"Bad","width":1,"height":1,"tiles":[{"x":0,"y":0,"toolId":kind,"componentId":1,"isOn":false}]}]}),
-        );
-        assert_eq!(load(&file).unwrap_err(), "ProjectBlueprintInvalid");
-    }
-    fs::remove_file(file).unwrap();
-}
-
-#[test]
-fn componentIdsRoundTripAndInvalidGroupsAreOrdinaryErrors() {
-    let file = path("components");
-    let valid = serde_json::json!({"formatVersion":2,"board":{"tiles":[
-        {"x":0,"y":0,"toolId":"latch","componentId":7,"isOn":false},
-        {"x":1,"y":0,"toolId":"latch","componentId":7,"isOn":false},
-        {"x":0,"y":1,"toolId":"latch","componentId":8,"isOn":false}]}});
-    archive(&file, &valid);
-    let project = load(&file).unwrap();
-    save(&file, &project).unwrap();
-    assert_eq!(load(&file).unwrap(), project);
-    for invalid in 0..5 {
-        let mut bad = valid.clone();
-        match invalid {
-            0 => {
-                bad["board"]["tiles"][0]
-                    .as_object_mut()
-                    .unwrap()
-                    .remove("componentId");
-            }
-            1 => bad["board"]["tiles"][0]["componentId"] = serde_json::json!(0),
-            2 => bad["board"]["tiles"][1]["x"] = serde_json::json!(3),
-            3 => bad["board"]["tiles"][1]["isOn"] = serde_json::json!(true),
-            _ => bad["board"]["tiles"][1]["toolId"] = serde_json::json!("clock"),
-        }
-        archive(&file, &bad);
-        assert_eq!(load(&file).unwrap_err(), "ProjectBoardInvalid");
-    }
-    for id in [serde_json::Value::Null, serde_json::json!(0)] {
-        archive(
-            &file,
-            &serde_json::json!({"formatVersion":2,"board":{},"blueprints":[{"id":"x","name":"Bad","width":1,"height":1,"tiles":[{"x":0,"y":0,"toolId":"latch","componentId":id}]}]}),
-        );
-        assert_eq!(load(&file).unwrap_err(), "ProjectBlueprintInvalid");
-    }
-    fs::remove_file(file).unwrap();
-}
-
-#[test]
-fn eightTraceKindsRoundTripWithoutRenumberingExistingTools() {
-    for (tool, kind) in [
+fn stableToolsAndRejectedArchives() {
+    for (id, kind) in [
         ("trace", 1),
         ("bus", 7),
-        ("busRed", 8),
         ("cross", 13),
-        ("read", 15),
+        ("buffer", 17),
+        ("latch", 25),
         ("led", 27),
         ("traceOrange", 28),
         ("traceWhite", 29),
+        ("switch", 30),
     ] {
-        assert_eq!(toolKind(tool), Some(kind));
+        assert_eq!(Project::toolKind(id), Some(kind));
     }
-    let file = path("eight-traces");
-    let mut project = ProjectDocument::default();
-    project.Board.Tiles = [
-        "trace",
-        "traceRed",
-        "traceGreen",
-        "traceBlue",
-        "traceCyan",
-        "traceMagenta",
-        "traceOrange",
-        "traceWhite",
-    ]
-    .iter()
-    .enumerate()
-    .map(|(index, tool)| Tile {
-        X: index as i32,
-        Y: 0,
-        ToolId: (*tool).into(),
-        ComponentId: index as i32 + 1,
-        IsOn: false,
-        ClockHoldTicks: None,
-    })
-    .collect();
-    save(&file, &project).unwrap();
-    let loaded = load(&file).unwrap();
-    assert_eq!(loaded, project);
-    assert_eq!(
-        loaded.Board.compileInput().unwrap().0.Kinds,
-        vec![1, 2, 3, 4, 5, 6, 28, 29]
-    );
-    fs::remove_file(file).unwrap();
+    for id in ["read", "write", "empty", "busRed"] {
+        assert!(Project::toolKind(id).is_none());
+    }
+    let mut b = Board::default();
+    b.CircuitModel = String::new();
+    assert!(b.validate().is_err());
+    let file = std::env::temp_dir().join(format!("OcbOld-{}.ocb", std::process::id()));
+    let mut writer = zip::ZipWriter::new(std::fs::File::create(&file).unwrap());
+    writer
+        .start_file("project.json", zip::write::SimpleFileOptions::default())
+        .unwrap();
+    use std::io::Write;
+    writer
+        .write_all(br#"{"formatVersion":2,"board":{"tiles":[]}}"#)
+        .unwrap();
+    writer.finish().unwrap();
+    assert!(Project::load(&file).is_err());
+    std::fs::remove_file(file).unwrap();
 }
 #[test]
-fn legacyBusColorsNormalizeInBoardsAndBlueprintsWhileKeepingIdentities() {
-    let file = path("bus-aliases");
-    let aliases = [
-        "bus",
-        "busRed",
-        "busGreen",
-        "busYellow",
-        "busCyan",
-        "busMagenta",
+fn fixedZeroOverridesDefaultsAndSeparateIdsStayIsolated() {
+    let mut source = tile(0, 0, "trace", 1);
+    source.FixedDrive = Some(false);
+    source.DefaultValue = true;
+    let mut neighbor = tile(1, 0, "trace", 2);
+    neighbor.DefaultValue = true;
+    let (mut core, origin) = compile(&board(vec![source.clone(), neighbor.clone()]));
+    assert_eq!(state(&mut core, origin, 0, 0), 0);
+    assert_eq!(state(&mut core, origin, 1, 0), 1);
+    neighbor.ComponentId = 1;
+    neighbor.FixedDrive = Some(false);
+    let (mut core, origin) = compile(&board(vec![source, neighbor]));
+    assert_eq!(state(&mut core, origin, 1, 0), 0);
+}
+#[test]
+fn busSourcesOrIndependentlyWithoutPortInks() {
+    let mut tiles = vec![
+        tile(-2, 0, "latch", 1),
+        tile(-1, 0, "traceRed", 2),
+        tile(0, 0, "bus", 3),
+        tile(0, 1, "bus", 3),
+        tile(0, 2, "bus", 3),
+        tile(1, 2, "traceRed", 4),
+        tile(2, 2, "latch", 5),
+        tile(1, 0, "traceGreen", 6),
     ];
-    let tiles: Vec<_> = aliases
-        .iter()
-        .enumerate()
-        .map(|(index, tool)| {
-            serde_json::json!({
-                "x":index,"y":0,"toolId":tool,"componentId":index+1,"isOn":false
-            })
-        })
-        .collect();
-    archive(
-        &file,
-        &serde_json::json!({"formatVersion":2,
-        "board":{"selectedTool":"busRed","tiles":tiles},
-        "blueprints":[{"id":"b","name":"Bus","width":6,"height":1,"tiles":tiles}]}),
+    tiles[6].Direction = 2;
+    tiles[7].FixedDrive = Some(true);
+    let b = board(tiles);
+    let (mut core, o) = compile(&b);
+    assert_eq!(
+        core.inspect((0 - o.1) as usize * core.Width + (0 - o.0) as usize)[2],
+        1
     );
-    let project = load(&file).unwrap();
-    assert_eq!(project.Board.SelectedTool, "bus");
-    for group in [&project.Board.Tiles, &project.Blueprints[0].Tiles] {
-        for (index, tile) in group.iter().enumerate() {
-            assert_eq!(tile.ToolId, "bus");
-            assert_eq!(tile.ComponentId, index as i32 + 1);
+    core.toggleLatch((0 - o.1) as usize * core.Width + (-2 - o.0) as usize)
+        .unwrap();
+    assert_eq!(state(&mut core, o, 1, 2), 1);
+    core.toggleLatch((2 - o.1) as usize * core.Width + (2 - o.0) as usize)
+        .unwrap();
+    core.toggleLatch((0 - o.1) as usize * core.Width + (-2 - o.0) as usize)
+        .unwrap();
+    assert_eq!(state(&mut core, o, 1, 2), 1);
+    core.toggleLatch((2 - o.1) as usize * core.Width + (2 - o.0) as usize)
+        .unwrap();
+    assert_eq!(state(&mut core, o, 1, 2), 0);
+}
+#[test]
+fn crossJoinsOnlySelectedColors() {
+    for mask in [0, 1] {
+        let mut source = tile(-1, 0, "trace", 1);
+        source.FixedDrive = Some(true);
+        let mut cross = tile(0, 0, "cross", 2);
+        cross.CrossMask = mask;
+        let (mut core, o) = compile(&board(vec![
+            source,
+            cross,
+            tile(0, 1, "trace", 3),
+            tile(1, 0, "trace", 4),
+            tile(0, -1, "traceRed", 5),
+        ]));
+        assert_eq!(state(&mut core, o, 1, 0), 1);
+        assert_eq!(state(&mut core, o, 0, 1), if mask == 0 { 0 } else { 1 });
+        assert_eq!(state(&mut core, o, 0, -1), 0);
+    }
+}
+#[test]
+fn switchDelayBidirectionalityDefaultsAndSnapshots() {
+    let mut left = tile(-1, 0, "trace", 1);
+    left.FixedDrive = Some(false);
+    let mut right = tile(1, 0, "traceRed", 3);
+    right.DefaultValue = true;
+    let mut control = tile(0, 2, "latch", 5);
+    control.Direction = 3;
+    let b = board(vec![
+        left,
+        tile(0, 0, "switch", 2),
+        right,
+        tile(0, 1, "traceBlue", 4),
+        control,
+    ]);
+    let (mut core, o) = compile(&b);
+    assert_eq!(state(&mut core, o, 1, 0), 1);
+    let controlCell = (2 - o.1) as usize * core.Width + (0 - o.0) as usize;
+    core.toggleLatch(controlCell).unwrap();
+    assert_eq!(state(&mut core, o, 1, 0), 1);
+    let pending = core.capture();
+    core.advanceSilent(1);
+    assert_eq!(state(&mut core, o, 1, 0), 0);
+    core.toggleLatch(controlCell).unwrap();
+    core.advanceSilent(1);
+    assert_eq!(state(&mut core, o, 1, 0), 1);
+    core.restore(&pending).unwrap();
+    core.advanceSilent(1);
+    assert_eq!(state(&mut core, o, 1, 0), 0);
+    // Drive from the right: a closed switch must carry the original source back to the left.
+    let mut b = b;
+    b.Tiles[0].FixedDrive = None;
+    b.Tiles[0].DefaultValue = false;
+    b.Tiles[2].FixedDrive = Some(true);
+    let (mut core, o) = compile(&b);
+    core.toggleLatch((2 - o.1) as usize * core.Width + (0 - o.0) as usize)
+        .unwrap();
+    core.advanceSilent(1);
+    assert_eq!(state(&mut core, o, -1, 0), 1);
+    core.toggleLatch((2 - o.1) as usize * core.Width + (0 - o.0) as usize)
+        .unwrap();
+    core.advanceSilent(1);
+    assert_eq!(state(&mut core, o, -1, 0), 0);
+}
+#[test]
+fn directionAndGateTruthTables() {
+    for kind in ["and", "or", "xor", "nand", "nor", "xnor"] {
+        for a in [false, true] {
+            for b in [false, true] {
+                let mut left = tile(-1, 0, "trace", 1);
+                left.FixedDrive = Some(a);
+                let mut top = tile(0, -1, "traceRed", 2);
+                top.FixedDrive = Some(b);
+                let (mut core, o) = compile(&board(vec![
+                    left,
+                    top,
+                    tile(0, 0, kind, 3),
+                    tile(1, 0, "traceBlue", 4),
+                ]));
+                core.advanceSilent(1);
+                let expected = match kind {
+                    "and" => a && b,
+                    "or" => a || b,
+                    "xor" => a ^ b,
+                    "nand" => !(a && b),
+                    "nor" => !(a || b),
+                    _ => !(a ^ b),
+                };
+                assert_eq!(state(&mut core, o, 1, 0), expected as u8, "{kind} {a} {b}");
+            }
         }
     }
-    let mut aliasProject = project.clone();
-    aliasProject.Board.SelectedTool = "busGreen".into();
-    aliasProject.Board.Tiles[0].ToolId = "busMagenta".into();
-    aliasProject.Blueprints[0].Tiles[0].ToolId = "busYellow".into();
-    save(&file, &aliasProject).unwrap();
-    assert_eq!(load(&file).unwrap(), project);
-    let mut zip = zip::ZipArchive::new(fs::File::open(&file).unwrap()).unwrap();
-    let mut json = String::new();
-    std::io::Read::read_to_string(&mut zip.by_name("project.json").unwrap(), &mut json).unwrap();
-    let value: serde_json::Value = serde_json::from_str(&json).unwrap();
-    assert_eq!(value["formatVersion"], 2);
-    assert!(
-        value["board"]["tiles"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .all(|tile| tile["toolId"] == "bus")
+    let mut source = tile(0, -1, "trace", 1);
+    source.FixedDrive = Some(true);
+    let mut gate = tile(0, 0, "buffer", 2);
+    gate.Direction = 1;
+    let (mut core, o) = compile(&board(vec![
+        source,
+        gate,
+        tile(0, 1, "trace", 3),
+        tile(1, 0, "trace", 4),
+    ]));
+    core.advanceSilent(1);
+    assert_eq!(state(&mut core, o, 0, 1), 1);
+    assert_eq!(state(&mut core, o, 1, 0), 0);
+}
+#[test]
+fn archivesAndBlueprintsPreserveSettingsAndRejectMalformedComponents() {
+    let mut t = tile(0, 0, "traceWhite", 1);
+    t.FixedDrive = Some(false);
+    t.DefaultValue = true;
+    let mut switch = tile(1, 0, "switch", 2);
+    switch.Direction = 3;
+    let project = ProjectDocument {
+        Board: board(vec![t.clone(), switch.clone()]),
+        Blueprints: vec![Blueprint {
+            Id: "s".into(),
+            Name: "Switch".into(),
+            Width: 2,
+            Height: 1,
+            Tiles: vec![t, switch],
+        }],
+    };
+    let file = std::env::temp_dir().join(format!("OcbSwitch-{}.ocb", std::process::id()));
+    Project::save(&file, &project).unwrap();
+    assert_eq!(Project::load(&file).unwrap(), project);
+    std::fs::remove_file(file).unwrap();
+    for bad in 0..4 {
+        let mut project = project.clone();
+        match bad {
+            0 => project.Board.Tiles[0].Direction = 4,
+            1 => project.Board.Tiles[1].FixedDrive = Some(true),
+            2 => project.Board.Tiles[1].CrossMask = 1,
+            _ => {
+                let mut extra = project.Board.Tiles[0].clone();
+                extra.X = 3;
+                project.Board.Tiles.push(extra);
+            }
+        }
+        assert!(project.validate().is_err());
+    }
+}
+#[test]
+fn malformedCompileInputsAreRejected() {
+    let mut input = CompileInput::empty(1, 1);
+    input.Kinds[0] = 15;
+    input.ComponentIds[0] = 1;
+    assert_eq!(
+        SimulationCore::compile(input).err().unwrap().ErrorReason,
+        "unknown_kind"
     );
-    drop(zip);
-    fs::remove_file(file).unwrap();
+    let mut input = CompileInput::empty(1, 1);
+    input.Directions.clear();
+    assert_eq!(
+        SimulationCore::compile(input).err().unwrap().ErrorReason,
+        "array_size_mismatch"
+    );
+}
+#[test]
+fn switchCyclesReleaseWithdrawnDriversAndFanOutWithoutAddedDelay() {
+    let mut tiles = vec![tile(-3, 0, "latch", 1), tile(-2, 0, "trace", 2)];
+    for y in 0..5 {
+        tiles.push(tile(-1, y, "trace", 2));
+        tiles.push(tile(1, y, "traceRed", 3));
+    }
+    for (index, y) in [0, 2, 4].into_iter().enumerate() {
+        tiles.push(tile(0, y, "switch", 4 + index as i32 * 2));
+        let mut control = tile(0, y + 1, "traceGreen", 5 + index as i32 * 2);
+        control.FixedDrive = Some(true);
+        tiles.push(control);
+    }
+    let (mut core, origin) = compile(&board(tiles.clone()));
+    core.advanceSilent(1);
+    let source = (-origin.1) as usize * core.Width + (-3 - origin.0) as usize;
+    core.toggleLatch(source).unwrap();
+    assert_eq!(state(&mut core, origin, 1, 4), 1);
+    let connected = core.capture();
+    core.toggleLatch(source).unwrap();
+    assert_eq!(
+        state(&mut core, origin, 1, 4),
+        0,
+        "A switch cycle must not retain a removed high"
+    );
+    core.restore(&connected).unwrap();
+    core.toggleLatch(source).unwrap();
+    assert_eq!(state(&mut core, origin, 1, 4), 0);
+    // Split the far side into three independent destinations supplied by one source.
+    tiles.retain(|t| !(t.X == 1 && t.Y % 2 == 1));
+    for t in tiles.iter_mut().filter(|t| t.X == 1) {
+        t.ComponentId = 20 + t.Y;
+    }
+    let (mut core, origin) = compile(&board(tiles));
+    core.advanceSilent(1);
+    let source = (-origin.1) as usize * core.Width + (-3 - origin.0) as usize;
+    core.toggleLatch(source).unwrap();
+    for y in [0, 2, 4] {
+        assert_eq!(state(&mut core, origin, 1, y), 1);
+    }
+    core.toggleLatch(source).unwrap();
+    for y in [0, 2, 4] {
+        assert_eq!(state(&mut core, origin, 1, y), 0);
+    }
+}
+
+#[test]
+fn defaultsFollowConnectivityWithoutBecomingDrivers() {
+    let mut left = tile(-1, 0, "trace", 1);
+    left.DefaultValue = true;
+    let mut control = tile(0, 1, "traceGreen", 4);
+    control.FixedDrive = Some(true);
+    let mut tiles = vec![
+        left,
+        tile(0, 0, "switch", 2),
+        tile(1, 0, "traceRed", 3),
+        control,
+    ];
+    let (mut core, origin) = compile(&board(tiles.clone()));
+    assert_eq!(state(&mut core, origin, 1, 0), 0);
+    core.advanceSilent(1);
+    assert_eq!(state(&mut core, origin, 1, 0), 1);
+    tiles.push(tile(2, 0, "latch", 5));
+    tiles.last_mut().unwrap().Direction = 2;
+    let (mut core, origin) = compile(&board(tiles));
+    core.advanceSilent(1);
+    assert_eq!(
+        state(&mut core, origin, -1, 0),
+        0,
+        "A connected active zero suppresses defaults everywhere"
+    );
+}
+
+#[test]
+fn retiredToolsAndInvalidSavesNeverReplaceValidArchives() {
+    let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(format!(
+        "../../build/BooleanArchive-{}.ocb",
+        std::process::id()
+    ));
+    let mut project = ProjectDocument {
+        Board: board(vec![tile(0, 0, "latch", 1)]),
+        Blueprints: vec![],
+    };
+    Project::save(&path, &project).unwrap();
+    for id in ["read", "write", "busRed", "module", "empty"] {
+        let mut invalid = project.clone();
+        invalid.Board.Tiles[0].ToolId = id.into();
+        assert!(invalid.validate().is_err());
+        assert!(invalid.Board.compileInput().is_err());
+        assert!(Project::save(&path, &invalid).is_err());
+        assert_eq!(Project::load(&path).unwrap(), project);
+    }
+    project.Board.Tiles[0].IsOn = true;
+    Project::save(&path, &project).unwrap();
+    assert_eq!(Project::load(&path).unwrap(), project);
+    std::fs::remove_file(path).unwrap();
+}
+
+#[test]
+fn compileCropsSparseBoardsAndRejectsOversizedOccupiedBounds() {
+    let mut b = board(vec![tile(-3, 2, "clock", 1), tile(-2, 2, "traceOrange", 2)]);
+    b.ClockHoldTicks = 7;
+    let (input, origin) = b.compileInput().unwrap();
+    assert_eq!(origin, (-3, 2));
+    assert_eq!((input.Width, input.Height), (2, 1));
+    assert_eq!(input.Kinds, [26, 28]);
+    assert_eq!(input.ClockHoldTicks, [7, 7]);
+    b.Grid.Width = i32::MAX;
+    b.Grid.OriginX = 0;
+    assert!(b.validate().is_err());
+    b.Grid = Grid {
+        OriginX: 0,
+        OriginY: 0,
+        Width: 2048,
+        Height: 2048,
+    };
+    b.Tiles[0].X = 0;
+    b.Tiles[0].Y = 0;
+    b.Tiles[1].X = 2047;
+    b.Tiles[1].Y = 2047;
+    assert_eq!(b.compileInput().unwrap_err(), "SimulationGridTooLarge");
+}
+
+#[test]
+fn clockRisingEdgesAndPendingLatchUpdatesSurviveSnapshots() {
+    let mut clock = tile(-2, 0, "clock", 1);
+    clock.ClockHoldTicks = Some(2);
+    let b = board(vec![
+        clock,
+        tile(-1, 0, "trace", 2),
+        tile(0, 0, "latch", 3),
+        tile(1, 0, "traceRed", 4),
+    ]);
+    let (mut core, origin) = compile(&b);
+    core.advanceSilent(2);
+    assert_eq!(state(&mut core, origin, 1, 0), 0);
+    let pending = core.capture();
+    core.advanceSilent(1);
+    assert_eq!(state(&mut core, origin, 1, 0), 1);
+    core.advanceSilent(3);
+    assert_eq!(state(&mut core, origin, 1, 0), 1);
+    core.advanceSilent(1);
+    assert_eq!(state(&mut core, origin, 1, 0), 0);
+    core.restore(&pending).unwrap();
+    core.advanceSilent(1);
+    assert_eq!(state(&mut core, origin, 1, 0), 1);
+    let (mut other, _) = compile(&board(vec![tile(0, 0, "trace", 1)]));
+    assert_eq!(
+        other.restore(&pending).unwrap_err(),
+        "snapshot_topology_mismatch"
+    );
 }

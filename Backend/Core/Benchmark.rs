@@ -24,64 +24,23 @@ fn main() {
         eprintln!("Invalid benchmark dimensions");
         std::process::exit(2);
     }
-    let count = width * height;
-    let mut input = CompileInput {
-        Width: width,
-        Height: height,
-        Kinds: vec![0; count],
-        InitialStates: vec![0; count],
-        ClockHoldTicks: vec![1; count],
-        ComponentIds: vec![0; count],
-    };
-    for lane in 0..lanes {
-        if unary {
-            let y = lane * 2;
-            input.Kinds[y * width] = 26;
-            for stage in 0..(width - 1) / 4 {
-                let x = 1 + stage * 4;
-                for (d, k) in [15, 1, 16, 17].into_iter().enumerate() {
-                    input.Kinds[y * width + x + d] = k;
-                }
-            }
-            continue;
-        }
-        let y = lane * 4;
-        let bottom = y + 2;
-        input.Kinds[y * width] = 26;
-        input.ClockHoldTicks[y * width] = 2 + (lane % 3) as i32;
-        input.Kinds[y * width + 1] = 15;
-        for x in 2..=width - 3 {
-            input.Kinds[y * width + x] = 1;
-        }
-        input.Kinds[y * width + width - 2] = 15;
-        input.Kinds[y * width + width - 1] = 26;
-        input.ClockHoldTicks[y * width + width - 1] = 3 + ((lane / 3) % 4) as i32;
-        input.Kinds[bottom * width] = 26;
-        input.ClockHoldTicks[bottom * width] = 1 + (lane % 2) as i32;
-        for stage in 0..(width - 4) / 4 {
-            let x = 4 + stage * 4;
-            let kind = [18, 22, 19, 23, 20, 24, 21, 17][stage % 8];
-            for (d, k) in [15, 1, 16, kind].into_iter().enumerate() {
-                input.Kinds[bottom * width + x - 3 + d] = k;
-            }
-            if kind != 21 && kind != 17 {
-                input.Kinds[(y + 1) * width + x] = 16;
-            }
-        }
-    }
-    // This generated layout uses individual devices/ports and continuous trace runs.
+    let mut input = CompileInput::empty(width, height);
     let mut nextId = 1;
-    for cell in 0..count {
-        if input.Kinds[cell] == 0 {
-            continue;
-        }
-        input.ComponentIds[cell] =
-            if cell % width > 0 && input.Kinds[cell] == 1 && input.Kinds[cell - 1] == 1 {
-                input.ComponentIds[cell - 1]
+    for lane in 0..lanes {
+        let y = lane * if unary { 2 } else { 4 };
+        for x in 0..width {
+            let cell = y * width + x;
+            input.Kinds[cell] = if x == 0 {
+                26
+            } else if x % 2 == 1 {
+                1
             } else {
-                nextId += 1;
-                nextId
+                17
             };
+            input.ComponentIds[cell] = nextId;
+            input.ClockHoldTicks[cell] = 2 + (lane % 3) as i32;
+            nextId += 1;
+        }
     }
     let start = Instant::now();
     let mut core = SimulationCore::compile(input).unwrap();

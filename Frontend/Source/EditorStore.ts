@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import { cellKey, contains, ToolIds, newBoard, validateBoard, validateProject, type EditorTool, type Board, type Blueprint, type ClipboardItem, type Grid, type Point, type ProjectDocument, type RenderMode, type Selection, type Tile } from './Model';
+import { inkSettings, isDirectional, validateInkSettings, type InkSettings, cellKey, contains, ToolIds, newBoard, validateBoard, validateProject, type EditorTool, type Board, type Blueprint, type ClipboardItem, type Grid, type Point, type ProjectDocument, type RenderMode, type Selection, type Tile } from './Model';
 import { CellStore, inkSource, type CellChange } from './CellStore';
 import { ComponentIndex } from './ComponentIndex';
 import { compatibleComponents, connectedRegions, snapshotTiles } from './ComponentTopology';
@@ -40,9 +40,11 @@ export interface PlacementPreview {
 export interface RectanglePaintPreview {
     Bounds: Grid;
     Anchor: Point;
-    Material: Pick<Tile, 'toolId' | 'isOn' | 'clockHoldTicks'>;
+    Material: Pick<Tile, 'toolId' | 'isOn' | 'clockHoldTicks' | 'direction' | 'fixedDrive' | 'defaultValue' | 'crossMask'>;
 }
 interface State {
+    DrawSettings: InkSettings;
+    rotate: (steps: number) => void;
     Board: Board;
     Tiles: CellStore;
     Components: ComponentIndex;
@@ -158,7 +160,7 @@ function* translated(source: CellStore, offset: Point): IterableIterator<readonl
 }
 export const useEditor = create<State>((set, get) => ({
     Board: newBoard(), Tiles: new CellStore(), Components: new ComponentIndex(), Ids: { Next: 1 }, Stroke: null,
-    EditTool: 'pointer', Gesture: 'idle', Marquee: null, ToolSelection: null, ...EmptyMerge, ...EmptySplit, Blueprints: [], RenderMode: loadRenderMode(), Selection: null,
+    DrawSettings: {}, EditTool: 'pointer', Gesture: 'idle', Marquee: null, ToolSelection: null, ...EmptyMerge, ...EmptySplit, Blueprints: [], RenderMode: loadRenderMode(), Selection: null,
     Clipboard: [], ClipboardIndex: -1, ClipboardOrigin: 'copy', Undo: [], Redo: [], Active: null, ...EmptyPreview,
     LeftDock: 'circuitEditor', RightDock: 'eventLog', LeftOpen: true, RightOpen: true, LeftWidth: 272, RightWidth: 272,
     Events: [], Path: '', Recent: [], Revision: 0, Simulating: false, Runtime: new Map(), RuntimeGrid: null,
@@ -169,7 +171,7 @@ export const useEditor = create<State>((set, get) => ({
         for (const tile of project.board.tiles)
             next = Math.max(next, tile.componentId + 1);
         set({ Board: { ...project.board, tiles: [] }, Tiles: tiles, Components: new ComponentIndex(tiles), Ids: { Next: next }, Stroke: null,
-            EditTool: 'pointer', Gesture: 'idle', Marquee: null, ToolSelection: null, ...EmptyMerge, ...EmptySplit, Blueprints: project.blueprints, Selection: null, Clipboard: [], ClipboardIndex: -1, ClipboardOrigin: 'copy',
+            DrawSettings: {}, EditTool: 'pointer', Gesture: 'idle', Marquee: null, ToolSelection: null, ...EmptyMerge, ...EmptySplit, Blueprints: project.blueprints, Selection: null, Clipboard: [], ClipboardIndex: -1, ClipboardOrigin: 'copy',
             Undo: [], Redo: [], Active: null, ...EmptyPreview, Path: path, Runtime: new Map(), RuntimeGrid: null, Revision: get().Revision + 1 });
     },
     export: () => { const s = get(); return { ...s.Board, grid: { ...s.Board.grid }, tiles: [...s.Tiles.values()].sort((a, b) => a.y - b.y || a.x - b.x) }; },
@@ -325,7 +327,7 @@ export const useEditor = create<State>((set, get) => ({
                 continue;
             if (!remove && !stroke) {
                 const existing = s.Tiles.get(cellKey(point)), id = s.Board.selectedTool, fromExisting = existing?.toolId === id;
-                const tile = fromExisting ? existing : { ...point, toolId: id, componentId: allocate(s), isOn: id === 'latch' ? s.Board.latchInitialState : true, ...(id === 'clock' ? { clockHoldTicks: s.Board.clockHoldTicks } : {}) };
+                const tile = fromExisting ? existing : { ...inkSettings(id,s.DrawSettings), ...point, toolId: id, componentId: allocate(s), isOn: id === 'latch' ? s.Board.latchInitialState : true, ...(id === 'clock' ? { clockHoldTicks: s.Board.clockHoldTicks } : {}) };
                 stroke = { Tile: tile, FromExisting: fromExisting, Targets: new Set() };
                 set({ Stroke: stroke });
                 s = get();
@@ -376,7 +378,7 @@ export const useEditor = create<State>((set, get) => ({
         if (left > right || top > bottom) { set({ RectanglePaint: null }); return; }
         const anchor = { x: Math.max(left, Math.min(right, start.x)), y: Math.max(top, Math.min(bottom, start.y)) };
         const existing = s.Tiles.get(cellKey(anchor)), id = s.Board.selectedTool;
-        const material = existing?.toolId === id ? existing : { toolId: id, isOn: id === 'latch' ? s.Board.latchInitialState : true, ...(id === 'clock' ? { clockHoldTicks: s.Board.clockHoldTicks } : {}) };
+        const material = existing?.toolId === id ? existing : { ...inkSettings(id,s.DrawSettings), toolId: id, isOn: id === 'latch' ? s.Board.latchInitialState : true, ...(id === 'clock' ? { clockHoldTicks: s.Board.clockHoldTicks } : {}) };
         set({ RectanglePaint: { Bounds: { originX: left, originY: top, width: right - left + 1, height: bottom - top + 1 }, Anchor: anchor, Material: material } });
     },
     paintRectangle: (start, end) => {
@@ -560,12 +562,21 @@ export const useEditor = create<State>((set, get) => ({
         set({ Board: { ...s.Board, grid }, Revision: s.Revision + 1 });
         return true;
     },
+    rotate: steps => {
+        const s = get(); if(s.Simulating || s.Active || s.Preview) return;
+        if(s.Selection) {
+            s.begin(); const changes: [string,Tile][] = [];
+            for(const id of selectionIds(s)) for(const tile of s.Components.members(id)) if(isDirectional(tile.toolId)) changes.push([cellKey(tile),{...tile,direction:((tile.direction??0)+steps+4)%4}]);
+            set(setTiles(s,s.Tiles.update(changes))); get().commit();
+        } else set({DrawSettings:{...s.DrawSettings,direction:((s.DrawSettings.direction??0)+steps+4)%4}});
+    },
     configure: (patch, selection = false) => {
         const s = get();
         if (s.Simulating)
             return;
         if (patch.clockHoldTicks !== undefined && (!Number.isInteger(patch.clockHoldTicks) || patch.clockHoldTicks < 1 || patch.clockHoldTicks > 2147483647))
             return;
+        try { for (const tile of selection && s.Selection ? selectionIds(s).map(id=>s.Components.sample(id)!) : [{toolId:s.Board.selectedTool,...inkSettings(s.Board.selectedTool,s.DrawSettings)} as Tile]) validateInkSettings({...tile,...patch}, 'InvalidSettings'); } catch { return; }
         if (selection && s.Selection?.kind === 'components') {
             s.begin();
             const ids = selectionIds(s), changes: [string, Tile][] = [];
@@ -576,7 +587,7 @@ export const useEditor = create<State>((set, get) => ({
             get().commit();
         }
         else if (!selection)
-            set({ Board: { ...s.Board, ...(patch.clockHoldTicks ? { clockHoldTicks: patch.clockHoldTicks } : {}), ...(patch.isOn !== undefined ? { latchInitialState: patch.isOn } : {}), ...(patch.toolId ? { selectedTool: patch.toolId } : {}) } });
+            set({ DrawSettings: {...s.DrawSettings,...Object.fromEntries(Object.entries(patch).filter(([key])=>['direction','fixedDrive','defaultValue','crossMask'].includes(key))),...('fixedDrive' in patch ? {fixedDrive:patch.fixedDrive}:{})}, Board: { ...s.Board, ...(patch.clockHoldTicks ? { clockHoldTicks: patch.clockHoldTicks } : {}), ...(patch.isOn !== undefined ? { latchInitialState: patch.isOn } : {}), ...(patch.toolId ? { selectedTool: patch.toolId } : {}) } });
     },
     activateDock: (side, id) => { const s = get(), a = side === 'left' ? 'LeftDock' : 'RightDock', b = side === 'left' ? 'RightDock' : 'LeftDock'; set({ [a]: id, ...(s[b] === id ? { [b]: s[a] } : {}) }); },
     log: text => set(s => ({ Events: [...s.Events.slice(-999), `${new Date().toLocaleTimeString()}  ${text}`] })), setRuntime: states => set({ Runtime: states }),

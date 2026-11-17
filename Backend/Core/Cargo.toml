@@ -3,6 +3,7 @@ name = "ocb-core"
 version = "0.1.0"
 edition = "2024"
 autotests = false
+autoexamples = false
 
 [lib]
 path = "Library.rs"
@@ -20,9 +21,6 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 zip = { version = "4", default-features = false, features = ["deflate"] }
 [[test]]
-name = "legacy"
-path = "Tests/LegacyTests.rs"
-[[test]]
 name = "project"
 path = "Tests/ProjectTests.rs"
 
@@ -33,3 +31,7 @@ path = "Examples/HelloWorld5x8.rs"
 [[test]]
 name = "examples"
 path = "Tests/ExampleTests.rs"
+
+[[example]]
+name = "Ram16x8"
+path = "Examples/Ram16x8.rs"

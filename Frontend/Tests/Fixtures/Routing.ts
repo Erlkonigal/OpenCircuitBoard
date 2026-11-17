@@ -6,11 +6,11 @@ export function routingProject(): ProjectDocument {
     for(let y=-7;y<=7;y++) tiles.push({x:-4,y,toolId:'bus',componentId:1,isOn:true});
     for(const [lane,trace] of TraceTools.entries()) {
         const y=-7+lane*2;
-        for(const [offset,toolId] of ['latch','read',trace,'bus','cross',trace,'write','led'].entries()) {
+        for(const [offset,toolId] of ['latch',trace,trace,'bus','cross',trace,trace,'led'].entries()) {
             if(toolId==='bus') continue;
-            tiles.push({x:-7+offset,y,toolId,componentId:10+lane*10+offset,isOn:toolId!=='latch'});
+            tiles.push({x:-7+offset,y,toolId,componentId:10+lane*10+(offset===2?1:offset===6?5:offset),isOn:toolId!=='latch'});
         }
     }
-    return {board:{selectedTool:'traceOrange',clockHoldTicks:1,latchInitialState:false,
+    return {board:{ circuitModel: 'booleanSwitch',selectedTool:'traceOrange',clockHoldTicks:1,latchInitialState:false,
         grid:{originX:-20,originY:-14,width:40,height:28},tiles},blueprints:[]};
 }

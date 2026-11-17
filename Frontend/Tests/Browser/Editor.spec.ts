@@ -81,7 +81,7 @@ test('component library and inspector configure colors and per-cell settings', a
     await page.screenshot({ path: buildPath('TraceColorCapture.png') });
     await page.getByRole('button', { name: 'Bus', exact: true }).click();
     await expect(page.locator('.color-option')).toHaveCount(0);
-    await expect(page.getByTestId('right-dock')).toContainText('eight independent trace colors');
+    await expect(page.getByTestId('right-dock')).toContainText('Eight independent colors');
     await page.screenshot({ path: buildPath('BusSettingsCapture.png') });
     await page.getByRole('button', { name: 'Latch', exact: true }).click();
     await page.getByText('Off', { exact: true }).click();

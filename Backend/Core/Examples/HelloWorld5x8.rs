@@ -1,16 +1,15 @@
-#![allow(non_snake_case, non_upper_case_globals)]
-use ocb_core::Project::{self, Board, Grid, ProjectDocument, Tile};
-use std::collections::{BTreeMap, HashSet, VecDeque};
+#![allow(non_snake_case, non_upper_case_globals, dead_code)]
+#[path = "ExampleLayout.rs"]
+mod ExampleLayout;
+use ExampleLayout::{Layout, Node, Point, Wire};
+use ocb_core::Project::{self, ProjectDocument};
 use std::path::PathBuf;
-
-type Point = (i32, i32);
 pub const Message: &str = "Hello, World!";
 pub const DisplayOrigin: Point = (-22, -37);
 pub const PixelPitch: i32 = 10;
 pub const PixelSize: i32 = 4;
-pub const StartupTicks: usize = 4;
+pub const StartupTicks: usize = 5;
 pub const CharacterTicks: usize = 8;
-
 pub fn glyph(character: char) -> [&'static str; 8] {
     match character {
         'H' => [
@@ -45,315 +44,168 @@ pub fn glyph(character: char) -> [&'static str; 8] {
     }
 }
 
-struct Node {
-    Kind: &'static str,
-    Inputs: Vec<usize>,
-}
-#[derive(Clone, Copy, PartialEq)]
-enum Wire {
-    Trace(usize),
-    Bus(usize),
-    Cross,
-}
-const InternalSignalCount: usize = 160;
-const TraceTools: [&str; 8] = [
-    "trace",
-    "traceRed",
-    "traceGreen",
-    "traceBlue",
-    "traceCyan",
-    "traceMagenta",
-    "traceOrange",
-    "traceWhite",
-];
-fn signal(net: usize) -> (usize, usize) {
-    if net < InternalSignalCount {
-        (net / 8, net % 8)
-    } else {
-        let pixel = net - InternalSignalCount;
-        (20 + pixel % 5, pixel / 5)
-    }
-}
-struct Layout {
-    Tiles: BTreeMap<Point, Tile>,
-    Wires: BTreeMap<Point, Wire>,
-    NextId: i32,
-}
-impl Layout {
-    fn new() -> Self {
-        Self {
-            Tiles: BTreeMap::new(),
-            Wires: BTreeMap::new(),
-            NextId: 1,
-        }
-    }
-    fn device(&mut self, kind: &str, points: impl IntoIterator<Item = Point>, on: bool) {
-        let id = self.NextId;
-        self.NextId += 1;
-        for (x, y) in points {
-            assert!(
-                !self.Tiles.contains_key(&(x, y)) && !self.Wires.contains_key(&(x, y)),
-                "Device collision at {x},{y}"
-            );
-            self.Tiles.insert(
-                (x, y),
-                Tile {
-                    X: x,
-                    Y: y,
-                    ToolId: kind.into(),
-                    ComponentId: id,
-                    IsOn: on,
-                    ClockHoldTicks: None,
-                },
-            );
-        }
-    }
-    fn wire(&mut self, point: Point, wire: Wire) {
-        assert!(!self.Tiles.contains_key(&point));
-        if let Some(previous) = self.Wires.insert(point, wire) {
-            assert!(previous == wire, "Wire collision at {point:?}");
-        }
-    }
-    fn finish(mut self) -> ProjectDocument {
-        let mut remaining: HashSet<_> = self.Wires.keys().copied().collect();
-        // Stable coordinate order makes regeneration reproducible. Every disconnected
-        // trace/Bus segment and every four-connected Cross region gets a separate ID.
-        for (&seed, &wire) in &self.Wires {
-            if !remaining.remove(&seed) {
-                continue;
-            }
-            let id = self.NextId;
-            self.NextId += 1;
-            let mut queue = VecDeque::from([seed]);
-            while let Some((x, y)) = queue.pop_front() {
-                let kind = match wire {
-                    Wire::Cross => "cross",
-                    Wire::Bus(_) => "bus",
-                    Wire::Trace(net) => TraceTools[signal(net).1],
-                };
-                self.Tiles.insert(
-                    (x, y),
-                    Tile {
-                        X: x,
-                        Y: y,
-                        ToolId: kind.into(),
-                        ComponentId: id,
-                        IsOn: false,
-                        ClockHoldTicks: None,
-                    },
-                );
-                for (dx, dy) in [(-1, 0), (1, 0), (0, -1), (0, 1)] {
-                    let neighbor = (x + dx, y + dy);
-                    if self.Wires.get(&neighbor) == Some(&wire) && remaining.remove(&neighbor) {
-                        queue.push_back(neighbor);
-                    }
-                }
-            }
-        }
-        let minX = self.Tiles.keys().map(|p| p.0).min().unwrap() - 4;
-        let minY = self.Tiles.keys().map(|p| p.1).min().unwrap() - 4;
-        let maxX = self.Tiles.keys().map(|p| p.0).max().unwrap() + 5;
-        let maxY = self.Tiles.keys().map(|p| p.1).max().unwrap() + 5;
-        let mut project = ProjectDocument {
-            Board: Board {
-                SelectedTool: "led".into(),
-                ClockHoldTicks: 1,
-                LatchInitialState: true,
-                Grid: Grid {
-                    OriginX: minX,
-                    OriginY: minY,
-                    Width: maxX - minX,
-                    Height: maxY - minY,
-                },
-                Tiles: self.Tiles.into_values().collect(),
-            },
-            Blueprints: vec![],
-        };
-        project.Board.Tiles.sort_by_key(|tile| (tile.Y, tile.X));
-        project
-            .validate()
-            .expect("Generated example must be a valid v2 project");
-        project
-    }
-}
-
 pub fn buildProject() -> ProjectDocument {
+    let mut layout = Layout::new();
     let mut nodes = vec![];
-    // The two complementary half-cycles of the odd-inversion delay ring produce
-    // the same thirteen-character sequence through XOR boundary detection.
-    for index in 0..104 {
-        nodes.push(Node {
-            Kind: if index == 0 { "not" } else { "buffer" },
-            Inputs: vec![if index == 0 { 103 } else { index - 1 }],
-        });
+    for i in 0..104 {
+        nodes.push(Node::gate(
+            if i == 0 { "not" } else { "buffer" },
+            16 + i,
+            vec![16 + if i == 0 { 103 } else { i - 1 }],
+        ));
     }
-    let phases = nodes.len();
-    for index in 0..13 {
-        nodes.push(Node {
-            Kind: if index == 12 { "xnor" } else { "xor" },
-            Inputs: vec![index * 8, ((index + 1) % 13) * 8],
-        });
+    for i in 0..13 {
+        nodes.push(Node::gate(
+            if i == 12 { "xnor" } else { "xor" },
+            i,
+            vec![16 + i * 8, 16 + ((i + 1) % 13) * 8],
+        ));
     }
-    let rom = nodes.len();
-    for row in 0..8 {
-        for column in 0..5 {
-            nodes.push(Node {
-                Kind: "or",
-                Inputs: Message
-                    .chars()
-                    .enumerate()
-                    .filter_map(|(index, character)| {
-                        (glyph(character)[row].as_bytes()[column] == b'#').then_some(phases + index)
-                    })
-                    .collect(),
-            });
-        }
-    }
-    let enable = nodes.len();
     nodes.push(Node {
         Kind: "latch",
+        Output: 13,
         Inputs: vec![],
+        On: true,
     });
-    nodes.push(Node {
-        Kind: "buffer",
-        Inputs: vec![enable],
-    });
-    nodes.push(Node {
-        Kind: "buffer",
-        Inputs: vec![enable + 1],
-    });
-    let outputs = nodes.len();
+    nodes.push(Node::gate("buffer", 120, vec![13]));
+    nodes.push(Node::gate("buffer", 121, vec![120]));
+    nodes.push(Node::gate("buffer", 122, vec![121]));
+    let (_, bottom) = layout.bank(&nodes, -300, -140, 2, 0);
+    assert!(bottom < -75);
+    // Thirteen word lines cross forty bit lines. Only stored zeroes get a switch.
+    let romLeft = -250;
+    let romTop = -75;
+    let ground = 9999;
+    layout.Fixed.insert(ground, false);
     for pixel in 0..40 {
-        nodes.push(Node {
-            Kind: "and",
-            Inputs: vec![rom + pixel, enable + 2],
-        });
-    }
-
-    assert_eq!(outputs, InternalSignalCount);
-    let mut layout = Layout::new();
-    // Balance whole gates by their port count. These cuts keep the widest bank
-    // at 185 ports while preserving the original logical node order.
-    let cuts = [0, 92, 143, nodes.len()];
-    let banks: Vec<Vec<usize>> = (0..3)
-        .map(|bank| {
-            (cuts[bank]..cuts[bank + 1])
-                .flat_map(|index| {
-                    nodes[index]
-                        .Inputs
-                        .iter()
-                        .copied()
-                        .chain(std::iter::once(index))
-                })
-                .collect()
-        })
-        .collect();
-    let maximumColumns = banks.iter().map(Vec::len).max().unwrap();
-    let right = -90;
-    let left = right - (maximumColumns as i32 - 1) * 2;
-    let laneY = |bank: usize, group: usize| {
-        -101 + bank as i32 * 64
-            + if bank % 2 == 0 {
-                group as i32 * 2
-            } else {
-                (24 - group) as i32 * 2
-            }
-    };
-    for (bank, columns) in banks.iter().enumerate() {
-        let top = -101 + bank as i32 * 64;
-        for group in 0..25 {
-            let y = laneY(bank, group);
-            for column in 0..maximumColumns {
-                let x = left + column as i32 * 2;
-                layout.wire(
-                    (x, y),
-                    match columns.get(column) {
-                        Some(&net) if signal(net).0 != group => Wire::Cross,
-                        _ => Wire::Bus(group),
-                    },
-                );
-                if x < right {
-                    layout.wire((x + 1, y), Wire::Bus(group));
-                }
-            }
-        }
-        for (column, &net) in columns.iter().enumerate() {
-            let x = left + column as i32 * 2;
-            for offset in (1..48).step_by(2) {
-                layout.wire((x, top + offset), Wire::Trace(net));
-            }
-            layout.wire((x, top + 49), Wire::Trace(net));
-        }
-        let mut first = 0;
-        for index in cuts[bank]..cuts[bank + 1] {
-            let node = &nodes[index];
-            let last = first + node.Inputs.len();
-            layout.device(
-                node.Kind,
-                (left + first as i32 * 2..=left + last as i32 * 2).map(|x| (x, top + 51)),
-                node.Kind == "latch",
+        let net = 200 + pixel;
+        layout.Colors.insert(net, pixel / 5);
+        layout.Defaults.insert(net);
+        let x = romLeft + pixel as i32 * 5;
+        for y in romTop - 1..=80 + (pixel % 5) as i32 * 2 {
+            let rowCross = y >= romTop + 2 && y <= romTop + 50 && (y - romTop - 2) % 4 == 0;
+            let collectorCross = y >= 80 && (y - 80) % 2 == 0 && (y - 80) / 2 < (pixel % 5) as i32;
+            let own = y == 80 + (pixel % 5) as i32 * 2;
+            layout.wire(
+                (x, y),
+                if rowCross || collectorCross {
+                    Wire::Cross
+                } else if own {
+                    Wire::Bus(100 + pixel % 5)
+                } else {
+                    Wire::Trace(net)
+                },
             );
-            for column in first..=last {
+        }
+    }
+    for (row, ch) in Message.chars().enumerate() {
+        let y = romTop + row as i32 * 4;
+        let group = row / 8;
+        let spine = -300 - 3 * (2 - group) as i32;
+        for x in spine + 1..romLeft + 40 * 5 {
+            let isBit = x >= romLeft && (x - romLeft) % 5 == 0;
+            let spineCross = group == 0 && x == -303;
+            layout.wire(
+                (x, y + 2),
+                if isBit || spineCross {
+                    Wire::Cross
+                } else {
+                    Wire::Trace(row)
+                },
+            );
+        }
+        for pixel in 0..40 {
+            if glyph(ch)[pixel / 5].as_bytes()[pixel % 5] == b'.' {
+                let x = romLeft + pixel as i32 * 5;
                 layout.device(
-                    if column == last { "read" } else { "write" },
-                    [(left + column as i32 * 2, top + 50)],
+                    "switch",
+                    [(x + 2, y)],
+                    10000 + (row * 40 + pixel) as i32,
                     false,
                 );
-            }
-            first = last + 1;
-        }
-    }
-    // Reverse the lane order at each fold, so all 25 nested turns stay separate.
-    for bank in 0..2 {
-        for group in 0..25 {
-            let (edge, turn, direction) = if bank == 0 {
-                (right, right + 2 * (25 - group) as i32, 1)
-            } else {
-                (left, left - 2 * (group + 1) as i32, -1)
-            };
-            let (startY, endY) = (laneY(bank, group), laneY(bank + 1, group));
-            let mut x = edge + direction;
-            loop {
-                layout.wire((x, startY), Wire::Bus(group));
-                layout.wire((x, endY), Wire::Bus(group));
-                if x == turn {
-                    break;
-                }
-                x += direction;
-            }
-            for y in startY.min(endY)..=startY.max(endY) {
-                layout.wire((turn, y), Wire::Bus(group));
+                layout.wire((x + 1, y), Wire::Trace(200 + pixel));
+                layout.wire((x + 3, y), Wire::Trace(ground));
+                layout.wire((x + 2, y + 1), Wire::Trace(row));
             }
         }
     }
-    // Each display column receives one Bus. Its eight colors select the rows.
+    // Extend the two global buses through the matrix; tap colors pick the word line.
+    layout.globals(-300, &[-140], 2, romTop + 50);
+    for row in 0..13 {
+        let y = romTop + row as i32 * 4 + 2;
+        let group = row / 8;
+        let spine = -300 - 3 * (2 - group) as i32;
+        // The Trace immediately next to the bus selects its color.
+        assert!(layout.Wires.contains_key(&(spine, y)));
+    }
+    // Five display buses collect eight rows each; the display remains at its original position.
     for column in 0..5 {
-        let x = DisplayOrigin.0 + column * PixelPitch;
-        let group = 20 + column as usize;
-        let bottom = laneY(2, group);
-        for sx in right + 1..=x - 3 {
-            layout.wire((sx, bottom), Wire::Bus(group));
+        let y = 80 + column * 2;
+        let bx = DisplayOrigin.0 + column * PixelPitch - 3;
+        for x in romLeft..=bx {
+            let verticalBit = x >= romLeft && x < romLeft + 200 && (x - romLeft) % 5 == 0;
+            let pixel = ((x - romLeft) / 5) as usize;
+            let cross = verticalBit && pixel % 5 > column as usize;
+            if !layout.Wires.contains_key(&(x, y)) {
+                layout.wire(
+                    (x, y),
+                    if cross {
+                        Wire::Cross
+                    } else {
+                        Wire::Bus(100 + column as usize)
+                    },
+                );
+            }
         }
-        for y in DisplayOrigin.1..=bottom {
-            layout.wire((x - 3, y), Wire::Bus(group));
+        for sy in DisplayOrigin.1..y {
+            layout.wire((bx, sy), Wire::Bus(100 + column as usize));
         }
         for row in 0..8 {
-            let y = DisplayOrigin.1 + row * PixelPitch;
+            let px = DisplayOrigin.0 + column * PixelPitch;
+            let py = DisplayOrigin.1 + row * PixelPitch;
+            let pixel = (row * 5 + column) as usize;
+            // A compact directional AND masks startup and drives a full-size display LED.
+            layout.device("and", [(px - 1, py)], 20000 + pixel as i32, false);
+            layout.wire((px - 2, py), Wire::Trace(200 + pixel));
             layout.device(
                 "led",
-                (0..PixelSize).flat_map(|dy| (0..PixelSize).map(move |dx| (x + dx, y + dy))),
+                (0..PixelSize).flat_map(|dy| (0..PixelSize).map(move |dx| (px + 1 + dx, py + dy))),
+                21000 + pixel as i32,
                 false,
             );
-            layout.device("write", [(x - 1, y)], false);
-            layout.wire(
-                (x - 2, y),
-                Wire::Trace(outputs + (row * 5 + column) as usize),
-            );
+            layout.wire((px, py), Wire::Trace(500 + pixel));
+        }
+    }
+    // Startup enable is distributed in its own trace, with isolated crossings at display buses.
+    let enableX = DisplayOrigin.0 - 6;
+    // Bring enable from its bank output using a separate local bus lane.
+    let enablePin = layout.point(122);
+    let tap = (enablePin.0 + 1, enablePin.1);
+    // The bank maps 122 to a local bus; route from its output below the bank instead.
+    let ey = -85;
+    for x in tap.0.min(enableX)..=tap.0.max(enableX) {
+        layout.wire((x, ey), Wire::Trace(122));
+    }
+    for y in tap.1 + 1..ey {
+        layout.wire((tap.0, y), Wire::Trace(122));
+    }
+    for y in ey..DisplayOrigin.1 + 71 {
+        layout.wire((enableX, y), Wire::Trace(122));
+    }
+    for row in 0..8 {
+        let py = DisplayOrigin.1 + row * PixelPitch;
+        let sy = py - 2;
+        for x in enableX + 1..=DisplayOrigin.0 + 4 * PixelPitch - 1 {
+            let isBus = (0..5).any(|c| x == DisplayOrigin.0 + c * PixelPitch - 3);
+            layout.wire((x, sy), if isBus { Wire::Cross } else { Wire::Trace(122) });
+        }
+        for c in 0..5 {
+            let px = DisplayOrigin.0 + c * PixelPitch;
+            layout.wire((px - 1, py - 1), Wire::Trace(122));
         }
     }
     layout.finish()
 }
-
 pub fn verify(project: &ProjectDocument) {
     let (input, (minX, minY)) = project.Board.compileInput().expect("Compile example input");
     let mut core = ocb_core::SimulationCore::compile(input).expect("Compile example circuit");
@@ -370,7 +222,7 @@ pub fn verify(project: &ProjectDocument) {
         };
         for (row, pattern) in expected.iter().enumerate() {
             for (column, value) in pattern.bytes().enumerate() {
-                let x = DisplayOrigin.0 + column as i32 * PixelPitch;
+                let x = DisplayOrigin.0 + 1 + column as i32 * PixelPitch;
                 let y = DisplayOrigin.1 + row as i32 * PixelPitch;
                 for dy in 0..PixelSize {
                     for dx in 0..PixelSize {
@@ -389,7 +241,6 @@ pub fn verify(project: &ProjectDocument) {
     }
 }
 
-#[allow(dead_code)]
 fn main() {
     let path = std::env::args_os()
         .nth(1)
@@ -400,11 +251,11 @@ fn main() {
         });
     let project = buildProject();
     verify(&project);
-    std::fs::create_dir_all(path.parent().unwrap()).expect("Create example directory");
-    let saved = Project::save(&path, &project).expect("Save example archive");
+    Project::save(&path, &project).unwrap();
     println!(
-        "Generated {} ({} occupied cells); verified three complete loops. Run at 16 TPS for 0.5 seconds per character.",
-        saved.display(),
+        "HelloWorld5x8: {}x{}, {} occupied cells",
+        project.Board.Grid.Width,
+        project.Board.Grid.Height,
         project.Board.Tiles.len()
     );
 }

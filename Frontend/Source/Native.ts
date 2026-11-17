@@ -47,11 +47,11 @@ export function encodeBoard(board: Board) { board = validateBoard(board); const 
     maxX = Math.max(maxX, tile.x);
     maxY = Math.max(maxY, tile.y);
 } const width = maxX - minX + 1, height = maxY - minY + 1, count = width * height; if (count > 1048576)
-    throw Error('SimulationGridTooLarge'); const bytes = new Uint8Array(24 + count * 16), data = new DataView(bytes.buffer); [0x4f434249, 3, width, height, minX, minY].forEach((v, i) => data.setInt32(i * 4, v, true)); for (let i = 0; i < count; i++) {
-    data.setInt32(24 + (count * 2 + i) * 4, 1, true);
+    throw Error('SimulationGridTooLarge'); const bytes = new Uint8Array(24 + count * 32), data = new DataView(bytes.buffer); [0x4f434249, 4, width, height, minX, minY].forEach((v, i) => data.setInt32(i * 4, v, true)); for (let i = 0; i < count; i++) {
+    data.setInt32(24 + (count * 2 + i) * 4, 1, true); data.setInt32(24 + (count * 5 + i) * 4, -1, true);
 } for (const t of tiles) {
     const cell = (t.y - minY) * width + t.x - minX;
-    [ToolKinds[t.toolId], Number(t.isOn), t.clockHoldTicks ?? board.clockHoldTicks, t.componentId].forEach((v, i) => data.setInt32(24 + (count * i + cell) * 4, v, true));
+    [ToolKinds[t.toolId], Number(t.isOn), t.clockHoldTicks ?? board.clockHoldTicks, t.componentId, t.direction ?? 0, t.fixedDrive === undefined ? -1 : Number(t.fixedDrive), Number(t.defaultValue ?? false), t.crossMask ?? 0].forEach((v, i) => data.setInt32(24 + (count * i + cell) * 4, v, true));
 }
 return bytes; }
 export async function compile(board: Board) { if (!isDesktop())
@@ -92,3 +92,5 @@ export async function chooseSave(as = false) { if (!isDesktop())
     return; const saved = await invoke<string>('saveProject', { path, project: s.exportProject() }); useEditor.setState({ Path: saved }); s.log(`Saved ${saved}`); await refreshRecent(); }
 export async function refreshRecent() { if (isDesktop())
     useEditor.setState({ Recent: await invoke<string[]>('recentProjects') }); }
+
+export async function inspectCell(session: number, cell: number): Promise<number[]> { const bytes = await invoke<ArrayBuffer>('inspectCell', {session,cell}); return JSON.parse(new TextDecoder().decode(bytes)); }

@@ -9,6 +9,7 @@ use std::{
 pub enum Action {
     Compile(CompileInput, (i32, i32)),
     Poll(u32, u32),
+    Inspect(u32, usize),
     Run(u32, f64),
     Pause(u32),
     Step(u32, i32),
@@ -159,6 +160,10 @@ impl Runtime {
     }
     fn handle(&mut self, action: Action) -> Result<Vec<u8>, String> {
         match action {
+            Action::Inspect(id, cell) => {
+                self.check(id)?;
+                Ok(serde_json::to_vec(&self.Core.inspect(cell)).unwrap())
+            }
             Action::Poll(id, ack) => {
                 self.check(id)?;
                 if let Some(pending) = &self.Pending {
@@ -366,14 +371,10 @@ fn worker(receiver: Receiver<Request>) {
 mod tests {
     use super::*;
     fn input() -> CompileInput {
-        CompileInput {
-            Width: 5,
-            Height: 1,
-            Kinds: vec![26, 15, 1, 16, 17],
-            InitialStates: vec![0; 5],
-            ClockHoldTicks: vec![1; 5],
-            ComponentIds: vec![1, 2, 3, 4, 5],
-        }
+        let mut input = CompileInput::empty(3, 1);
+        input.Kinds = vec![26, 1, 17];
+        input.ComponentIds = vec![1, 2, 3];
+        input
     }
     fn u32At(frame: &[u8], offset: usize) -> u32 {
         u32::from_le_bytes(frame[offset..offset + 4].try_into().unwrap())
@@ -503,8 +504,8 @@ mod tests {
     fn compileErrorsUseBoardCoordinates() {
         let session = Session::default();
         let mut invalid = input();
-        invalid.Kinds = vec![15, 0, 0, 0, 0];
-        invalid.ComponentIds = vec![1, 0, 0, 0, 0];
+        invalid.Kinds = vec![15, 0, 0];
+        invalid.ComponentIds = vec![1, 0, 0];
         let error = session
             .request(Action::Compile(invalid, (-9, 4)))
             .unwrap_err();

@@ -7,3 +7,5 @@
 *.ocb
 
 !Frontend/Assets/Examples/HelloWorld5x8.ocb
+
+!Frontend/Assets/Examples/Ram16x8.ocb

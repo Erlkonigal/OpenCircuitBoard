@@ -303,6 +303,8 @@ export class EditorInput {
         if (s.Preview && command !== 'paste')
             return;
         switch (command) {
+            case 'rotate': s.rotate(1); break;
+            case 'rotateBack': s.rotate(-1); break;
             case 'merge':
                 if (s.EditTool === 'merge')
                     s.confirmMerge();

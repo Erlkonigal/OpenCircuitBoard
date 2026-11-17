@@ -133,10 +133,10 @@ describe('Explicit component identity',()=>{
             expect(()=>validateProject({board:newBoard(),blueprints:[{id:'x',name:'x',width:4,height:4,tiles}]})).toThrow('ProjectBlueprintInvalid');
         }
     });
-    it('encodes compile v3 with zero for empty cells and preserves numeric ink IDs',()=>{
-        const board={...newBoard(),tiles:[tile(-2,-1,17),tile(-1,0,23,'read')]};const d=new DataView(encodeBoard(board).buffer);
-        expect(d.getInt32(4,true)).toBe(3);expect([...new Int32Array(d.buffer,24+4*3*4)]).toEqual([17,0,0,23]);
-        expect(ToolKinds.read).toBe(15);expect(ToolKinds.latch).toBe(25);expect(Object.values(ToolKinds)).not.toContain(14);
+    it('encodes compile v4 with zero for empty cells and preserves numeric ink IDs',()=>{
+        const board={...newBoard(),tiles:[tile(-2,-1,17),tile(-1,0,23,'switch')]};const d=new DataView(encodeBoard(board).buffer);
+        expect(d.getInt32(4,true)).toBe(4);expect([...new Int32Array(d.buffer,24+4*3*4,4)]).toEqual([17,0,0,23]);
+        expect(ToolKinds.switch).toBe(30);expect(ToolKinds.latch).toBe(25);expect(Object.values(ToolKinds)).not.toContain(14);
         expect(validateBoard(board).tiles[0].componentId).toBe(17);
     });
 });

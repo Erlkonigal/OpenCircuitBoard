@@ -4,7 +4,7 @@ export const componentKey = (tile: {
     y: number;
 }) => `${tile.x},${tile.y}`;
 export function compatibleComponents(a: Tile, b: Tile): boolean {
-    return a.toolId === b.toolId && (a.toolId !== 'latch' || a.isOn === b.isOn)
+    return a.toolId === b.toolId && (a.direction ?? 0) === (b.direction ?? 0) && a.fixedDrive === b.fixedDrive && !!a.defaultValue === !!b.defaultValue && (a.crossMask ?? 0) === (b.crossMask ?? 0) && (a.toolId !== 'latch' || a.isOn === b.isOn)
         && (a.toolId !== 'clock' || a.clockHoldTicks === b.clockHoldTicks);
 }
 /** Canonical key for an undirected connection between two neighboring cells. */

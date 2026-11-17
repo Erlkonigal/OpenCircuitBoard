@@ -24,7 +24,7 @@ for (const mode of ['2D', '2.5D']) for (const lod of ['detail', 'color', 'aggreg
             if (command === 'openProject') {
                 const tiles = [];
                 for (let y = -128; y < 128; y++) for (let x = -256; x < 256; x++) tiles.push({ x, y, toolId: 'traceGreen', componentId: 1 + Math.floor((x + 256) / 64) + Math.floor((y + 128) / 64) * 8, isOn: true });
-                return { board: { selectedTool: 'traceGreen', clockHoldTicks: 1, latchInitialState: true, grid: { originX: -512, originY: -512, width: 1024, height: 1024 }, tiles }, blueprints: [] };
+                return { board: { circuitModel: 'booleanSwitch', selectedTool: 'traceGreen', clockHoldTicks: 1, latchInitialState: true, grid: { originX: -512, originY: -512, width: 1024, height: 1024 }, tiles }, blueprints: [] };
             }
             if (command === 'compileGrid') return encode(true);
             if (command !== 'simulationCommand') throw Error(command);

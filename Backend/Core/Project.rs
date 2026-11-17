@@ -9,50 +9,46 @@ use zip::{ZipArchive, ZipWriter, write::SimpleFileOptions};
 fn one() -> i32 {
     1
 }
+fn zero(value: &i32) -> bool {
+    *value == 0
+}
+fn no(value: &bool) -> bool {
+    !*value
+}
+fn noMask(value: &u8) -> bool {
+    *value == 0
+}
 fn yes() -> bool {
     true
 }
 fn defaultTool() -> String {
     "or".into()
 }
-pub const ToolIds: [&str; 29] = [
-    "empty",
-    "trace",
-    "traceRed",
-    "traceGreen",
-    "traceBlue",
-    "traceCyan",
-    "traceMagenta",
-    "bus",
-    "busRed",
-    "busGreen",
-    "busYellow",
-    "busCyan",
-    "busMagenta",
-    "cross",
-    "read",
-    "write",
-    "buffer",
-    "and",
-    "or",
-    "xor",
-    "not",
-    "nand",
-    "nor",
-    "xnor",
-    "latch",
-    "clock",
-    "led",
-    "traceOrange",
-    "traceWhite",
-];
 pub fn toolKind(id: &str) -> Option<i32> {
-    ToolIds.iter().position(|&tool| tool == id).map(|index| {
-        if index < 14 {
-            index as i32
-        } else {
-            index as i32 + 1
-        }
+    Some(match id {
+        "trace" => 1,
+        "traceRed" => 2,
+        "traceGreen" => 3,
+        "traceBlue" => 4,
+        "traceCyan" => 5,
+        "traceMagenta" => 6,
+        "bus" => 7,
+        "cross" => 13,
+        "buffer" => 17,
+        "and" => 18,
+        "or" => 19,
+        "xor" => 20,
+        "not" => 21,
+        "nand" => 22,
+        "nor" => 23,
+        "xnor" => 24,
+        "latch" => 25,
+        "clock" => 26,
+        "led" => 27,
+        "traceOrange" => 28,
+        "traceWhite" => 29,
+        "switch" => 30,
+        _ => return None,
     })
 }
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
@@ -73,7 +69,7 @@ impl Default for Grid {
         }
     }
 }
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct Tile {
     pub X: i32,
@@ -84,10 +80,19 @@ pub struct Tile {
     pub IsOn: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ClockHoldTicks: Option<i32>,
+    #[serde(default, skip_serializing_if = "zero")]
+    pub Direction: i32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub FixedDrive: Option<bool>,
+    #[serde(default, skip_serializing_if = "no")]
+    pub DefaultValue: bool,
+    #[serde(default, skip_serializing_if = "noMask")]
+    pub CrossMask: u8,
 }
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct Board {
+    pub CircuitModel: String,
     #[serde(default = "defaultTool")]
     pub SelectedTool: String,
     #[serde(default = "one")]
@@ -102,6 +107,7 @@ pub struct Board {
 impl Default for Board {
     fn default() -> Self {
         Self {
+            CircuitModel: "booleanSwitch".into(),
             SelectedTool: defaultTool(),
             ClockHoldTicks: 1,
             LatchInitialState: true,
@@ -134,25 +140,6 @@ pub struct ProjectDocument {
     pub Blueprints: Vec<Blueprint>,
 }
 impl ProjectDocument {
-    fn normalizeTools(&mut self) {
-        fn normalize(id: &mut String) {
-            if matches!(
-                id.as_str(),
-                "busRed" | "busGreen" | "busYellow" | "busCyan" | "busMagenta"
-            ) {
-                *id = "bus".into();
-            }
-        }
-        normalize(&mut self.Board.SelectedTool);
-        for tile in &mut self.Board.Tiles {
-            normalize(&mut tile.ToolId);
-        }
-        for blueprint in &mut self.Blueprints {
-            for tile in &mut blueprint.Tiles {
-                normalize(&mut tile.ToolId);
-            }
-        }
-    }
     pub fn validate(&self) -> Result<(), String> {
         self.Board.validate()?;
         let mut ids = std::collections::HashSet::new();
@@ -173,7 +160,7 @@ impl ProjectDocument {
                     || tile.X >= blueprint.Width
                     || tile.Y >= blueprint.Height
                     || !cells.insert((tile.X, tile.Y))
-                    || !ToolIds[1..].contains(&tile.ToolId.as_str())
+                    || toolKind(&tile.ToolId).is_none()
                     || (tile.ToolId == "clock" && tile.ClockHoldTicks.is_none_or(|v| v < 1))
                 {
                     return Err("ProjectBlueprintInvalid".into());
@@ -187,14 +174,15 @@ impl ProjectDocument {
 impl Board {
     pub fn validate(&self) -> Result<(), String> {
         let g = &self.Grid;
-        if g.Width < 4
+        if self.CircuitModel != "booleanSwitch"
+            || g.Width < 4
             || g.Height < 4
             || g.OriginX.checked_add(g.Width).is_none()
             || g.OriginY.checked_add(g.Height).is_none()
         {
             return Err("ProjectBoardInvalid".into());
         }
-        if !ToolIds[1..].contains(&self.SelectedTool.as_str()) || self.ClockHoldTicks < 1 {
+        if toolKind(&self.SelectedTool).is_none() || self.ClockHoldTicks < 1 {
             return Err("ProjectBoardInvalid".into());
         }
         let mut cells = std::collections::HashSet::new();
@@ -204,7 +192,7 @@ impl Board {
                 || tile.X >= g.OriginX + g.Width
                 || tile.Y >= g.OriginY + g.Height
                 || !cells.insert((tile.X, tile.Y))
-                || !ToolIds[1..].contains(&tile.ToolId.as_str())
+                || toolKind(&tile.ToolId).is_none()
                 || (tile.ToolId == "clock"
                     && tile.ClockHoldTicks.unwrap_or(self.ClockHoldTicks) < 1)
             {
@@ -231,22 +219,19 @@ impl Board {
         let maxY = self.Tiles.iter().map(|t| t.Y).max().unwrap_or(minY);
         let width = (maxX as i64 - minX as i64 + 1) as usize;
         let height = (maxY as i64 - minY as i64 + 1) as usize;
-        let count = width
+        let _count = width
             .checked_mul(height)
             .filter(|&n| n <= MaximumCellCount)
             .ok_or("SimulationGridTooLarge")?;
-        let mut input = CompileInput {
-            Width: width,
-            Height: height,
-            Kinds: vec![0; count],
-            InitialStates: vec![0; count],
-            ClockHoldTicks: vec![1; count],
-            ComponentIds: vec![0; count],
-        };
+        let mut input = CompileInput::empty(width, height);
         for t in &self.Tiles {
             let cell = (t.Y - minY) as usize * width + (t.X - minX) as usize;
             input.Kinds[cell] = toolKind(&t.ToolId).unwrap();
             input.ComponentIds[cell] = t.ComponentId;
+            input.Directions[cell] = t.Direction;
+            input.FixedDrives[cell] = t.FixedDrive.map_or(-1, |v| v as i32);
+            input.DefaultValues[cell] = t.DefaultValue as i32;
+            input.CrossMasks[cell] = t.CrossMask as i32;
             input.InitialStates[cell] = t.IsOn as i32;
             input.ClockHoldTicks[cell] = t.ClockHoldTicks.unwrap_or(self.ClockHoldTicks);
         }
@@ -258,11 +243,20 @@ fn validateComponents(tiles: &[Tile], defaultHold: i32, error: &str) -> Result<(
     let mut samples: HashMap<i32, &Tile> = HashMap::new();
     let mut cells = HashMap::with_capacity(tiles.len());
     for tile in tiles {
-        if tile.ComponentId < 1 {
+        if tile.ComponentId < 1
+            || !(0..4).contains(&tile.Direction)
+            || (!tile.ToolId.starts_with("trace")
+                && (tile.FixedDrive.is_some() || tile.DefaultValue))
+            || (tile.ToolId != "cross" && tile.CrossMask != 0)
+        {
             return Err(error.into());
         }
         if let Some(first) = samples.get(&tile.ComponentId) {
             if first.ToolId != tile.ToolId
+                || first.Direction != tile.Direction
+                || first.FixedDrive != tile.FixedDrive
+                || first.DefaultValue != tile.DefaultValue
+                || first.CrossMask != tile.CrossMask
                 || (tile.ToolId == "latch" && first.IsOn != tile.IsOn)
                 || (tile.ToolId == "clock"
                     && first.ClockHoldTicks.unwrap_or(defaultHold)
@@ -336,33 +330,18 @@ pub fn load(path: &Path) -> Result<ProjectDocument, String> {
         return Err("ProjectVersionUnsupported".into());
     }
     let source = value.get("board").ok_or("ProjectBoardInvalid")?;
-    let mut board: Board =
-        serde_json::from_value(source.clone()).map_err(|_| "ProjectBoardInvalid")?;
-    // Tile parameters omitted in older v2 documents inherit the board defaults.
-    for (i, tile) in board.Tiles.iter_mut().enumerate() {
-        if source["tiles"][i].get("isOn").is_none() {
-            tile.IsOn = if tile.ToolId == "latch" {
-                board.LatchInitialState
-            } else {
-                true
-            };
-        }
-        if tile.ToolId == "clock" && tile.ClockHoldTicks.is_none() {
-            tile.ClockHoldTicks = Some(board.ClockHoldTicks);
-        }
-    }
+    let board: Board = serde_json::from_value(source.clone()).map_err(|_| "ProjectBoardInvalid")?;
     let blueprints = match value.get("blueprints") {
         Some(value) => {
             serde_json::from_value(value.clone()).map_err(|_| "ProjectBlueprintInvalid")?
         }
         None => vec![],
     };
-    let mut project = ProjectDocument {
+    let project = ProjectDocument {
         Board: board,
         Blueprints: blueprints,
     };
     project.validate()?;
-    project.normalizeTools();
     Ok(project)
 }
 pub fn save(path: &Path, project: &ProjectDocument) -> Result<PathBuf, String> {
@@ -391,7 +370,6 @@ pub fn save(path: &Path, project: &ProjectDocument) -> Result<PathBuf, String> {
         )
         .map_err(|_| "ProjectSaveWriteFailed")?;
         let mut canonical = project.clone();
-        canonical.normalizeTools();
         canonical.Board.Tiles.sort_by_key(|t| (t.Y, t.X));
         for blueprint in &mut canonical.Blueprints {
             blueprint.Tiles.sort_by_key(|t| (t.Y, t.X));

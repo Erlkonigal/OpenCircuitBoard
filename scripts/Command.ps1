@@ -53,7 +53,7 @@ switch ($Action) {
         }
     }
     'package' { invokeTauri @('build', '--bundles', 'nsis') }
-    'examples' { invokeCargo @('run', '--locked', '-p', 'ocb-core', '--example', 'HelloWorld5x8') }
+    'examples' { invokeCargo @('run', '--locked', '-p', 'ocb-core', '--example', 'HelloWorld5x8'); invokeCargo @('run', '--locked', '-p', 'ocb-core', '--example', 'Ram16x8') }
     'core-test' { invokeCargo @('test', '--locked', '-p', 'ocb-core') }
     'core-benchmark' {
         invokeCargo (@('run', '--locked', '--release', '-p', 'ocb-core', '--bin', 'ocb-benchmark', '--') + @(splitArguments $env:CORE_BENCHMARK_ARGS))

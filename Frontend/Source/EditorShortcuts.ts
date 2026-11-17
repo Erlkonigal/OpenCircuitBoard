@@ -1,4 +1,6 @@
 export const EditorShortcuts = [
+    { id: 'rotate', label: 'Rotate direction clockwise', key: 'R' },
+    { id: 'rotateBack', label: 'Rotate direction counterclockwise', key: 'Shift+R' },
     { id: 'pointer', label: 'Pointer tool', key: 'V' },
     { id: 'draw', label: 'Draw with last ink', key: 'B' },
     { id: 'delete', label: 'Delete selection', key: 'X' },

@@ -28,7 +28,7 @@ for (const lod of ['detail', 'color', 'aggregate'] as const) for (const isOn of 
                     if (x >= -quarter && x < quarter && y >= -quarter && y < quarter) continue;
                     tiles.push({ x, y, toolId: 'traceCyan', componentId: x < half ? 1 : 2, isOn });
                 }
-                return { board: { selectedTool: 'traceCyan', clockHoldTicks: 1, latchInitialState: true,
+                return { board: { circuitModel: 'booleanSwitch', selectedTool: 'traceCyan', clockHoldTicks: 1, latchInitialState: true,
                     grid: { originX: -extent / 2, originY: -extent / 2, width: extent, height: extent }, tiles }, blueprints: [] };
             } };
         }, { extent, size, isOn });
@@ -72,14 +72,14 @@ for (const lod of ['detail', 'color', 'aggregate'] as const) for (const isOn of 
     });
 }
 
-const PaletteInks = ['traceOrange', 'traceWhite', 'trace', 'traceRed', 'traceGreen', 'traceBlue', 'traceCyan', 'traceMagenta', 'bus', 'busRed', 'busGreen', 'busYellow', 'busCyan', 'busMagenta', 'cross', 'read', 'write', 'buffer', 'and', 'or', 'xor', 'not', 'nand', 'nor', 'xnor', 'latch', 'clock', 'led'];
+const PaletteInks = ['traceOrange', 'traceWhite', 'trace', 'traceRed', 'traceGreen', 'traceBlue', 'traceCyan', 'traceMagenta', 'bus', 'cross', 'switch', 'buffer', 'and', 'or', 'xor', 'not', 'nand', 'nor', 'xnor', 'latch', 'clock', 'led'];
 const brightness = (pixel: number[]) => pixel[0] * .2126 + pixel[1] * .7152 + pixel[2] * .0722;
 for (const isOn of [true, false]) test(`every ink reserves visible highlight headroom on ${isOn ? 'active' : 'inactive'} surfaces`, async ({ page }) => {
     await page.addInitScript(({ inks, isOn }) => {
         (window as unknown as { __TAURI_INTERNALS__: unknown }).__TAURI_INTERNALS__ = { invoke: async (command: string) => {
             if (command === 'recentProjects') return ['Palette.ocb'];
             if (command !== 'openProject') throw Error(command);
-            return { board: { selectedTool: 'led', clockHoldTicks: 1, latchInitialState: true,
+            return { board: { circuitModel: 'booleanSwitch', selectedTool: 'led', clockHoldTicks: 1, latchInitialState: true,
                 grid: { originX: -20, originY: -14, width: 40, height: 28 },
                 tiles: inks.map((toolId, i) => ({ x: i % 7 - 3, y: Math.floor(i / 7) - 2, componentId: i + 1, toolId, isOn })) }, blueprints: [] };
         } };
@@ -124,7 +124,7 @@ for (const lod of ['detail', 'color'] as const) for (const isOn of [true, false]
                     tiles.push({ x, y, toolId: 'traceCyan', componentId: x < 4 ? 1 : 2, isOn });
                 }
                 tiles.push({ x: -5, y: 4, toolId: 'traceRed', componentId: 3, isOn });
-                return { board: { selectedTool: 'traceCyan', clockHoldTicks: 1, latchInitialState: true,
+                return { board: { circuitModel: 'booleanSwitch', selectedTool: 'traceCyan', clockHoldTicks: 1, latchInitialState: true,
                     grid: { originX: -extent / 2, originY: -extent / 2, width: extent, height: extent }, tiles }, blueprints: [] };
             } };
         }, { extent, isOn });

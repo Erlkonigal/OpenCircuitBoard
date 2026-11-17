@@ -58,7 +58,7 @@ describe('Hello World 5x8 example', () => {
         await browser.waitUntil(async () => await displayBits() === '0'.repeat(40));
         let tick = 0;
         for (const frame of Frames) {
-            const target = 4 + frame.slot * 8;
+            const target = 5 + frame.slot * 8;
             while (tick < target) {
                 const length = Math.min(16, target - tick);
                 await $('input[aria-label="Step length"]').setValue(String(length));

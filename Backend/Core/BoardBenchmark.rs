@@ -45,10 +45,9 @@ fn run() -> Result<(), String> {
         board.Tiles.len()
     );
     println!(
-        "compile={compile:.6}s, snapshot={capture:.6}s/{} bytes, restore={restore:.6}s, median={:.2} TPS, ordering={}",
+        "compile={compile:.6}s, snapshot={capture:.6}s/{} bytes, restore={restore:.6}s, median={:.2} TPS",
         snapshot.byteCount(),
         rates[rates.len() / 2],
-        core.OrderingApplied
     );
     if args.iter().any(|v| v == "--editorProbe") {
         let session = Session::default();

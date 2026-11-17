@@ -70,7 +70,7 @@ fn rawInput(bytes: &[u8]) -> Result<(CompileInput, (i32, i32)), String> {
         return Err("SimulationInputInvalid".into());
     }
     let read = |i: usize| i32::from_le_bytes(bytes[i..i + 4].try_into().unwrap());
-    if read(0) != 0x4f434249 || read(4) != 3 {
+    if read(0) != 0x4f434249 || read(4) != 4 {
         return Err("SimulationInputInvalid".into());
     }
     let width = read(8);
@@ -85,7 +85,7 @@ fn rawInput(bytes: &[u8]) -> Result<(CompileInput, (i32, i32)), String> {
     if read(16).checked_add(width - 1).is_none() || read(20).checked_add(height - 1).is_none() {
         return Err("SimulationInputInvalid".into());
     }
-    if bytes.len() != 24 + count * 16 {
+    if bytes.len() != 24 + count * 32 {
         return Err("SimulationInputInvalid".into());
     }
     let array = |start: usize| {
@@ -101,6 +101,10 @@ fn rawInput(bytes: &[u8]) -> Result<(CompileInput, (i32, i32)), String> {
             InitialStates: array(1),
             ClockHoldTicks: array(2),
             ComponentIds: array(3),
+            Directions: array(4),
+            FixedDrives: array(5),
+            DefaultValues: array(6),
+            CrossMasks: array(7),
         },
         (read(16), read(20)),
     ))
@@ -144,6 +148,18 @@ async fn simulationCommand(
         .map_err(|e| e.to_string())?
         .map(Response::new)
 }
+#[tauri::command]
+async fn inspectCell(
+    session: u32,
+    cell: usize,
+    services: State<'_, Services>,
+) -> Result<Response, String> {
+    let worker = services.Simulation.clone();
+    tauri::async_runtime::spawn_blocking(move || worker.request(Action::Inspect(session, cell)))
+        .await
+        .map_err(|e| e.to_string())?
+        .map(Response::new)
+}
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
@@ -167,7 +183,8 @@ pub fn run() {
             openProject,
             saveProject,
             compileGrid,
-            simulationCommand
+            simulationCommand,
+            inspectCell
         ])
         .run(tauri::generate_context!())
         .expect("OpenCircuitBoard desktop runtime");

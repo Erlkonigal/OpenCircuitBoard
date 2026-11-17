@@ -14,7 +14,8 @@ fn pixels(core: &mut SimulationCore, origin: (i32, i32)) -> Vec<u8> {
     (0..8)
         .flat_map(|row| (0..5).map(move |column| (column, row)))
         .map(|(column, row)| {
-            let x = HelloWorld5x8::DisplayOrigin.0 + column * HelloWorld5x8::PixelPitch - origin.0;
+            let x =
+                HelloWorld5x8::DisplayOrigin.0 + 1 + column * HelloWorld5x8::PixelPitch - origin.0;
             let y = HelloWorld5x8::DisplayOrigin.1 + row * HelloWorld5x8::PixelPitch - origin.1;
             states[y as usize * width + x as usize]
         })
@@ -36,8 +37,15 @@ fn committedExampleMatchesGeneratorAndPlaysThreeCompleteLoops() {
         .map(|tile| tile.ComponentId)
         .collect();
     assert_eq!(leds.len(), 40);
-    assert!(project.Board.Tiles.len() <= 60_000);
-    assert!(project.Board.Grid.Width <= 560 && project.Board.Grid.Height <= 200);
+    assert!(project.Board.Tiles.len() < 50_310);
+    assert!(project.Board.Tiles.iter().any(|t| t.ToolId == "switch"));
+    assert!(
+        !project
+            .Board
+            .Tiles
+            .iter()
+            .any(|t| matches!(t.ToolId.as_str(), "read" | "write"))
+    );
     assert!(project.Board.Tiles.iter().any(|tile| tile.ToolId == "bus"));
     for tool in [
         "trace",
@@ -70,7 +78,7 @@ fn recognizableFramesSurviveResetSnapshotAndArchiveRoundTrip() {
         (13, h),
     ] {
         core.resetSilent();
-        core.advanceSilent((4 + index * 8) as i32);
+        core.advanceSilent((HelloWorld5x8::StartupTicks + index * 8) as i32);
         assert_eq!(
             pixels(&mut core, origin),
             expected
@@ -99,4 +107,15 @@ fn recognizableFramesSurviveResetSnapshotAndArchiveRoundTrip() {
     Project::save(&path, &project).unwrap();
     assert_eq!(Project::load(&path).unwrap(), project);
     std::fs::remove_file(path).unwrap();
+}
+
+#[path = "../Examples/Ram16x8.rs"]
+mod Ram16x8;
+#[test]
+fn ramArchiveMatchesGeneratorAndSurvivesAllAddressPatterns() {
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../Frontend/Assets/Examples/Ram16x8.ocb");
+    let project = Project::load(&path).unwrap();
+    assert_eq!(project, Ram16x8::buildProject());
+    Ram16x8::verify(&project);
 }

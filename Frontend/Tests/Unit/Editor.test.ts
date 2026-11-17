@@ -8,7 +8,7 @@ beforeEach(() => { state().load(newBoard()); useEditor.setState({ Simulating: fa
 describe('Editor parity', () => {
     it('initialInterface', () => { expect(state().Board.grid).toEqual({ originX: -20, originY: -14, width: 40, height: 28 }); expect(state().Board.selectedTool).toBe('or');expect(state().EditTool).toBe('pointer'); });
     it('dockLayout swaps duplicate panel selections', () => { state().activateDock('left', 'eventLog'); expect(state().LeftDock).toBe('eventLog'); expect(state().RightDock).toBe('circuitEditor'); });
-    it('inkPalette keeps every tool and traceVariant/busVariant IDs', () => { for (const id of ['cross', 'read', 'traceMagenta', 'busYellow', 'latch', 'clock', 'led']) {
+    it('inkPalette keeps every tool and traceVariant/busVariant IDs', () => { for (const id of ['cross', 'switch', 'traceMagenta', 'bus', 'latch', 'clock', 'led']) {
         state().selectTool(id);
         expect(state().Board.selectedTool).toBe(id);
     } });
