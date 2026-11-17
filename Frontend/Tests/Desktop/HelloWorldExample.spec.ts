@@ -71,7 +71,7 @@ describe('Hello World 5x8 example', () => {
             await browser.saveScreenshot(buildPath(`DesktopHelloWorld${frame.name}Capture.png`));
         }
         await $('button[aria-label="Fit board in view"]').click();
-        await expect($('[data-testid="board"]')).toHaveAttribute('data-lod', 'aggregate');
+        await expect($('[data-testid="board"]')).toHaveAttribute('data-lod', 'color');
         await browser.waitUntil(async () => await $('[data-testid="board"]').getAttribute('data-color-ready') === 'true', { timeout: 30000 });
         const overview = await browser.execute(() => (document.querySelector('canvas[aria-label="Circuit board"]') as HTMLCanvasElement).toDataURL());
         await $('input[aria-label="Step length"]').setValue('8'); await browser.keys('Tab');

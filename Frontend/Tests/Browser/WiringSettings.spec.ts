@@ -109,7 +109,7 @@ test('joined devices use icons without input/output dots in either display mode'
     }
 });
 
-test('Button rotates its output icon in the board and inspector while retaining the off initial state', async ({ page }) => {
+test('Button icons have no output stub and preserve rotation and the off initial state', async ({ page }) => {
     const center = await ready(page);
     await expect(page.getByRole('button', { name: 'Button', exact: true })).toBeVisible();
     await expect(page.getByRole('button', { name: 'Latch', exact: true })).toHaveCount(0);
@@ -128,10 +128,24 @@ test('Button rotates its output icon in the board and inspector while retaining 
         });
     });
     await settle(page); const before = await icon();
+    expect(before[0]).toEqual(before[1]);
     await page.getByTestId('board').focus(); await page.keyboard.press('r'); await settle(page);
-    expect(await icon()).not.toEqual(before);
+    expect(await icon()).toEqual(before);
     await expect(page.locator('.active-component-symbol .tool-glyph')).toHaveAttribute('style', /rotate\(90deg\)/);
     await page.screenshot({ path: buildPath('LatchIconDirectionCapture.png') });
     await page.getByTestId('board').focus(); await page.keyboard.press('Control+z'); await settle(page);
     expect(await icon()).toEqual(before);
+    await page.getByText('On', { exact: true }).click(); await settle(page);
+    const powered = await icon(); expect(powered[0]).toEqual(powered[1]);
+    const symbol = () => page.locator('canvas[aria-label="Circuit board"]').evaluate(element => {
+        const canvas = element as HTMLCanvasElement, gl = canvas.getContext('webgl2')!;
+        const scale = canvas.width / canvas.getBoundingClientRect().width;
+        const size = Math.round(24 * scale), pixels = new Uint8Array(size * size * 4);
+        gl.readPixels(Math.floor(canvas.width / 2 + 4 * scale), canvas.height - Math.floor(canvas.height / 2 + 28 * scale), size, size, gl.RGBA, gl.UNSIGNED_BYTE, pixels);
+        return [...pixels];
+    });
+    const upright = await symbol();
+    await page.getByTestId('board').focus(); await page.keyboard.press('r'); await settle(page);
+    expect(await symbol()).not.toEqual(upright);
+    await page.screenshot({ path: buildPath('ButtonOnIconCapture.png') });
 });

@@ -134,3 +134,147 @@ fn ramArchiveMatchesGeneratorAndSurvivesAllAddressPatterns() {
     assert_eq!(project, Ram16x8::buildProject());
     Ram16x8::verify(&project);
 }
+
+fn footprint<'a>(tiles: impl Iterator<Item = &'a Project::Tile>) -> (i64, i64) {
+    let tiles: Vec<_> = tiles.collect();
+    let width = tiles.iter().map(|tile| tile.X).max().unwrap() as i64
+        - tiles.iter().map(|tile| tile.X).min().unwrap() as i64
+        + 1;
+    let height = tiles.iter().map(|tile| tile.Y).max().unwrap() as i64
+        - tiles.iter().map(|tile| tile.Y).min().unwrap() as i64
+        + 1;
+    (width, height)
+}
+
+#[test]
+fn compactMemoryReducesActualFootprintsRatherThanOnlyCanvasMargins() {
+    let hello = Project::load(&examplePath()).unwrap();
+    let (width, height) = footprint(hello.Board.Tiles.iter());
+    assert!(
+        width * height <= 567 * 234 * 3 / 5,
+        "Hello World actual footprint {width}x{height}"
+    );
+    assert!(width < 567 && height <= 234);
+    assert!(
+        i64::from(hello.Board.Grid.Width) * i64::from(hello.Board.Grid.Height) <= 575 * 242 * 3 / 5
+    );
+    let (width, height) = footprint(
+        hello
+            .Board
+            .Tiles
+            .iter()
+            .filter(|tile| tile.Y < HelloWorld5x8::DecoderTop),
+    );
+    assert!(
+        width * height <= 561 * 43 / 2,
+        "Register actual footprint {width}x{height}"
+    );
+    assert!(hello.Board.Tiles.len() < 24_313);
+    let ram = Project::load(
+        &PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../Frontend/Assets/Examples/Ram16x8.ocb"),
+    )
+    .unwrap();
+    let (width, height) = footprint(ram.Board.Tiles.iter());
+    assert!(
+        width * height <= 376 * 475 / 4,
+        "RAM actual footprint {width}x{height}"
+    );
+    assert!(width < 376 && height < 475);
+    assert!(i64::from(ram.Board.Grid.Width) * i64::from(ram.Board.Grid.Height) <= 384 * 483 / 4);
+    assert!(ram.Board.Tiles.len() < 98_916 / 2);
+}
+
+fn writeRam(
+    core: &mut SimulationCore,
+    project: &Project::ProjectDocument,
+    origin: (i32, i32),
+    address: u8,
+    value: u8,
+) {
+    Ram16x8::address(core, project, origin, address);
+    Ram16x8::data(core, project, origin, value);
+    Ram16x8::set(core, project, origin, Ram16x8::Drive, true);
+    core.advanceSilent(Ram16x8::SettleTicks);
+    Ram16x8::set(core, project, origin, Ram16x8::We, true);
+    core.advanceSilent(Ram16x8::SettleTicks);
+    Ram16x8::set(core, project, origin, Ram16x8::We, false);
+    core.advanceSilent(Ram16x8::SettleTicks);
+    Ram16x8::set(core, project, origin, Ram16x8::Drive, false);
+    core.advanceSilent(Ram16x8::SettleTicks);
+}
+fn readRam(
+    core: &mut SimulationCore,
+    project: &Project::ProjectDocument,
+    origin: (i32, i32),
+    address: u8,
+) -> u8 {
+    Ram16x8::address(core, project, origin, address);
+    core.advanceSilent(Ram16x8::SettleTicks);
+    Ram16x8::set(core, project, origin, Ram16x8::Oe, true);
+    core.advanceSilent(Ram16x8::SettleTicks);
+    let value = Ram16x8::read(core, project, origin);
+    Ram16x8::set(core, project, origin, Ram16x8::Oe, false);
+    core.advanceSilent(Ram16x8::SettleTicks);
+    assert_eq!(
+        Ram16x8::read(core, project, origin),
+        0,
+        "Disabled output must release shared bit lines"
+    );
+    value
+}
+#[test]
+fn compactRamIsolatesWalkingBitsAndRowsAndResetMasksWrites() {
+    let project = Ram16x8::buildProject();
+    let (input, origin) = project.Board.compileInput().unwrap();
+    let mut core = SimulationCore::compile(input).unwrap();
+    core.advanceSilent(Ram16x8::SettleTicks);
+    Ram16x8::set(&mut core, &project, origin, Ram16x8::Reset, false);
+    core.advanceSilent(Ram16x8::SettleTicks);
+    let mut expected = [0u8; 16];
+    for address in 0..16 {
+        expected[address] = if address < 8 {
+            1 << address
+        } else {
+            !(1 << (address - 8))
+        };
+        writeRam(
+            &mut core,
+            &project,
+            origin,
+            address as u8,
+            expected[address],
+        );
+    }
+    // Overwriting adjacent rows must preserve every other row and bit.
+    for (address, value) in [(7, 0x96), (8, 0x69)] {
+        expected[address] = value;
+        writeRam(&mut core, &project, origin, address as u8, value);
+    }
+    Ram16x8::data(&mut core, &project, origin, 0xff);
+    core.advanceSilent(128);
+    for address in 0..16 {
+        assert_eq!(
+            readRam(&mut core, &project, origin, address as u8),
+            expected[address],
+            "Walking bits at address {address}"
+        );
+    }
+    Ram16x8::set(&mut core, &project, origin, Ram16x8::Reset, true);
+    core.advanceSilent(Ram16x8::SettleTicks);
+    Ram16x8::set(&mut core, &project, origin, Ram16x8::Drive, true);
+    Ram16x8::set(&mut core, &project, origin, Ram16x8::We, true);
+    core.advanceSilent(32);
+    Ram16x8::set(&mut core, &project, origin, Ram16x8::We, false);
+    Ram16x8::set(&mut core, &project, origin, Ram16x8::Drive, false);
+    core.advanceSilent(Ram16x8::SettleTicks);
+    Ram16x8::set(&mut core, &project, origin, Ram16x8::Reset, false);
+    core.advanceSilent(Ram16x8::SettleTicks);
+    for address in 0..16 {
+        assert_eq!(
+            readRam(&mut core, &project, origin, address),
+            0,
+            "Reset must clear address {address} and mask writes"
+        );
+    }
+}

@@ -1,6 +1,7 @@
 import { browser, $, expect } from '@wdio/globals';
 import path from 'node:path';
 import { buildPath, WorkspaceRoot } from '../Paths';
+import { exampleProject } from '../ExampleArchive';
 
 // Runs against the real Tauri binary and its simulation worker.
 describe('Boolean Switch memory', () => {
@@ -58,6 +59,7 @@ describe('Boolean Switch memory', () => {
 
     it('writes, reads, resets and restores the committed RAM through the shared eight bit lines', async () => {
         const file = path.join(WorkspaceRoot, 'Frontend/Assets/Examples/Ram16x8.ocb');
+        const cellCount = exampleProject('Ram16x8').board.tiles.length.toLocaleString('en-US') + ' cells';
         const result = await browser.execute(async (file: string) => {
             type Tile = { x: number; y: number; toolId: string; componentId: number; isOn: boolean; direction?: number; clockHoldTicks?: number; crossMask?: number };
             const invoke = (window as unknown as { __TAURI_INTERNALS__: { invoke: <T>(command: string, args: unknown) => Promise<T> } }).__TAURI_INTERNALS__.invoke;
@@ -119,14 +121,17 @@ describe('Boolean Switch memory', () => {
         await browser.waitUntil(async () => await $('[data-testid="board"]').getAttribute('data-render-ready') === 'true');
         await $('.project-switcher').click(); await $('button=Ram16x8.ocb').click();
         await expect($('.project-switcher')).toHaveText(expect.stringContaining('Ram16x8.ocb'));
-        await expect($('.workspace-status')).toHaveText(expect.stringContaining('98,916 cells'));
+        await expect($('.workspace-status')).toHaveText(expect.stringContaining(cellCount));
         await $('button[aria-label="Fit board in view"]').click();
         await browser.waitUntil(async () => await $('[data-testid="board"]').getAttribute('data-color-ready') === 'true');
         await $('button=Run circuit').click(); await $('button[aria-label="Pause simulation"]').click();
-        await expect($('.workspace-status')).toHaveText(expect.stringContaining('98,916 cells'));
+        await expect($('.workspace-status')).toHaveText(expect.stringContaining(cellCount));
         await browser.waitUntil(async () => Number(await $('[data-testid="board"]').getAttribute('data-render-objects')) > 0 &&
             await $('[data-testid="board"]').getAttribute('data-color-ready') === 'true');
         await browser.saveScreenshot(buildPath('DesktopRamSharedBusCapture.png'));
+        await $('label=2D').click();
+        await browser.waitUntil(async () => await $('[data-testid="board"]').getAttribute('data-color-ready') === 'true');
+        await browser.saveScreenshot(buildPath('DesktopRamCompactFlatCapture.png'));
         await $('button=Back to design').click();
         await expect($('.error-toast')).not.toExist();
     });

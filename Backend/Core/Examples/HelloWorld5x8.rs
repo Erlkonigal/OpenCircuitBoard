@@ -1,7 +1,7 @@
 #![allow(non_snake_case, non_upper_case_globals, dead_code)]
 #[path = "ExampleLayout.rs"]
 mod ExampleLayout;
-use ExampleLayout::{Layout, Node, Point, Wire};
+use ExampleLayout::{Layout, Node, Point, Wire, occupiedSize};
 use ocb_core::Project::{self, ProjectDocument};
 use std::path::PathBuf;
 pub const Message: &str = "Hello, World!";
@@ -12,6 +12,8 @@ pub const StartupTicks: usize = 13;
 pub const CharacterTicks: usize = 8;
 pub const AddressSignals: [usize; 4] = [16, 17, 18, 19];
 pub const WordSignals: usize = 40;
+pub const RegisterTop: i32 = -143;
+pub const DecoderTop: i32 = -102;
 pub fn glyph(character: char) -> [&'static str; 8] {
     match character {
         'H' => [
@@ -86,7 +88,9 @@ pub fn buildProject() -> ProjectDocument {
     nodes.push(Node::gate("nor", 30, (0..13).collect()));
     nodes.push(Node::gate("or", 31, vec![12, 30]));
     nodes.push(Node::gate("not", 32, vec![31]));
+    let mut stages = vec![];
     for stage in 0..13 {
+        let mut storage = vec![];
         let base = 1000 + stage * 4;
         let data = if stage == 0 { 31 } else { stage - 1 };
         let master = base;
@@ -94,7 +98,7 @@ pub fn buildProject() -> ProjectDocument {
         let outputInput = base + 2;
         let switchId = 100_000 + stage * 4;
         muxLatch(
-            &mut nodes,
+            &mut storage,
             data,
             master,
             masterInput,
@@ -103,7 +107,7 @@ pub fn buildProject() -> ProjectDocument {
             switchId,
         );
         muxLatch(
-            &mut nodes,
+            &mut storage,
             master,
             stage,
             outputInput,
@@ -111,6 +115,7 @@ pub fn buildProject() -> ProjectDocument {
             phaseB,
             switchId + 2,
         );
+        stages.push(storage);
     }
     for bit in 0..4 {
         nodes.push(Node::gate(
@@ -124,8 +129,36 @@ pub fn buildProject() -> ProjectDocument {
     nodes.push(Node::gate("buffer", 22, vec![21]));
     nodes.push(Node::gate("buffer", 23, vec![22]));
     let ringLeft = -300;
-    let ringTop = -145;
-    let (encoderRight, bottom) = layout.bank(&nodes, ringLeft, ringTop, 3, 0);
+    let ringTop = RegisterTop;
+    let globalBuses: Vec<(usize, Vec<usize>)> = vec![
+        (0, (0..8).collect()),
+        (1, (8..16).collect()),
+        (2, (16..24).collect()),
+        (3, vec![30, 31, 32]),
+    ];
+    let mut bottom = ringTop;
+    for (stage, storage) in stages.iter().enumerate() {
+        let base = 1000 + stage * 4;
+        let mut buses = globalBuses.clone();
+        buses.push((1000 + stage, vec![base, base + 1, base + 2]));
+        let (_, end) = layout.compactBank(
+            storage,
+            ringLeft + (stage % 7) as i32 * 24,
+            ringTop + (stage / 7) as i32 * 18,
+            &buses,
+        );
+        bottom = bottom.max(end);
+    }
+    let (encoderRight, _) =
+        layout.compactBank(&nodes, ringLeft + 7 * 24 + 2, ringTop, &globalBuses);
+    // Only four shared buses leave a storage stage; feedback stays on its local bus.
+    for (row, right) in [(0, encoderRight), (1, ringLeft + 5 * 24 + 22)] {
+        for group in 0..4 {
+            let y = ringTop + row * 18 + group * 2;
+            layout.path(Wire::Bus(group as usize), &[(ringLeft, y), (right, y)]);
+        }
+    }
+    layout.globals(ringLeft, &[ringTop, ringTop + 18], 4, ringTop + 24);
     let clockTile = layout
         .Tiles
         .values_mut()
@@ -133,11 +166,11 @@ pub fn buildProject() -> ProjectDocument {
         .unwrap();
     clockTile.ClockHoldTicks = Some((CharacterTicks / 2) as i32);
     assert!(bottom < -75);
-    // Thirteen word lines cross forty bit lines. Only stored zeroes get a switch.
+    // Thirteen word lines cross forty bit lines. Only stored ones get a switch.
     let romLeft = -250;
     let romTop = -75;
     let decoderLeft = ringLeft;
-    let decoderTop = -102;
+    let decoderTop = DecoderTop;
     let mut decoder = vec![];
     for bit in 0..4 {
         decoder.push(Node::gate("buffer", 60 + bit, vec![AddressSignals[bit]]));
@@ -172,7 +205,7 @@ pub fn buildProject() -> ProjectDocument {
         }
     }
     let addressBusY = decoderTop + 4;
-    let addressTrunkX = encoderRight + 2;
+    let addressTrunkX = (encoderRight + 2).max(DisplayOrigin.0 - 13);
     let ey = -85;
     for sx in encoderRight + 1..=addressTrunkX {
         layout.wire((sx, ringTop + 4), Wire::Bus(2));
@@ -295,9 +328,8 @@ pub fn buildProject() -> ProjectDocument {
     }
     let enableX = DisplayOrigin.0 - 6;
     // Bus color 7 carries the settled nonempty-ring signal beside the address bits.
-    for x in enableX..addressTrunkX {
-        layout.wire((x, ey), Wire::Trace(23));
-    }
+    let enableStart = addressTrunkX + (enableX - addressTrunkX).signum();
+    layout.path(Wire::Trace(23), &[(enableStart, ey), (enableX, ey)]);
     for y in ey..DisplayOrigin.1 + 71 {
         layout.wire((enableX, y), Wire::Trace(23));
     }
@@ -361,8 +393,16 @@ fn main() {
     let project = buildProject();
     verify(&project);
     Project::save(&path, &project).unwrap();
+    let (width, height) = occupiedSize(project.Board.Tiles.iter());
+    let (registerWidth, registerHeight) = occupiedSize(
+        project
+            .Board
+            .Tiles
+            .iter()
+            .filter(|tile| tile.Y < DecoderTop),
+    );
     println!(
-        "HelloWorld5x8: {}x{}, {} occupied cells",
+        "HelloWorld5x8: board {}x{}, circuit {width}x{height}, register {registerWidth}x{registerHeight}, {} occupied cells",
         project.Board.Grid.Width,
         project.Board.Grid.Height,
         project.Board.Tiles.len()

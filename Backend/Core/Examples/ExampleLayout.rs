@@ -2,6 +2,21 @@
 use ocb_core::Project::{Board, Grid, ProjectDocument, Tile};
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque};
 pub type Point = (i32, i32);
+pub fn occupiedSize<'a>(mut tiles: impl Iterator<Item = &'a Tile>) -> (i32, i32) {
+    let first = tiles.next().expect("Nonempty example layout");
+    let (minX, minY, maxX, maxY) = tiles.fold(
+        (first.X, first.Y, first.X, first.Y),
+        |(minX, minY, maxX, maxY), tile| {
+            (
+                minX.min(tile.X),
+                minY.min(tile.Y),
+                maxX.max(tile.X),
+                maxY.max(tile.Y),
+            )
+        },
+    );
+    (maxX - minX + 1, maxY - minY + 1)
+}
 pub const TraceTools: [&str; 8] = [
     "trace",
     "traceRed",
@@ -99,6 +114,170 @@ impl Layout {
             .find(|t| t.ComponentId == net as i32 + 1)
             .unwrap();
         (tile.X, tile.Y)
+    }
+    pub fn deviceFacing(
+        &mut self,
+        kind: &str,
+        point: Point,
+        signal: usize,
+        direction: i32,
+        on: bool,
+    ) {
+        self.device(kind, [point], signal as i32 + 1, on);
+        self.Tiles.get_mut(&point).unwrap().Direction = direction;
+    }
+    /// Draw an orthogonal polyline; crossings must be declared explicitly first.
+    pub fn path(&mut self, wire: Wire, points: &[Point]) {
+        for segment in points.windows(2) {
+            let (a, b) = (segment[0], segment[1]);
+            assert!(
+                a.0 == b.0 || a.1 == b.1,
+                "Non-orthogonal route {a:?} / {b:?}"
+            );
+            let step = ((b.0 - a.0).signum(), (b.1 - a.1).signum());
+            let mut point = a;
+            loop {
+                self.wire(point, wire);
+                if point == b {
+                    break;
+                }
+                point = (point.0 + step.0, point.1 + step.1);
+            }
+        }
+    }
+    pub fn localPath(&mut self, origin: Point, wire: Wire, points: &[Point]) {
+        self.path(
+            wire,
+            &points
+                .iter()
+                .map(|p| (origin.0 + p.0, origin.1 + p.1))
+                .collect::<Vec<_>>(),
+        );
+    }
+    /// Compact directional gates with explicit, independently colored local buses.
+    /// Two-input gates use west/north inputs; a third input enters from the south.
+    pub fn compactBank(
+        &mut self,
+        nodes: &[Node],
+        left: i32,
+        top: i32,
+        buses: &[(usize, Vec<usize>)],
+    ) -> (i32, i32) {
+        let mut groups = HashMap::new();
+        for (lane, (_, signals)) in buses.iter().enumerate() {
+            assert!(signals.len() <= 8);
+            for (color, &signal) in signals.iter().enumerate() {
+                assert!(
+                    groups.insert(signal, lane).is_none(),
+                    "Repeated signal {signal}"
+                );
+                if let Some(previous) = self.Colors.insert(signal, color) {
+                    assert_eq!(previous, color, "Inconsistent bus color for {signal}");
+                }
+            }
+        }
+        let gateY = top + buses.len() as i32 * 2 + 2;
+        let mut columns = vec![];
+        let mut x = left;
+        for node in nodes {
+            let output = node.Output;
+            match node.Kind {
+                "latch" | "clock" => {
+                    self.deviceFacing(node.Kind, (x, gateY), output, 0, node.On);
+                    self.wire((x + 1, gateY), Wire::Trace(output));
+                    columns.push((x + 1, output));
+                    x += 3;
+                }
+                "buffer" | "not" | "led" => {
+                    self.deviceFacing(node.Kind, (x + 1, gateY), output, 0, node.On);
+                    self.wire((x, gateY), Wire::Trace(node.Inputs[0]));
+                    columns.push((x, node.Inputs[0]));
+                    if node.Kind != "led" {
+                        self.wire((x + 2, gateY), Wire::Trace(output));
+                        columns.push((x + 2, output));
+                    }
+                    x += 3;
+                }
+                "switch" => {
+                    self.deviceFacing("switch", (x + 1, gateY), output, 0, false);
+                    for (dx, signal) in [(0, node.Inputs[0]), (2, node.Inputs[1])] {
+                        self.wire((x + dx, gateY), Wire::Trace(signal));
+                        columns.push((x + dx, signal));
+                    }
+                    let control = node.Inputs[2];
+                    self.path(
+                        Wire::Trace(control),
+                        &[
+                            (x + 1, gateY + 1),
+                            (x + 1, gateY + 2),
+                            (x + 3, gateY + 2),
+                            (x + 3, gateY),
+                        ],
+                    );
+                    columns.push((x + 3, control));
+                    x += 4;
+                }
+                _ => {
+                    let count = node.Inputs.len();
+                    assert!(count > 0);
+                    let width = if count <= 3 { 1 } else { count as i32 - 1 };
+                    self.device(
+                        node.Kind,
+                        (1..=width).map(|dx| (x + dx, gateY)),
+                        output as i32 + 1,
+                        node.On,
+                    );
+                    self.wire((x, gateY), Wire::Trace(node.Inputs[0]));
+                    columns.push((x, node.Inputs[0]));
+                    for (i, &signal) in node.Inputs.iter().enumerate().skip(1) {
+                        if count == 3 && i == 2 {
+                            self.path(
+                                Wire::Trace(signal),
+                                &[
+                                    (x + 1, gateY + 1),
+                                    (x + 1, gateY + 2),
+                                    (x + 3, gateY + 2),
+                                    (x + 3, gateY),
+                                ],
+                            );
+                            columns.push((x + 3, signal));
+                        } else {
+                            columns.push((x + i as i32, signal));
+                        }
+                    }
+                    self.wire((x + width + 1, gateY), Wire::Trace(output));
+                    columns.push((x + width + 1, output));
+                    x += if count == 3 { 4 } else { width + 2 };
+                }
+            }
+        }
+        let right = x;
+        for (lane, (key, _)) in buses.iter().enumerate() {
+            let y = top + lane as i32 * 2;
+            for sx in left..=right {
+                let crossing = columns
+                    .iter()
+                    .find(|p| p.0 == sx)
+                    .is_some_and(|p| groups[&p.1] != lane);
+                self.wire(
+                    (sx, y),
+                    if crossing {
+                        Wire::Cross
+                    } else {
+                        Wire::Bus(*key)
+                    },
+                );
+            }
+        }
+        for (sx, signal) in columns {
+            assert!(groups.contains_key(&signal), "Unbound bank signal {signal}");
+            for y in top..gateY {
+                if (y - top) % 2 != 0 || y >= top + buses.len() as i32 * 2 {
+                    self.wire((sx, y), Wire::Trace(signal));
+                }
+            }
+        }
+        (right, gateY + 4)
     }
     /// Place arbitrary gates with their actual directional pins above a local bus bank.
     pub fn bank(

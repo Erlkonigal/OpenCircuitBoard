@@ -57,9 +57,9 @@ The toolbar's 2D / 2.5D control applies to the board and both preview libraries 
 
 ## Example projects
 
-[Hello, World! 5x8 character display](Frontend/Assets/Examples/HelloWorld5x8.ocb) uses a switch-to-ground ROM matrix. It occupies 27,315 cells, 45.7% fewer than the previous 50,310-cell circuit. Its 525x237 bounding rectangle is 23.0% larger than the previous 538x188 layout; the occupied-cell reduction does not imply a smaller bounding rectangle. Open it, zoom around the display to about 9%, set 16 TPS, and run.
+[Hello, World! 5x8 character display](Frontend/Assets/Examples/HelloWorld5x8.ocb) uses a compact 13-stage shift register and a Switch ROM matrix. Its 343x240 board contains 19,443 occupied cells. The register/control bounding area is 52.8% smaller than the previous encoded ring, and the whole circuit's actual bounding area is 41.4% smaller. Open it, zoom around the display to about 9%, set 16 TPS, and run.
 
-[RAM 16x8](Frontend/Assets/Examples/Ram16x8.ocb) uses NOR feedback cells and eight shared read/write bit lines, with Drive, OE, WE and Reset controls. See the [example guide](Frontend/Assets/Examples/README.md) for the control coordinates, staged operations, timing and regeneration with `make examples`.
+[RAM 16x8](Frontend/Assets/Examples/Ram16x8.ocb) uses a compact 16-row by 8-column array of NOR feedback cells and eight shared read/write bit lines, with Drive, OE, WE and Reset controls. Its 134x296 board contains 20,432 occupied cells; actual bounding area is 79.7% smaller than the previous layout. See the [example guide](Frontend/Assets/Examples/README.md) for the control coordinates, staged operations, timing and regeneration with `make examples`.
 
 ## Repository layout
 
