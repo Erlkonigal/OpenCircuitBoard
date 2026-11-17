@@ -1,6 +1,6 @@
 use crate::RuntimeArena::{Arena, Buffer};
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 
 pub const MaximumCellCount: usize = 1_048_576;
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -101,24 +101,21 @@ struct Port {
     Sources: Vec<usize>,
     Targets: Vec<usize>,
     Peers: Vec<usize>,
+    TraceIds: Vec<usize>,
 }
 fn isTrace(kind: i32) -> bool {
-    (1..=6).contains(&kind)
+    matches!(kind, 1..=6 | 28..=29)
 }
-fn isConductor(kind: i32) -> bool {
-    (1..=12).contains(&kind)
+fn isBus(kind: i32) -> bool {
+    (7..=12).contains(&kind)
 }
 fn isDevice(kind: i32) -> bool {
     (17..=27).contains(&kind)
 }
 fn color(kind: i32) -> usize {
     match kind {
-        1 | 10 => 0,
-        2 | 8 => 1,
-        3 | 9 => 2,
-        4 | 7 => 3,
-        5 | 11 => 4,
-        6 | 12 => 5,
+        1..=6 => kind as usize - 1,
+        28..=29 => kind as usize - 22,
         _ => usize::MAX,
     }
 }
@@ -302,7 +299,7 @@ impl SimulationCore {
         hash(width as i32);
         hash(height as i32);
         for cell in 0..count {
-            if !matches!(kinds[cell], 0..=13 | 15..=27) {
+            if !matches!(kinds[cell], 0..=13 | 15..=29) {
                 return Err(fail(Some(cell), "unknown_kind"));
             }
             if kinds[cell] == 26 && input.ClockHoldTicks[cell] <= 0 {
@@ -365,6 +362,15 @@ impl SimulationCore {
         let mut deviceSet = DisjointSet::new(count);
         let mut ports = DisjointSet::new(count);
         let mut conductors = DisjointSet::new(count);
+        // A Bus component owns eight anchors, regardless of its number of cells.
+        let mut buses: BTreeMap<i32, [usize; 8]> = BTreeMap::new();
+        for cell in 0..count {
+            if isBus(kinds[cell]) {
+                buses
+                    .entry(input.ComponentIds[cell])
+                    .or_insert_with(|| std::array::from_fn(|_| conductors.add()));
+            }
+        }
         for cell in 0..count {
             let kind = kinds[cell];
             for (dx, dy) in [(1, 0), (0, 1)] {
@@ -384,12 +390,15 @@ impl SimulationCore {
                     {
                         ports.unite(cell, n);
                     }
-                    if isConductor(kind)
-                        && isConductor(kinds[n])
-                        && color(kind) == color(kinds[n])
-                        && (kind != kinds[n] || input.ComponentIds[cell] == input.ComponentIds[n])
+                    if isTrace(kind)
+                        && kinds[n] == kind
+                        && input.ComponentIds[cell] == input.ComponentIds[n]
                     {
                         conductors.unite(cell, n);
+                    } else if isTrace(kind) && isBus(kinds[n]) {
+                        conductors.unite(cell, buses[&input.ComponentIds[n]][color(kind)]);
+                    } else if isBus(kind) && isTrace(kinds[n]) {
+                        conductors.unite(buses[&input.ComponentIds[cell]][color(kinds[n])], n);
                     }
                 }
             }
@@ -421,7 +430,7 @@ impl SimulationCore {
         let mut cross = HashMap::new();
         for (cell, &kind) in kinds.iter().enumerate() {
             if kind == 13 {
-                let mut channels = [0; 12];
+                let mut channels = [0; 16];
                 for anchor in &mut channels {
                     *anchor = conductors.add();
                 }
@@ -435,18 +444,23 @@ impl SimulationCore {
                 } else {
                     [(0, -1), (0, 1)]
                 };
-                for c in 0..6 {
+                for c in 0..8 {
                     for (dx, dy) in dirs {
                         if let Some(n) = neighbor(cell, dx, dy) {
-                            if isConductor(kinds[n]) && color(kinds[n]) == c {
-                                conductors.unite(channels[orientation * 6 + c], n);
+                            if isTrace(kinds[n]) && color(kinds[n]) == c {
+                                conductors.unite(channels[orientation * 8 + c], n);
+                            } else if isBus(kinds[n]) {
+                                conductors.unite(
+                                    channels[orientation * 8 + c],
+                                    buses[&input.ComponentIds[n]][c],
+                                );
                             } else if let Some(other) = cross
                                 .get(&n)
                                 .filter(|_| input.ComponentIds[cell] == input.ComponentIds[n])
                             {
                                 conductors.unite(
-                                    channels[orientation * 6 + c],
-                                    other[orientation * 6 + c],
+                                    channels[orientation * 8 + c],
+                                    other[orientation * 8 + c],
                                 );
                             }
                         }
@@ -464,7 +478,7 @@ impl SimulationCore {
             *networkRoots.entry(conductors.find(node)).or_insert(next)
         };
         for cell in 0..count {
-            if isConductor(kinds[cell]) {
+            if isTrace(kinds[cell]) {
                 networkByCell[cell] = getNetwork(cell);
             }
             if let Some(channels) = cross.get_mut(&cell) {
@@ -473,8 +487,19 @@ impl SimulationCore {
                 }
             }
         }
+        for channels in buses.values_mut() {
+            for anchor in channels {
+                *anchor = getNetwork(*anchor);
+            }
+        }
         drop(getNetwork);
         let networkCount = networkRoots.len();
+        let mut networkHasBus = vec![false; networkCount];
+        for channels in buses.values() {
+            for &network in channels {
+                networkHasBus[network] = true;
+            }
+        }
         drop(networkRoots);
         drop(conductors);
         let mut reads: Vec<Port> = vec![];
@@ -510,8 +535,7 @@ impl SimulationCore {
                         let b = &mut reads[readByCell[cell]];
                         if isTrace(nk) {
                             unique(&mut b.Targets, networkByCell[n]);
-                        } else if nk == 16 {
-                            unique(&mut b.Peers, writeByCell[n]);
+                            unique(&mut b.TraceIds, input.ComponentIds[n] as usize);
                         } else if isDevice(nk) {
                             unique(&mut b.Sources, cellComponents[n]);
                         }
@@ -519,6 +543,7 @@ impl SimulationCore {
                         let b = &mut writes[writeByCell[cell]];
                         if isTrace(nk) {
                             unique(&mut b.Sources, networkByCell[n]);
+                            unique(&mut b.TraceIds, input.ComponentIds[n] as usize);
                         } else if nk == 15 {
                             unique(&mut b.Peers, readByCell[n]);
                         } else if isDevice(nk) && nk != 26 {
@@ -528,50 +553,19 @@ impl SimulationCore {
                 }
             }
         }
-        let mut readHas: Vec<bool> = reads.iter().map(|b| !b.Sources.is_empty()).collect();
-        let mut writeHas: Vec<bool> = writes.iter().map(|b| !b.Sources.is_empty()).collect();
-        loop {
-            let mut changed = false;
-            for (r, b) in reads.iter().enumerate() {
-                for &w in &b.Peers {
-                    if readHas[r] && !writeHas[w] {
-                        writeHas[w] = true;
-                        changed = true;
-                    }
-                    if writeHas[w] && !readHas[r] {
-                        readHas[r] = true;
-                        changed = true;
-                    }
-                }
+        let mut drivers = vec![None; networkCount];
+        for (id, binding) in reads.iter().enumerate() {
+            if binding.TraceIds.len() != 1 {
+                return Err(fail(Some(binding.First), "read_requires_one_trace_sink"));
             }
-            if !changed {
-                break;
+            let network = binding.Targets[0];
+            if networkHasBus[network] && drivers[network].replace(id).is_some() {
+                return Err(fail(Some(binding.First), "bus_channel_multiple_reads"));
             }
         }
-        for b in &reads {
-            if b.Sources.is_empty() && b.Peers.is_empty() {
-                return Err(fail(Some(b.First), "read_requires_one_source"));
-            }
-            if b.Targets.is_empty() && b.Peers.is_empty() {
-                return Err(fail(Some(b.First), "read_requires_output"));
-            }
-        }
-        for b in &writes {
-            if b.Sources.is_empty() && b.Peers.is_empty() {
-                return Err(fail(Some(b.First), "write_requires_one_input"));
-            }
-            if b.Targets.is_empty() && b.Peers.is_empty() {
-                return Err(fail(Some(b.First), "write_requires_target"));
-            }
-        }
-        for (id, b) in reads.iter().enumerate() {
-            if !readHas[id] {
-                return Err(fail(Some(b.First), "read_requires_one_source"));
-            }
-        }
-        for (id, b) in writes.iter().enumerate() {
-            if !writeHas[id] {
-                return Err(fail(Some(b.First), "write_requires_one_input"));
+        for binding in &writes {
+            if binding.TraceIds.len() != 1 {
+                return Err(fail(Some(binding.First), "write_requires_one_trace_source"));
             }
         }
         let componentCount = components.len();
@@ -585,9 +579,6 @@ impl SimulationCore {
             }
             for &target in &b.Targets {
                 edges.push((readNode(r), componentCount + target));
-            }
-            for &w in &b.Peers {
-                edges.push((readNode(r), writeNode(w)));
             }
         }
         for (w, b) in writes.iter().enumerate() {
@@ -683,7 +674,14 @@ impl SimulationCore {
         for cell in 0..count {
             let nodes = &mut visibleNodes[cell];
             match kinds[cell] {
-                1..=12 => nodes.push(resolve(mapRaw(componentCount + networkByCell[cell]))),
+                1..=6 | 28..=29 => {
+                    nodes.push(resolve(mapRaw(componentCount + networkByCell[cell])))
+                }
+                7..=12 => {
+                    for &network in &buses[&input.ComponentIds[cell]] {
+                        unique(nodes, resolve(mapRaw(componentCount + network)));
+                    }
+                }
                 13 => {
                     for &n in &cross[&cell] {
                         unique(nodes, resolve(mapRaw(componentCount + n)));
@@ -1464,11 +1462,11 @@ mod componentTests {
         core.advanceSilent(1);
         assert_eq!(core.states()[5], 1);
         bridge.Kinds[8] = 7;
-        bridge.Kinds[9] = 7; // Blue bus doesn't carry a yellow trace.
+        bridge.Kinds[9] = 7; // Legacy Bus color IDs carry every Trace color.
         let mut core = SimulationCore::compile(bridge).unwrap();
         core.toggleLatch(0).unwrap();
         core.advanceSilent(1);
-        assert_eq!(core.states()[5], 0);
+        assert_eq!(core.states()[5], 1);
     }
     #[test]
     fn rejectsMissingDisconnectedAndIncompatibleIdentities() {
@@ -1500,6 +1498,256 @@ mod componentTests {
                 SimulationCore::compile(data).err().unwrap().ErrorReason,
                 "incompatible_component"
             );
+        }
+    }
+    // Sparse fixtures describe physical components explicitly, including their IDs.
+    fn board(cells: &[(usize, usize, i32, i32)]) -> CompileInput {
+        let width = cells.iter().map(|c| c.0).max().unwrap() + 1;
+        let height = cells.iter().map(|c| c.1).max().unwrap() + 1;
+        let mut data = input(
+            width,
+            height,
+            vec![0; width * height],
+            vec![0; width * height],
+        );
+        for &(x, y, kind, id) in cells {
+            data.Kinds[y * width + x] = kind;
+            data.ComponentIds[y * width + x] = id;
+        }
+        data
+    }
+    #[test]
+    fn eightBusChannelsFanOutIndependentlyAndUndrivenWritesStayLow() {
+        let mut cells = vec![];
+        let traceKinds = [1, 2, 3, 4, 5, 6, 28, 29];
+        for (lane, &kind) in traceKinds.iter().enumerate() {
+            let y = lane * 3;
+            let id = 10 + lane as i32 * 10;
+            cells.extend([
+                (0, y, 25, id),
+                (1, y, 15, id + 1),
+                (2, y, kind, id + 2),
+                (4, y, kind, id + 3),
+                (5, y, 16, id + 4),
+                (6, y, 27, id + 5),
+                (4, y + 1, 16, id + 6),
+                (5, y + 1, 27, id + 7),
+            ]);
+            for dy in y..y + 3 {
+                cells.push((3, dy, 7, 1));
+            }
+        }
+        // A second yellow receiver has no separate driver and follows channel zero.
+        cells.extend([
+            (2, 24, 1, 200),
+            (1, 24, 16, 201),
+            (0, 24, 27, 202),
+            (3, 24, 7, 1),
+        ]);
+        let mut core = SimulationCore::compile(board(&cells)).unwrap();
+        let width = core.Width;
+        for active in 0..8 {
+            core.toggleLatch(active * 3 * width).unwrap();
+            core.advanceSilent(1);
+            for lane in 0..8 {
+                let expected = u8::from(lane == active);
+                assert_eq!(core.states()[lane * 3 * width + 6], expected);
+                assert_eq!(core.states()[(lane * 3 + 1) * width + 5], expected);
+            }
+            assert_eq!(core.states()[24 * width], u8::from(active == 0));
+            let snapshot = core.capture();
+            core.resetSilent();
+            assert!(core.states().iter().all(|&v| v == 0));
+            core.restore(&snapshot).unwrap();
+            core.toggleLatch(active * 3 * width).unwrap();
+            core.advanceSilent(1);
+        }
+        let mut undriven = board(&[(0, 0, 7, 1), (1, 0, 29, 2), (2, 0, 16, 3), (3, 0, 27, 4)]);
+        undriven.InitialStates.fill(1);
+        let mut core = SimulationCore::compile(undriven).unwrap();
+        core.advanceSilent(8);
+        assert_eq!(core.states(), &[0, 0, 0, 0]);
+    }
+    #[test]
+    fn readCombinesLogicAndWriteSourcesWithoutReversingThePortLink() {
+        let data = board(&[
+            (0, 1, 25, 1),
+            (1, 1, 15, 2),
+            (2, 1, 1, 3),
+            (3, 1, 16, 4),
+            (4, 1, 15, 5),
+            (5, 1, 2, 6),
+            (6, 1, 16, 7),
+            (7, 1, 27, 8),
+            (4, 0, 25, 9),
+        ]);
+        let mut core = SimulationCore::compile(data).unwrap();
+        let width = core.Width;
+        core.toggleLatch(width).unwrap();
+        core.advanceSilent(1);
+        assert_eq!(core.states()[width + 7], 1);
+        core.toggleLatch(4).unwrap();
+        core.toggleLatch(width).unwrap();
+        core.advanceSilent(1);
+        assert_eq!(core.states()[width + 7], 1);
+        assert_eq!(
+            core.states()[width + 2],
+            0,
+            "Read cannot drive its neighboring Write"
+        );
+        core.toggleLatch(4).unwrap();
+        core.advanceSilent(1);
+        assert_eq!(core.states()[width + 7], 0);
+        // Multiple direct logic sources also OR together without a gate tick.
+        let mut core = SimulationCore::compile(board(&[
+            (0, 0, 25, 1),
+            (1, 0, 15, 2),
+            (2, 0, 1, 3),
+            (1, 1, 25, 4),
+        ]))
+        .unwrap();
+        core.toggleLatch(0).unwrap();
+        assert_eq!(core.states()[2], 1);
+        core.toggleLatch(4).unwrap();
+        core.toggleLatch(0).unwrap();
+        assert_eq!(core.states()[2], 1);
+    }
+    #[test]
+    fn logicSidesMayBeEmptyButTraceSidesRequireExactlyOneComponent() {
+        for cells in [
+            vec![(0, 0, 15, 1), (1, 0, 1, 2)],
+            vec![(0, 0, 1, 1), (1, 0, 16, 2)],
+        ] {
+            let mut core = SimulationCore::compile(board(&cells)).unwrap();
+            core.advanceSilent(4);
+            assert_eq!(core.states(), &[0, 0]);
+        }
+        for (cells, reason) in [
+            (vec![(0, 0, 15, 1)], "read_requires_one_trace_sink"),
+            (vec![(0, 0, 16, 1)], "write_requires_one_trace_source"),
+            (
+                vec![(0, 0, 1, 1), (1, 0, 15, 2), (2, 0, 1, 3)],
+                "read_requires_one_trace_sink",
+            ),
+            (
+                vec![(0, 0, 1, 1), (1, 0, 16, 2), (2, 0, 1, 3)],
+                "write_requires_one_trace_source",
+            ),
+            // Bus unifies the two traces electrically, but not their identities.
+            (
+                vec![
+                    (0, 0, 1, 1),
+                    (1, 0, 15, 2),
+                    (2, 0, 1, 3),
+                    (0, 1, 7, 4),
+                    (1, 1, 7, 4),
+                    (2, 1, 7, 4),
+                ],
+                "read_requires_one_trace_sink",
+            ),
+        ] {
+            assert_eq!(
+                SimulationCore::compile(board(&cells))
+                    .err()
+                    .unwrap()
+                    .ErrorReason,
+                reason
+            );
+        }
+        // Repeated contacts to the same physical Trace count once.
+        SimulationCore::compile(board(&[
+            (0, 0, 15, 1),
+            (1, 0, 15, 1),
+            (0, 1, 1, 2),
+            (1, 1, 1, 2),
+        ]))
+        .unwrap();
+        // Bus must not connect directly to a port.
+        assert_eq!(
+            SimulationCore::compile(board(&[(0, 0, 7, 1), (1, 0, 15, 2)]))
+                .err()
+                .unwrap()
+                .ErrorReason,
+            "read_requires_one_trace_sink"
+        );
+    }
+    #[test]
+    fn busRejectsMultipleReadsAfterCrossConnectivityButPlainTraceStillOrs() {
+        let data = board(&[
+            (0, 0, 25, 1),
+            (1, 0, 15, 2),
+            (2, 0, 1, 3),
+            (3, 0, 1, 3),
+            (4, 0, 15, 4),
+            (5, 0, 25, 5),
+        ]);
+        let mut core = SimulationCore::compile(data.clone()).unwrap();
+        core.toggleLatch(0).unwrap();
+        assert_eq!(core.states()[3], 1);
+        core.toggleLatch(5).unwrap();
+        core.toggleLatch(0).unwrap();
+        assert_eq!(core.states()[3], 1);
+        core.toggleLatch(5).unwrap();
+        assert_eq!(core.states()[3], 0);
+        let multiple = board(&[
+            (0, 0, 25, 1),
+            (1, 0, 15, 2),
+            (2, 0, 1, 3),
+            (3, 0, 7, 4),
+            (4, 0, 13, 5),
+            (5, 0, 1, 6),
+            (6, 0, 15, 7),
+            (7, 0, 25, 8),
+        ]);
+        let error = SimulationCore::compile(multiple).err().unwrap();
+        assert_eq!(error.ErrorReason, "bus_channel_multiple_reads");
+        assert_eq!((error.ErrorX, error.ErrorY), (6, 0));
+        // One Read may touch its own Trace more than once without becoming two drivers.
+        SimulationCore::compile(board(&[
+            (0, 0, 15, 1),
+            (1, 0, 15, 1),
+            (0, 1, 1, 2),
+            (1, 1, 1, 2),
+            (2, 1, 7, 3),
+        ]))
+        .unwrap();
+    }
+    #[test]
+    fn crossCarriesBusTraceAndBusBusOnIndependentAxes() {
+        for horizontalBus in [false, true] {
+            let mut cells = vec![
+                (0, 3, 25, 1),
+                (1, 3, 15, 2),
+                (2, 3, 28, 3),
+                (3, 3, 7, 4),
+                (4, 3, 13, 5),
+                (6, 3, 28, 7),
+                (7, 3, 16, 8),
+                (8, 3, 27, 9),
+                (4, 0, 25, 10),
+                (4, 1, 15, 11),
+                (4, 2, 28, 12),
+                (4, 4, 28, 13),
+                (4, 5, 16, 14),
+                (4, 6, 27, 15),
+            ];
+            cells.push((
+                5,
+                3,
+                if horizontalBus { 7 } else { 28 },
+                if horizontalBus { 6 } else { 7 },
+            ));
+            let mut core = SimulationCore::compile(board(&cells)).unwrap();
+            let width = core.Width;
+            core.toggleLatch(3 * width).unwrap();
+            core.advanceSilent(1);
+            assert_eq!(core.states()[3 * width + 8], 1);
+            assert_eq!(core.states()[6 * width + 4], 0);
+            core.toggleLatch(4).unwrap();
+            core.toggleLatch(3 * width).unwrap();
+            core.advanceSilent(1);
+            assert_eq!(core.states()[3 * width + 8], 0);
+            assert_eq!(core.states()[6 * width + 4], 1);
         }
     }
 }

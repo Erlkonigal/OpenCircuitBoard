@@ -3,7 +3,7 @@
 Recorded on Windows x86_64, 2026-11-15, from Git revision `7feac8f`.
 The fixture was recorded from the existing `SimulationCoreTests.cpp` operation stream,
 plus 128 fixed-seed random boards (seed 20261115). Repeated arrays are run-length encoded.
-The active replay retains 597 state/delta comparisons. Sessions 39, 40, 46, 48, 49, and 81
+The recording contains 597 state/delta comparisons. The active replay retains 502 unchanged comparisons; fourteen sessions (16, 42, 43, 52, 53, 56, 59, 60, 72, 73, 74, 75, 77, 103) have explicit replacement compilation assertions for the new single-Trace port and unloaded-output rules. Missing-Trace error names are updated in the replay adapter. New component tests cover OR sources, Write-to-Read direction, empty logic sides, Bus channels, Cross mixing, and Trace component cardinality. Sessions 39, 40, 46, 48, 49, and 81
 used the removed Mesh component (kind 14) and were retired with it; obsolete `meshIds`
 fields were dropped from the remaining records. The test-only replay adapter assigns IDs to compatible same-ink connected regions,
 preserving recorded connectivity. Production project loading requires explicit IDs.

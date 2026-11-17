@@ -36,6 +36,21 @@ fn committedExampleMatchesGeneratorAndPlaysThreeCompleteLoops() {
         .map(|tile| tile.ComponentId)
         .collect();
     assert_eq!(leds.len(), 40);
+    assert!(project.Board.Tiles.len() <= 60_000);
+    assert!(project.Board.Grid.Width <= 560 && project.Board.Grid.Height <= 200);
+    assert!(project.Board.Tiles.iter().any(|tile| tile.ToolId == "bus"));
+    for tool in [
+        "trace",
+        "traceRed",
+        "traceGreen",
+        "traceBlue",
+        "traceCyan",
+        "traceMagenta",
+        "traceOrange",
+        "traceWhite",
+    ] {
+        assert!(project.Board.Tiles.iter().any(|tile| tile.ToolId == tool));
+    }
 }
 #[test]
 fn recognizableFramesSurviveResetSnapshotAndArchiveRoundTrip() {

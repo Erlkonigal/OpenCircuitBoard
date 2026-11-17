@@ -71,12 +71,18 @@ test('component library and inspector configure colors and per-cell settings', a
     await page.screenshot({ path: buildPath('SelectionSettingsCapture.png') });
     await page.getByRole('button', { name: 'Clear selection' }).click();
     await page.getByRole('button', { name: 'Trace', exact: true }).click();
+    await expect(page.locator('.color-option')).toHaveCount(8);
+    for (const color of ['trace', 'traceRed', 'traceGreen', 'traceBlue', 'traceCyan', 'traceMagenta', 'traceOrange', 'traceWhite']) {
+        await page.getByRole('button', { name: color, exact: true }).click();
+        await expect(page.getByRole('button', { name: color, exact: true })).toHaveAttribute('aria-pressed', 'true');
+    }
     await page.getByRole('button', { name: 'traceMagenta', exact: true }).click();
     await expect(page.getByRole('button', { name: 'traceMagenta', exact: true })).toHaveAttribute('aria-pressed', 'true');
     await page.screenshot({ path: buildPath('TraceColorCapture.png') });
     await page.getByRole('button', { name: 'Bus', exact: true }).click();
-    await page.getByRole('button', { name: 'busYellow', exact: true }).click();
-    await page.screenshot({ path: buildPath('BusColorCapture.png') });
+    await expect(page.locator('.color-option')).toHaveCount(0);
+    await expect(page.getByTestId('right-dock')).toContainText('eight independent trace colors');
+    await page.screenshot({ path: buildPath('BusSettingsCapture.png') });
     await page.getByRole('button', { name: 'Latch', exact: true }).click();
     await page.getByText('Off', { exact: true }).click();
     await page.mouse.click(center.x + 64, center.y);

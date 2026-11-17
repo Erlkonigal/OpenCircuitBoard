@@ -52,7 +52,27 @@ struct Node {
 #[derive(Clone, Copy, PartialEq)]
 enum Wire {
     Trace(usize),
+    Bus(usize),
     Cross,
+}
+const InternalSignalCount: usize = 160;
+const TraceTools: [&str; 8] = [
+    "trace",
+    "traceRed",
+    "traceGreen",
+    "traceBlue",
+    "traceCyan",
+    "traceMagenta",
+    "traceOrange",
+    "traceWhite",
+];
+fn signal(net: usize) -> (usize, usize) {
+    if net < InternalSignalCount {
+        (net / 8, net % 8)
+    } else {
+        let pixel = net - InternalSignalCount;
+        (20 + pixel % 5, pixel / 5)
+    }
 }
 struct Layout {
     Tiles: BTreeMap<Point, Tile>,
@@ -97,7 +117,7 @@ impl Layout {
     fn finish(mut self) -> ProjectDocument {
         let mut remaining: HashSet<_> = self.Wires.keys().copied().collect();
         // Stable coordinate order makes regeneration reproducible. Every disconnected
-        // trace segment and every four-connected Cross region gets a separate ID.
+        // trace/Bus segment and every four-connected Cross region gets a separate ID.
         for (&seed, &wire) in &self.Wires {
             if !remaining.remove(&seed) {
                 continue;
@@ -106,10 +126,10 @@ impl Layout {
             self.NextId += 1;
             let mut queue = VecDeque::from([seed]);
             while let Some((x, y)) = queue.pop_front() {
-                let kind = if wire == Wire::Cross {
-                    "cross"
-                } else {
-                    "trace"
+                let kind = match wire {
+                    Wire::Cross => "cross",
+                    Wire::Bus(_) => "bus",
+                    Wire::Trace(net) => TraceTools[signal(net).1],
                 };
                 self.Tiles.insert(
                     (x, y),
@@ -210,94 +230,125 @@ pub fn buildProject() -> ProjectDocument {
         });
     }
 
+    assert_eq!(outputs, InternalSignalCount);
     let mut layout = Layout::new();
-    let mut columns = vec![];
-    let mut deviceColumns = vec![];
-    for (index, node) in nodes.iter().enumerate() {
-        let first = columns.len();
-        columns.extend(node.Inputs.iter().copied());
-        columns.push(index);
-        deviceColumns.push((first, columns.len() - 1));
-    }
-    let right = -32;
-    let left = right - (columns.len() as i32 - 1) * 2;
-    let top = DisplayOrigin.1;
-    let bottom = top + 80 + (outputs as i32 - 1);
-    let rowNets: Vec<_> = (outputs..outputs + 40).chain(0..outputs).collect();
-    let rowY = |row: usize| {
-        top + if row < 40 {
-            row as i32 / 5 * PixelPitch + PixelSize + row as i32 % 5
-        } else {
-            80 + row as i32 - 40
-        }
+    // Balance whole gates by their port count. These cuts keep the widest bank
+    // at 185 ports while preserving the original logical node order.
+    let cuts = [0, 92, 143, nodes.len()];
+    let banks: Vec<Vec<usize>> = (0..3)
+        .map(|bank| {
+            (cuts[bank]..cuts[bank + 1])
+                .flat_map(|index| {
+                    nodes[index]
+                        .Inputs
+                        .iter()
+                        .copied()
+                        .chain(std::iter::once(index))
+                })
+                .collect()
+        })
+        .collect();
+    let maximumColumns = banks.iter().map(Vec::len).max().unwrap();
+    let right = -90;
+    let left = right - (maximumColumns as i32 - 1) * 2;
+    let laneY = |bank: usize, group: usize| {
+        -101 + bank as i32 * 64
+            + if bank % 2 == 0 {
+                group as i32 * 2
+            } else {
+                (24 - group) as i32 * 2
+            }
     };
-    // Each device has dedicated vertical input and output columns. Horizontal
-    // signal rows meet their own columns through trace junctions; all other
-    // intersections are directional Cross cells, preserving independent inputs.
-    for (row, &net) in rowNets.iter().enumerate() {
-        let y = rowY(row);
-        let nextY = if row + 1 < rowNets.len() {
-            rowY(row + 1)
-        } else {
-            y + 1
-        };
-        for (column, &verticalNet) in columns.iter().enumerate() {
-            let x = left + column as i32 * 2;
-            layout.wire(
-                (x, y),
-                if net == verticalNet {
-                    Wire::Trace(net)
-                } else {
-                    Wire::Cross
-                },
-            );
-            if x < right {
-                layout.wire((x + 1, y), Wire::Trace(net));
-            }
-            for gapY in y + 1..nextY {
-                layout.wire((x, gapY), Wire::Trace(verticalNet));
+    for (bank, columns) in banks.iter().enumerate() {
+        let top = -101 + bank as i32 * 64;
+        for group in 0..25 {
+            let y = laneY(bank, group);
+            for column in 0..maximumColumns {
+                let x = left + column as i32 * 2;
+                layout.wire(
+                    (x, y),
+                    match columns.get(column) {
+                        Some(&net) if signal(net).0 != group => Wire::Cross,
+                        _ => Wire::Bus(group),
+                    },
+                );
+                if x < right {
+                    layout.wire((x + 1, y), Wire::Bus(group));
+                }
             }
         }
-    }
-    for (index, node) in nodes.iter().enumerate() {
-        let (first, last) = deviceColumns[index];
-        let startX = left + first as i32 * 2;
-        let endX = left + last as i32 * 2;
-        layout.device(
-            node.Kind,
-            (startX..=endX).map(|x| (x, bottom + 3)),
-            node.Kind == "latch",
-        );
-        for column in first..=last {
+        for (column, &net) in columns.iter().enumerate() {
             let x = left + column as i32 * 2;
-            layout.wire((x, bottom + 1), Wire::Trace(columns[column]));
+            for offset in (1..48).step_by(2) {
+                layout.wire((x, top + offset), Wire::Trace(net));
+            }
+            layout.wire((x, top + 49), Wire::Trace(net));
+        }
+        let mut first = 0;
+        for index in cuts[bank]..cuts[bank + 1] {
+            let node = &nodes[index];
+            let last = first + node.Inputs.len();
             layout.device(
-                if column == last { "read" } else { "write" },
-                [(x, bottom + 2)],
-                false,
+                node.Kind,
+                (left + first as i32 * 2..=left + last as i32 * 2).map(|x| (x, top + 51)),
+                node.Kind == "latch",
             );
+            for column in first..=last {
+                layout.device(
+                    if column == last { "read" } else { "write" },
+                    [(left + column as i32 * 2, top + 50)],
+                    false,
+                );
+            }
+            first = last + 1;
         }
     }
-    // Five nested leads below each pixel row avoid crossings near the display.
-    for row in 0..8 {
-        for column in 0..5 {
-            let pixel = row * 5 + column;
-            let net = outputs + pixel;
-            let x = DisplayOrigin.0 + column as i32 * PixelPitch;
-            let y = DisplayOrigin.1 + row as i32 * PixelPitch;
+    // Reverse the lane order at each fold, so all 25 nested turns stay separate.
+    for bank in 0..2 {
+        for group in 0..25 {
+            let (edge, turn, direction) = if bank == 0 {
+                (right, right + 2 * (25 - group) as i32, 1)
+            } else {
+                (left, left - 2 * (group + 1) as i32, -1)
+            };
+            let (startY, endY) = (laneY(bank, group), laneY(bank + 1, group));
+            let mut x = edge + direction;
+            loop {
+                layout.wire((x, startY), Wire::Bus(group));
+                layout.wire((x, endY), Wire::Bus(group));
+                if x == turn {
+                    break;
+                }
+                x += direction;
+            }
+            for y in startY.min(endY)..=startY.max(endY) {
+                layout.wire((turn, y), Wire::Bus(group));
+            }
+        }
+    }
+    // Each display column receives one Bus. Its eight colors select the rows.
+    for column in 0..5 {
+        let x = DisplayOrigin.0 + column * PixelPitch;
+        let group = 20 + column as usize;
+        let bottom = laneY(2, group);
+        for sx in right + 1..=x - 3 {
+            layout.wire((sx, bottom), Wire::Bus(group));
+        }
+        for y in DisplayOrigin.1..=bottom {
+            layout.wire((x - 3, y), Wire::Bus(group));
+        }
+        for row in 0..8 {
+            let y = DisplayOrigin.1 + row * PixelPitch;
             layout.device(
                 "led",
                 (0..PixelSize).flat_map(|dy| (0..PixelSize).map(move |dx| (x + dx, y + dy))),
                 false,
             );
             layout.device("write", [(x - 1, y)], false);
-            let laneY = rowY(pixel);
-            for sx in right + 1..=x - 2 {
-                layout.wire((sx, laneY), Wire::Trace(net));
-            }
-            for sy in y..laneY {
-                layout.wire((x - 2, sy), Wire::Trace(net));
-            }
+            layout.wire(
+                (x - 2, y),
+                Wire::Trace(outputs + (row * 5 + column) as usize),
+            );
         }
     }
     layout.finish()

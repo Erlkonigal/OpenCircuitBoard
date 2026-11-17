@@ -38,7 +38,11 @@ Right-click or Q cancels unfinished drawing, movement, selection or merge operat
 
 Running simulation frames follow the UI display cadence, with at most one queued or active poll. Simulation ticks advance independently in Rust; display updates show the latest state rather than replaying intermediate ticks. Pausing stops periodic polling, and control commands apply their returned state immediately.
 
-Same-ink components with different IDs do not merge or conduct directly. Existing connections between different inks retain their color, port, and directional Cross rules; another physical route may still connect separate components.
+Same-ink components with different IDs do not merge or conduct directly; another physical route may still connect separate components.
+
+Trace has eight colors: yellow, red, green, blue, cyan, magenta, orange, and white. A single blue Bus carries eight independent Trace-color channels. Attach a Trace directly to a Bus, then connect its other end to Read or Write. Read ORs zero or more logic/Write sources into exactly one Trace component; Write takes exactly one Trace component and fans out to zero or more logic/Read sinks. Direct port connections run from Write to Read. An undriven channel stays low. Every Bus channel allows at most one Read and any number of Writes; pure Trace networks may OR multiple Reads. Ports count Trace component IDs, even when separate traces connect electrically elsewhere.
+
+Cross carries all eight colors on independent horizontal and vertical axes, including Bus-to-Bus and Bus-to-Trace connections. Runtime Bus/Cross brightness indicates whether any carried channel is high. Older colored Bus tool IDs remain readable and normalize to the unified Bus in boards and blueprints; existing numeric tool IDs and the v2 project format are preserved.
 
 Blueprints are flat ink snapshots saved with the current project. Save a selection in the inspector or save a clipboard item; the Blueprints panel supports search, rename, and delete. Clicking a blueprint copies its snapshot into clipboard history while keeping the panel open. Each Ctrl+V starts an ordinary paste preview, and each placement remaps every internal component to a fresh ID while preserving its grouping as editable cells. Confirming a paste returns to Pointer and selects the newly placed components; right-click or Q cancels the preview. Blueprint management and placement support undo/redo.
 
@@ -115,7 +119,7 @@ make board-benchmark BOARD_PATH=C:/Projects/Example.ocb
 
 Rendered runtime refresh tests cover detail, color, and aggregate views in both display modes on a 131,072-cell board. Per-transition latency measurements and captures are written to `build/LodRefresh-*`; assertions check actual WebGL color changes, with reset, editing, and return-to-design coverage in unit and native tests.
 
-The core tests replay 597 recorded C++ state/delta comparisons for supported components, plus component identities, independent adjacent lanes, snapshots, clock/latch behavior, graph ordering, project compatibility, and worker lifecycle tests. The default mixed benchmark uses 1024x1024 cells and 256 pipelines. The migration gate is 90% of the measured legacy baseline; the separate historical 100K TPS target has not been reached. See `Backend/Core/Tests/Fixtures/LegacyBaseline.md`. Pass `CORE_BENCHMARK_ARGS="--quick"` for a short run. `board-benchmark` also accepts `BOARD_BENCHMARK_ARGS="--editorProbe"`.
+The core tests replay 502 unchanged recorded C++ state/delta comparisons, with explicit replacement compilation assertions for fourteen historical sessions affected by the new port rules, plus component identities, independent adjacent lanes, snapshots, clock/latch behavior, graph ordering, project compatibility, and worker lifecycle tests. The default mixed benchmark uses 1024x1024 cells and 256 pipelines. The migration gate is 90% of the measured legacy baseline; the separate historical 100K TPS target has not been reached. See `Backend/Core/Tests/Fixtures/LegacyBaseline.md`. Pass `CORE_BENCHMARK_ARGS="--quick"` for a short run. `board-benchmark` also accepts `BOARD_BENCHMARK_ARGS="--editorProbe"`.
 
 ## Project format
 

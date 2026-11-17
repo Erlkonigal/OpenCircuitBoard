@@ -72,7 +72,7 @@ for (const lod of ['detail', 'color', 'aggregate'] as const) for (const isOn of 
     });
 }
 
-const PaletteInks = ['trace', 'traceRed', 'traceGreen', 'traceBlue', 'traceCyan', 'traceMagenta', 'bus', 'busRed', 'busGreen', 'busYellow', 'busCyan', 'busMagenta', 'cross', 'read', 'write', 'buffer', 'and', 'or', 'xor', 'not', 'nand', 'nor', 'xnor', 'latch', 'clock', 'led'];
+const PaletteInks = ['traceOrange', 'traceWhite', 'trace', 'traceRed', 'traceGreen', 'traceBlue', 'traceCyan', 'traceMagenta', 'bus', 'busRed', 'busGreen', 'busYellow', 'busCyan', 'busMagenta', 'cross', 'read', 'write', 'buffer', 'and', 'or', 'xor', 'not', 'nand', 'nor', 'xnor', 'latch', 'clock', 'led'];
 const brightness = (pixel: number[]) => pixel[0] * .2126 + pixel[1] * .7152 + pixel[2] * .0722;
 for (const isOn of [true, false]) test(`every ink reserves visible highlight headroom on ${isOn ? 'active' : 'inactive'} surfaces`, async ({ page }) => {
     await page.addInitScript(({ inks, isOn }) => {

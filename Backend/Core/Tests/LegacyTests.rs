@@ -59,6 +59,17 @@ fn replayLegacyCore() {
         let v: Value = serde_json::from_str(text).unwrap();
         let id = v["id"].as_u64().unwrap();
         let op = v["op"].as_str().unwrap();
+        // These recordings exercised multi-Trace ports or Read-to-Write bypasses.
+        // Check their new compilation result; their obsolete frames are not replayed.
+        let changed = match id {
+            16 | 43 | 52 | 53 | 59 | 72 | 73 | 74 | 75 | 77 => Some("read_requires_one_trace_sink"),
+            42 | 60 | 103 => Some("write_requires_one_trace_source"),
+            56 => Some(""), // An output-free Write is now valid.
+            _ => None,
+        };
+        if changed.is_some() && !matches!(op, "new" | "compile") {
+            continue;
+        }
         if op == "new" {
             ordering.insert(id, v["order"] == 1);
             cores.insert(id, SimulationCore::default());
@@ -75,6 +86,20 @@ fn replayLegacyCore() {
             };
             assignRecordedComponents(&mut input);
             let result = SimulationCore::compileWithOrdering(input, *ordering.get(&id).unwrap());
+            if let Some(reason) = changed {
+                if reason.is_empty() {
+                    let mut core = result.expect("Unloaded Write now compiles");
+                    core.advanceSilent(4);
+                    assert!(core.states().iter().all(|&v| v == 0));
+                } else {
+                    assert_eq!(
+                        result.err().unwrap().ErrorReason,
+                        reason,
+                        "Changed session {id}"
+                    );
+                }
+                continue;
+            }
             assert_eq!(
                 result.is_ok(),
                 v["ok"] == 1,
@@ -89,7 +114,12 @@ fn replayLegacyCore() {
                 Err(e) => {
                     assert_eq!(
                         e.ErrorReason,
-                        v["reason"].as_str().unwrap(),
+                        match v["reason"].as_str().unwrap() {
+                            "read_requires_one_source" | "read_requires_output" =>
+                                "read_requires_one_trace_sink",
+                            "write_requires_one_input" => "write_requires_one_trace_source",
+                            reason => reason,
+                        },
                         "reason line {}",
                         line + 1
                     );
@@ -155,6 +185,6 @@ fn replayLegacyCore() {
             _ => panic!("unknown {op}"),
         }
     }
-    assert!(checks > 500);
+    assert_eq!(checks, 502);
     println!("Compared {checks} legacy states and deltas");
 }

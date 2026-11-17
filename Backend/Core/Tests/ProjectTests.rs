@@ -275,3 +275,105 @@ fn componentIdsRoundTripAndInvalidGroupsAreOrdinaryErrors() {
     }
     fs::remove_file(file).unwrap();
 }
+
+#[test]
+fn eightTraceKindsRoundTripWithoutRenumberingExistingTools() {
+    for (tool, kind) in [
+        ("trace", 1),
+        ("bus", 7),
+        ("busRed", 8),
+        ("cross", 13),
+        ("read", 15),
+        ("led", 27),
+        ("traceOrange", 28),
+        ("traceWhite", 29),
+    ] {
+        assert_eq!(toolKind(tool), Some(kind));
+    }
+    let file = path("eight-traces");
+    let mut project = ProjectDocument::default();
+    project.Board.Tiles = [
+        "trace",
+        "traceRed",
+        "traceGreen",
+        "traceBlue",
+        "traceCyan",
+        "traceMagenta",
+        "traceOrange",
+        "traceWhite",
+    ]
+    .iter()
+    .enumerate()
+    .map(|(index, tool)| Tile {
+        X: index as i32,
+        Y: 0,
+        ToolId: (*tool).into(),
+        ComponentId: index as i32 + 1,
+        IsOn: false,
+        ClockHoldTicks: None,
+    })
+    .collect();
+    save(&file, &project).unwrap();
+    let loaded = load(&file).unwrap();
+    assert_eq!(loaded, project);
+    assert_eq!(
+        loaded.Board.compileInput().unwrap().0.Kinds,
+        vec![1, 2, 3, 4, 5, 6, 28, 29]
+    );
+    fs::remove_file(file).unwrap();
+}
+#[test]
+fn legacyBusColorsNormalizeInBoardsAndBlueprintsWhileKeepingIdentities() {
+    let file = path("bus-aliases");
+    let aliases = [
+        "bus",
+        "busRed",
+        "busGreen",
+        "busYellow",
+        "busCyan",
+        "busMagenta",
+    ];
+    let tiles: Vec<_> = aliases
+        .iter()
+        .enumerate()
+        .map(|(index, tool)| {
+            serde_json::json!({
+                "x":index,"y":0,"toolId":tool,"componentId":index+1,"isOn":false
+            })
+        })
+        .collect();
+    archive(
+        &file,
+        &serde_json::json!({"formatVersion":2,
+        "board":{"selectedTool":"busRed","tiles":tiles},
+        "blueprints":[{"id":"b","name":"Bus","width":6,"height":1,"tiles":tiles}]}),
+    );
+    let project = load(&file).unwrap();
+    assert_eq!(project.Board.SelectedTool, "bus");
+    for group in [&project.Board.Tiles, &project.Blueprints[0].Tiles] {
+        for (index, tile) in group.iter().enumerate() {
+            assert_eq!(tile.ToolId, "bus");
+            assert_eq!(tile.ComponentId, index as i32 + 1);
+        }
+    }
+    let mut aliasProject = project.clone();
+    aliasProject.Board.SelectedTool = "busGreen".into();
+    aliasProject.Board.Tiles[0].ToolId = "busMagenta".into();
+    aliasProject.Blueprints[0].Tiles[0].ToolId = "busYellow".into();
+    save(&file, &aliasProject).unwrap();
+    assert_eq!(load(&file).unwrap(), project);
+    let mut zip = zip::ZipArchive::new(fs::File::open(&file).unwrap()).unwrap();
+    let mut json = String::new();
+    std::io::Read::read_to_string(&mut zip.by_name("project.json").unwrap(), &mut json).unwrap();
+    let value: serde_json::Value = serde_json::from_str(&json).unwrap();
+    assert_eq!(value["formatVersion"], 2);
+    assert!(
+        value["board"]["tiles"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|tile| tile["toolId"] == "bus")
+    );
+    drop(zip);
+    fs::remove_file(file).unwrap();
+}

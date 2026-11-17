@@ -46,18 +46,21 @@ export interface Ink {
     icon: string;
     variants?: string[];
 }
-export const ToolIds = ['empty', 'trace', 'traceRed', 'traceGreen', 'traceBlue', 'traceCyan', 'traceMagenta', 'bus', 'busRed', 'busGreen', 'busYellow', 'busCyan', 'busMagenta', 'cross', 'read', 'write', 'buffer', 'and', 'or', 'xor', 'not', 'nand', 'nor', 'xnor', 'latch', 'clock', 'led'];
+export const ToolIds = ['empty', 'trace', 'traceRed', 'traceGreen', 'traceBlue', 'traceCyan', 'traceMagenta', 'bus', 'busRed', 'busGreen', 'busYellow', 'busCyan', 'busMagenta', 'cross', 'read', 'write', 'buffer', 'and', 'or', 'xor', 'not', 'nand', 'nor', 'xnor', 'latch', 'clock', 'led', 'traceOrange', 'traceWhite'];
 // Explicit kinds keep the retired slot 14 unavailable without renumbering other inks.
 export const ToolKinds: Record<string, number> = Object.fromEntries(ToolIds.map((id, index) => [id, index < 14 ? index : index + 1]));
+export const TraceToolIds = ['trace', 'traceRed', 'traceGreen', 'traceBlue', 'traceCyan', 'traceMagenta', 'traceOrange', 'traceWhite'];
+export const canonicalToolId = (id: string) => ['busRed', 'busGreen', 'busYellow', 'busCyan', 'busMagenta'].includes(id) ? 'bus' : id;
+export const SelectableToolIds = ToolIds.filter(id => canonicalToolId(id) === id);
 export const hasGlyph = (id: string) => paletteId(id) !== 'trace';
 const Icons = import.meta.glob('../Assets/Inks/*.svg', { eager: true, query: '?url', import: 'default' }) as Record<string, string>;
 // Base surfaces reserve brightness for the shared highlight (weighted RGB <= 160).
 const Colors: Record<string, string> = { cross: '#88a2c8', bus: '#2378f4', read: '#f04f68', write: '#4ca8ef', trace: '#b5a527', buffer: '#44bf75', and: '#c29c58', or: '#45b7c1', xor: '#a977ed', not: '#ef5b78', nand: '#e99532', nor: '#3cb9c5', xnor: '#bf58ee', latch: '#37c377', clock: '#f05b70', led: '#9ba0a7' };
-const VariantColors: Record<string, string> = { Red: '#ff4d4d', Green: '#58bc54', Blue: '#2378f4', Cyan: '#45b7c1', Magenta: '#c66af6', Yellow: '#b5a527' };
+const VariantColors: Record<string, string> = { Red: '#ff4d4d', Green: '#58bc54', Blue: '#2378f4', Cyan: '#45b7c1', Magenta: '#c66af6', Yellow: '#b5a527', Orange: '#df8f39', White: '#9f9f9f' };
 export const paletteId = (id: string) => id.startsWith('trace') ? 'trace' : id.startsWith('bus') ? 'bus' : id;
-export function iconUrl(id: string, on = true) { const name = id === 'latch' ? (on ? 'LatchOn' : 'LatchOff') : id[0].toUpperCase() + id.slice(1); return Icons[`../Assets/Inks/${name}.svg`]; }
-export const Inks: Ink[] = ['cross', 'bus', 'read', 'write', 'trace', 'buffer', 'and', 'or', 'xor', 'not', 'nand', 'nor', 'xnor', 'latch', 'clock', 'led'].map(id => ({ id, title: id[0].toUpperCase() + id.slice(1), category: ['cross', 'bus'].includes(id) ? 'Space Optimization' : ['read', 'write', 'trace'].includes(id) ? 'Trace' : ['latch', 'clock', 'led'].includes(id) ? 'General Components' : 'Gates', color: Colors[id], icon: iconUrl(id), variants: id === 'trace' ? ToolIds.slice(1, 7) : id === 'bus' ? ToolIds.slice(7, 13) : undefined }));
-export function inkColor(id: string) { const suffix = id.slice(paletteId(id).length); return VariantColors[suffix] ?? Colors[id] ?? '#a0a0a0'; }
+export function iconUrl(id: string, on = true) { if (id.startsWith('trace') || id.startsWith('bus')) id = paletteId(id); const name = id === 'latch' ? (on ? 'LatchOn' : 'LatchOff') : id[0].toUpperCase() + id.slice(1); return Icons[`../Assets/Inks/${name}.svg`]; }
+export const Inks: Ink[] = ['cross', 'bus', 'read', 'write', 'trace', 'buffer', 'and', 'or', 'xor', 'not', 'nand', 'nor', 'xnor', 'latch', 'clock', 'led'].map(id => ({ id, title: id[0].toUpperCase() + id.slice(1), category: ['cross', 'bus'].includes(id) ? 'Space Optimization' : ['read', 'write', 'trace'].includes(id) ? 'Trace' : ['latch', 'clock', 'led'].includes(id) ? 'General Components' : 'Gates', color: Colors[id], icon: iconUrl(id), variants: id === 'trace' ? TraceToolIds : undefined }));
+export function inkColor(id: string) { if (paletteId(id) === 'bus') return Colors.bus; const suffix = id.slice(paletteId(id).length); return VariantColors[suffix] ?? Colors[id] ?? '#a0a0a0'; }
 export const cellKey = (point: Point) => `${point.x},${point.y}`;
 export const parseKey = (key: string): Point => { const [x, y] = key.split(',').map(Number); return { x, y }; };
 export const contains = (grid: Grid, point: Point) => point.x >= grid.originX && point.y >= grid.originY && point.x < grid.originX + grid.width && point.y < grid.originY + grid.height;
@@ -99,6 +102,8 @@ export function validateBoard(value: unknown): Board {
         return normalized;
     });
     validateComponents(result.tiles, 'ProjectBoardInvalid');
+    result.selectedTool = canonicalToolId(result.selectedTool);
+    result.tiles = result.tiles.map(tile => ({ ...tile, toolId: canonicalToolId(tile.toolId) }));
     return result;
 }
 export function validateProject(value: unknown): ProjectDocument {
@@ -123,7 +128,7 @@ export function validateProject(value: unknown): ProjectDocument {
             return { x: tile.x, y: tile.y, toolId: tile.toolId, componentId: tile.componentId, isOn: tile.isOn, ...(tile.toolId === 'clock' ? { clockHoldTicks: tile.clockHoldTicks } : {}) };
         });
         validateComponents(tiles, 'ProjectBlueprintInvalid');
-        return { id: blueprint.id, name: blueprint.name.trim(), width: blueprint.width, height: blueprint.height, tiles };
+        return { id: blueprint.id, name: blueprint.name.trim(), width: blueprint.width, height: blueprint.height, tiles: tiles.map(tile => ({ ...tile, toolId: canonicalToolId(tile.toolId) })) };
     });
     return { board, blueprints };
 }

@@ -15,7 +15,7 @@ fn yes() -> bool {
 fn defaultTool() -> String {
     "or".into()
 }
-pub const ToolIds: [&str; 27] = [
+pub const ToolIds: [&str; 29] = [
     "empty",
     "trace",
     "traceRed",
@@ -43,6 +43,8 @@ pub const ToolIds: [&str; 27] = [
     "latch",
     "clock",
     "led",
+    "traceOrange",
+    "traceWhite",
 ];
 pub fn toolKind(id: &str) -> Option<i32> {
     ToolIds.iter().position(|&tool| tool == id).map(|index| {
@@ -132,6 +134,25 @@ pub struct ProjectDocument {
     pub Blueprints: Vec<Blueprint>,
 }
 impl ProjectDocument {
+    fn normalizeTools(&mut self) {
+        fn normalize(id: &mut String) {
+            if matches!(
+                id.as_str(),
+                "busRed" | "busGreen" | "busYellow" | "busCyan" | "busMagenta"
+            ) {
+                *id = "bus".into();
+            }
+        }
+        normalize(&mut self.Board.SelectedTool);
+        for tile in &mut self.Board.Tiles {
+            normalize(&mut tile.ToolId);
+        }
+        for blueprint in &mut self.Blueprints {
+            for tile in &mut blueprint.Tiles {
+                normalize(&mut tile.ToolId);
+            }
+        }
+    }
     pub fn validate(&self) -> Result<(), String> {
         self.Board.validate()?;
         let mut ids = std::collections::HashSet::new();
@@ -336,11 +357,12 @@ pub fn load(path: &Path) -> Result<ProjectDocument, String> {
         }
         None => vec![],
     };
-    let project = ProjectDocument {
+    let mut project = ProjectDocument {
         Board: board,
         Blueprints: blueprints,
     };
     project.validate()?;
+    project.normalizeTools();
     Ok(project)
 }
 pub fn save(path: &Path, project: &ProjectDocument) -> Result<PathBuf, String> {
@@ -369,6 +391,7 @@ pub fn save(path: &Path, project: &ProjectDocument) -> Result<PathBuf, String> {
         )
         .map_err(|_| "ProjectSaveWriteFailed")?;
         let mut canonical = project.clone();
+        canonical.normalizeTools();
         canonical.Board.Tiles.sort_by_key(|t| (t.Y, t.X));
         for blueprint in &mut canonical.Blueprints {
             blueprint.Tiles.sort_by_key(|t| (t.Y, t.X));

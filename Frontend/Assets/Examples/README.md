@@ -14,9 +14,9 @@ Pause to inspect a glyph or advance using **Next tick**. **Reset simulation** re
 
 ## Circuit
 
-Each display pixel is one independent LED component made of a 4×4 cell square. Pixel top-left coordinates are `(-22 + 10 × column, -37 + 10 × row)` for columns 0–4 and rows 0–7. The spacing leaves room for the five nested leads below each row.
+Each display pixel is one independent LED component made of a 4×4 cell square. Pixel top-left coordinates are `(-22 + 10 × column, -37 + 10 × row)` for columns 0–4 and rows 0–7. One vertical Bus beside each display column carries its eight rows, with short colored Trace taps to the Write ports.
 
-The circuit below the large routing matrix, from left to right, contains:
+The control circuit is folded into three banks to the left of the display. It contains:
 
 - A ring of one Not and 103 Buffer gates. The inversion travels one stage per tick.
 - Twelve XOR gates and one XNOR gate that decode the ring into thirteen repeating, eight-tick character slots. Both complementary half-cycles produce the same text sequence.
@@ -24,7 +24,11 @@ The circuit below the large routing matrix, from left to right, contains:
 - An initially enabled Latch and two Buffer stages that mask startup propagation.
 - Forty AND gates combining the ROM outputs with startup enable, followed by the forty display LEDs. Every output has the same propagation depth.
 
-Each matrix column belongs to a particular gate input or output. A trace junction connects its matching signal row; Cross cells carry every other intersection without joining its horizontal and vertical channels. Adjacent independent trace segments retain distinct component IDs. Press **F** to inspect the full circuit overview; zoom back into the rightmost display to read the text.
+The 160 internal signals use twenty eight-channel Buses. Five additional Buses carry the forty pixel outputs, one Bus per display column. The Trace colors yellow, red, green, blue, cyan, magenta, orange, and white select a channel; in the display Buses they select rows zero through seven. Each channel has one Read source and any number of Write receivers.
+
+Twenty-five Bus lanes fold between the three banks in alternating directions. Each gate port has a short vertical Trace, tapping its assigned Bus and using Cross at other lanes. Cross keeps horizontal and vertical channels independent and supports Bus-to-Trace connections. Adjacent independent Trace or Bus components retain distinct IDs.
+
+The generated board is **538×188 cells**, with **50,310 occupied cells**, compared with the former 1160×251 board and 243,640 occupied cells. Press **F** to inspect the full circuit overview; zoom back into the rightmost display to read the text.
 
 ## Regenerate and validate
 
