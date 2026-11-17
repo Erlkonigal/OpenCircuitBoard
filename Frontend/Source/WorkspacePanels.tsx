@@ -8,16 +8,18 @@ import { useEditor } from './EditorStore';
 import { iconUrl, isDirectional, TraceToolIds, Inks, inkColor, paletteId, SelectableToolIds, type Grid, type Point, type Tile } from './Model';
 import { inspectCell, type Frame } from './Native';
 import { InkThumbnail } from './InkThumbnail';
-export function ToolGlyph({ id, size = 18 }: {
+export function ToolGlyph({ id, size = 18, direction = 0 }: {
     id: string;
     size?: number;
+    direction?: number;
 }) {
-    return <span className="tool-glyph" aria-hidden style={{ width: size, height: size, backgroundColor: inkColor(id), maskImage: `url("${iconUrl(id)}")` }}/>;
+    return <span className="tool-glyph" aria-hidden style={{ width: size, height: size, backgroundColor: inkColor(id), maskImage: `url("${iconUrl(id)}")`, transform: `rotate(${direction * 90}deg)` }}/>;
 }
 export const ComponentLibrary = memo(function ComponentLibrary() {
     const editTool = useEditor(state => state.EditTool);
     const selected = useEditor(state => state.Board.selectedTool);
     const simulating = useEditor(state => state.Simulating);
+    const direction = useEditor(state => state.DrawSettings.direction ?? 0);
     const [query, setQuery] = useState('');
     const categories = ['Space Optimization', 'Trace', 'Gates', 'General Components'];
     const names: Record<string, string> = { 'Space Optimization': 'Routing', Trace: 'Connections', Gates: 'Logic gates', 'General Components': 'Sources & output' };
@@ -38,7 +40,7 @@ export const ComponentLibrary = memo(function ComponentLibrary() {
                 return null;
             return <section className="component-group" key={category}><h3>{names[category]}</h3><div className="component-grid">{inks.map(ink => {
                     const active = editTool === 'draw' && paletteId(selected) === ink.id;
-                    return <Tooltip key={ink.id} label={ink.title} position="right" openDelay={600}><button type="button" className={`component-button ${active ? 'active' : ''}`} aria-label={ink.title} aria-pressed={active} disabled={simulating} onClick={() => useEditor.getState().selectTool(active ? selected : ink.id)}><ToolGlyph id={active ? selected : ink.id}/><span>{ink.title}</span>{active && <span className="component-active-dot"/>}</button></Tooltip>;
+                    return <Tooltip key={ink.id} label={ink.title} position="right" openDelay={600}><button type="button" className={`component-button ${active ? 'active' : ''}`} aria-label={ink.title} aria-pressed={active} disabled={simulating} onClick={() => useEditor.getState().selectTool(active ? selected : ink.id)}><ToolGlyph id={active ? selected : ink.id} direction={active && isDirectional(ink.id) ? direction : 0}/><span>{ink.title}</span>{active && <span className="component-active-dot"/>}</button></Tooltip>;
                 })}</div></section>;
         })}
         {!matching.length && !matchingTools.length && <div className="panel-empty"><Search size={22}/><p>No matching components</p><small>Try a name such as clock or trace.</small></div>}
@@ -93,14 +95,14 @@ export function ToolSettings({id,selection=false}:{id:string;selection?:boolean}
     const settingValue = (tile: Partial<Tile> | undefined, field: keyof Tile) => tile?.[field] ?? (field === 'fixedDrive' ? undefined : field === 'defaultValue' ? false : 0);
     const mixed = (field: keyof Tile) => samples.some(tile => settingValue(tile, field) !== settingValue(samples[0], field));
     return <div className="field-stack">
-      {isDirectional(id)&&<><label>Direction</label><SegmentedControl aria-label="Direction" size="xs" disabled={state.Simulating} value={mixed('direction')?'mixed':String(first?.direction??0)} data={[{label:'Right',value:'0'},{label:'Down',value:'1'},{label:'Left',value:'2'},{label:'Up',value:'3'}]} onChange={value=>configure({direction:Number(value)})}/><small>R rotates clockwise; Shift+R rotates back. Inputs and control rotate with the symbol.</small></>}
+      {isDirectional(id)&&<><label>Direction</label><SegmentedControl aria-label="Direction" size="xs" disabled={state.Simulating} value={mixed('direction')?'mixed':String(first?.direction??0)} data={[{label:'Right',value:'0'},{label:'Down',value:'1'},{label:'Left',value:'2'},{label:'Up',value:'3'}]} onChange={value=>configure({direction:Number(value)})}/><small>R rotates clockwise; Shift+R rotates back. The icon shows the connection direction.</small></>}
       {family==='clock'&&<NumberInput label="Clock hold" description={mixed('clockHoldTicks')?'Mixed values across selected components':'Ticks before switching state'} placeholder="Mixed" aria-label="Clock hold" min={1} max={2147483647} allowDecimal={false} size="xs" value={mixed('clockHoldTicks')?'':samples[0]?.clockHoldTicks??state.Board.clockHoldTicks} disabled={state.Simulating} onChange={value=>{if(typeof value==='number')configure({clockHoldTicks:value});}}/>}
       {family==='latch'&&<><label>Initial state</label><SegmentedControl fullWidth size="xs" disabled={state.Simulating} value={mixed('isOn')?'mixed':(samples[0]?.isOn??state.Board.latchInitialState)?'on':'off'} data={[{label:'On',value:'on'},{label:'Off',value:'off'}]} onChange={value=>configure({isOn:value==='on'})}/></>}
       {family==='trace'&&<><label>Signal color</label><div className="color-options">{TraceToolIds.map(variant=><Tooltip key={variant} label={variant.replace(/^trace/,'')||'Yellow'}><button type="button" className={'color-option '+(!mixed('toolId')&&(samples[0]?.toolId??state.Board.selectedTool)===variant?'active':'')} style={{'--signal-color':inkColor(variant)} as React.CSSProperties} aria-label={variant} aria-pressed={!mixed('toolId')&&(samples[0]?.toolId??state.Board.selectedTool)===variant} disabled={state.Simulating} onClick={()=>configure({toolId:variant})}/></Tooltip>)}</div>
         <label>Fixed drive</label><SegmentedControl aria-label="Fixed drive" size="xs" disabled={state.Simulating} value={mixed('fixedDrive')?'mixed':first?.fixedDrive===undefined?'none':first.fixedDrive?'1':'0'} data={[{label:'None',value:'none'},{label:'0',value:'0'},{label:'1',value:'1'}]} onChange={value=>configure({fixedDrive:value==='none'?undefined:value==='1'})}/>
         <label>Undriven default</label><SegmentedControl aria-label="Undriven default" size="xs" disabled={state.Simulating} value={mixed('defaultValue')?'mixed':first?.defaultValue?'1':'0'} data={['0','1']} onChange={value=>configure({defaultValue:value==='1'})}/><small>Defaults apply only when no connected source exists. A fixed 0 is a source. Multiple sources combine with OR.</small></>}
       {family==='cross'&&<><label>Join horizontal and vertical</label><div className="color-options">{TraceToolIds.map((variant,c)=><Tooltip key={variant} label={variant.replace(/^trace/,'')||'Yellow'}><button type="button" className={'color-option '+((first?.crossMask??0)&(1<<c)?'active':'')} style={{'--signal-color':inkColor(variant)} as React.CSSProperties} aria-label={'Join '+variant} aria-pressed={!!((first?.crossMask??0)&(1<<c))} disabled={state.Simulating} onClick={()=>configure({crossMask:(first?.crossMask??0)^(1<<c)})}/></Tooltip>)}</div><small>Selected colors join both axes. Other colors cross independently.</small></>}
-      <p className="property-description">{({bus:'Eight independent colors. Multiple sources combine with OR. Attach colored Trace to connect components.',switch:'The two data terminals carry signals in either direction. The control connects or disconnects them one tick later.',buffer:'The input is opposite the output. One tick delay.',not:'Inverts the input opposite the output. One tick delay.',led:'Displays the input opposite its facing direction one tick later.',clock:'The output faces the selected direction. Toggles each configured hold interval.',latch:'Rising input edges toggle its state one tick later. The output faces the selected direction.'} as Record<string,string>)[family]??(isDirectional(id)?'Output faces the selected direction. Other input sides accept independent traces. One tick delay.':'') }</p>
+      <p className="property-description">{({bus:'Eight independent colors. Multiple sources combine with OR. Attach colored Trace to connect components.',switch:'The two data terminals carry signals in either direction. The control connects or disconnects them one tick later.',buffer:'The input is opposite the output. One tick delay.',not:'Inverts the input opposite the output. One tick delay.',led:'Displays the input opposite its facing direction one tick later.',clock:'The output faces the selected direction. Toggles each configured hold interval.',latch:'Output only, facing the selected direction. Click during simulation to toggle its stored state.'} as Record<string,string>)[family]??(isDirectional(id)?'Output faces the selected direction. Other input sides accept independent traces. One tick delay.':'') }</p>
     </div>;
 }
 function NetworkValues({frame}:{frame:Frame|null}) {
@@ -132,7 +134,7 @@ function BoardProperties() {
         setDraft(previous => ({ ...previous, [field]: value })); }}/>)}</div>{changed && <Button mt="sm" size="xs" fullWidth variant="light" disabled={simulating} onClick={apply}>Apply canvas size</Button>}{error && <p className="field-error">{error}</p>}</section>;
 }
 export function Inspector({frame,onSaveBlueprint}:{onSaveBlueprint:()=>void;frame:Frame|null}) {
-    const state=useEditor(useShallow(s=>({Board:s.Board,Components:s.Components,EditTool:s.EditTool,MergeIds:s.MergeIds,MergeError:s.MergeError,SplitNotice:s.SplitNotice,Selection:s.Selection,Tiles:s.Tiles,Simulating:s.Simulating})));
+    const state=useEditor(useShallow(s=>({Board:s.Board,DrawSettings:s.DrawSettings,Components:s.Components,EditTool:s.EditTool,MergeIds:s.MergeIds,MergeError:s.MergeError,SplitNotice:s.SplitNotice,Selection:s.Selection,Tiles:s.Tiles,Simulating:s.Simulating})));
     const samples=useMemo(()=>selectionSamples(state),[state.Selection,state.Tiles]);
     const componentSelection=!!state.Selection;
     const homogeneous=samples.length>0&&samples.every(tile=>paletteId(tile.toolId)===paletteId(samples[0].toolId));
@@ -148,7 +150,7 @@ export function Inspector({frame,onSaveBlueprint}:{onSaveBlueprint:()=>void;fram
             {state.MergeError&&<p className="field-error" role="alert">{state.MergeError}</p>}
             <p className="property-description">{state.EditTool==='split'?'Right-click or Q returns to Pointer. Completed cuts are kept.':'Right-click or Q cancels and returns to Pointer.'}</p>
           </>:componentSelection||state.EditTool==='draw'?<>
-            <div className="active-component"><div className="active-component-symbol"><ToolGlyph id={id} size={23}/></div><div><strong>{componentSelection&&!homogeneous?'Mixed components':title}</strong><small>{componentSelection?`${samples.length} whole components`:'Settings for new strokes'}</small></div></div>
+            <div className="active-component"><div className="active-component-symbol"><ToolGlyph id={id} size={23} direction={isDirectional(id) ? componentSelection ? samples[0]?.direction ?? 0 : state.DrawSettings.direction ?? 0 : 0}/></div><div><strong>{componentSelection&&!homogeneous?'Mixed components':title}</strong><small>{componentSelection?`${samples.length} whole components`:'Settings for new strokes'}</small></div></div>
             {!componentSelection||homogeneous?<ToolSettings key={`${id}:${componentSelection}`} id={id} selection={componentSelection}/>:<p className="property-description">Select components of the same type to edit common properties.</p>}
           </>:<p className="property-description">Click a component to view its properties. Drag on blank space or an unselected component to select; drag selected components to move. Shift-click toggles components; Shift-drag adds them.</p>}
           {state.Selection&&!pending&&<Group mt="md" gap={6}><Button size="xs" variant="default" leftSection={<Copy size={12}/>} disabled={state.Simulating} onClick={()=>useEditor.getState().copy()}>Copy</Button><Button size="xs" variant="subtle" disabled={state.Simulating} onClick={onSaveBlueprint}>Save blueprint</Button><ActionIcon ml="auto" size="sm" variant="subtle" color="gray" aria-label="Clear selection" onClick={()=>useEditor.getState().selectComponents([])}><X size={13}/></ActionIcon></Group>}

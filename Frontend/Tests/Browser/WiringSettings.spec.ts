@@ -12,7 +12,7 @@ async function settle(page: Page) {
     await page.evaluate(() => new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
 }
 
-test('direction pins rotate with Switch and survive history, clipboard and both display modes', async ({ page }) => {
+test('Switch icons rotate without pin dots and survive history, clipboard and both display modes', async ({ page }) => {
     const center = await ready(page);
     await page.getByRole('button', { name: 'Switch', exact: true }).click();
     await page.mouse.click(center.x + 12, center.y + 12);
@@ -21,23 +21,21 @@ test('direction pins rotate with Switch and survive history, clipboard and both 
     const direction = page.locator('[aria-label="Direction"]');
     await expect(direction.locator('input[value="0"]')).toBeChecked();
     await settle(page);
-    const pins = () => page.locator('canvas[aria-label="Circuit board"]').evaluate(element => {
+    const icon = () => page.locator('canvas[aria-label="Circuit board"]').evaluate(element => {
         const canvas = element as HTMLCanvasElement, gl = canvas.getContext('webgl2')!;
         const scale = canvas.width / canvas.getBoundingClientRect().width;
-        return [[16, 1], [31, 16], [16, 31]].map(([x, y]) => {
-            const pixel = new Uint8Array(4);
-            gl.readPixels(Math.floor(canvas.width / 2 + x * scale), canvas.height - 1 - Math.floor(canvas.height / 2 + y * scale), 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, pixel);
-            return [...pixel];
-        });
+        const size = Math.round(24 * scale), pixels = new Uint8Array(size * size * 4);
+        gl.readPixels(Math.floor(canvas.width / 2 + 4 * scale), canvas.height - Math.floor(canvas.height / 2 + 28 * scale), size, size, gl.RGBA, gl.UNSIGNED_BYTE, pixels);
+        return [...pixels];
     });
-    const before = await pins();
+    const before = await icon();
     await page.getByTestId('board').focus(); await page.keyboard.press('r');
     await expect(direction.locator('input[value="1"]')).toBeChecked();
-    await settle(page); expect(await pins()).not.toEqual(before);
+    await settle(page); expect(await icon()).not.toEqual(before);
     await page.screenshot({ path: buildPath('SwitchDirectionCapture.png') });
     await page.getByTestId('board').focus(); await page.keyboard.press('Control+z');
     await expect(direction.locator('input[value="0"]')).toBeChecked();
-    await settle(page); expect(await pins()).toEqual(before);
+    await settle(page); expect(await icon()).toEqual(before);
     await page.getByTestId('board').focus(); await page.keyboard.press('Control+Shift+z');
     await page.keyboard.press('Control+c');
     await expect(page.locator('.clipboard-thumbnail')).toHaveAttribute('data-ready', 'true');
@@ -83,7 +81,7 @@ test('Trace sources and undriven defaults stay separate from Clock settings and 
     await settle(page); await page.screenshot({ path: buildPath('CrossJoinSettingsCapture.png') });
 });
 
-test('joined devices show free contacts only on their perimeter and hide connected contacts until undo', async ({ page }) => {
+test('joined devices use icons without input/output dots in either display mode', async ({ page }) => {
     const center = await ready(page);
     await page.getByRole('button', { name: 'Switch', exact: true }).click();
     await page.keyboard.down('Shift');
@@ -102,13 +100,38 @@ test('joined devices show free contacts only on their perimeter and hide connect
     });
     for (const mode of ['2D', '2.5D']) {
         await page.getByText(mode, { exact: true }).click(); await settle(page);
-        const free = await pixels(); expect(free[0]).not.toEqual(free[1]);
-        await page.screenshot({ path: buildPath(mode === '2D' ? 'ComponentFreePinsFlatCapture.png' : 'ComponentFreePinsDepthCapture.png') });
+        const free = await pixels(); expect(free[0]).toEqual(free[1]);
+        await page.screenshot({ path: buildPath(mode === '2D' ? 'ComponentIconsFlatCapture.png' : 'ComponentIconsDepthCapture.png') });
         await page.getByRole('button', { name: 'Trace', exact: true }).click();
         await page.mouse.click(center.x - 20, center.y + 44); await settle(page);
         const connected = await pixels(); expect(connected[0]).toEqual(connected[1]);
-        await page.screenshot({ path: buildPath(mode === '2D' ? 'ComponentConnectedPinsFlatCapture.png' : 'ComponentConnectedPinsDepthCapture.png') });
+        await page.screenshot({ path: buildPath(mode === '2D' ? 'ComponentIconsConnectedFlatCapture.png' : 'ComponentIconsConnectedDepthCapture.png') });
         await page.getByTestId('board').focus(); await page.keyboard.press('Control+z'); await settle(page);
         expect(await pixels()).toEqual(free);
     }
+});
+
+test('Latch rotates its output icon in the board and inspector while retaining the off initial state', async ({ page }) => {
+    const center = await ready(page);
+    await page.getByRole('button', { name: 'Latch', exact: true }).click();
+    await page.getByText('Off', { exact: true }).click();
+    await page.mouse.click(center.x + 12, center.y + 12);
+    await page.keyboard.press('v'); await page.mouse.click(center.x + 12, center.y + 12);
+    await expect(page.getByTestId('right-dock')).toContainText('Output only');
+    const icon = () => page.locator('canvas[aria-label="Circuit board"]').evaluate(element => {
+        const canvas = element as HTMLCanvasElement, gl = canvas.getContext('webgl2')!;
+        const scale = canvas.width / canvas.getBoundingClientRect().width;
+        return [[30, 16], [16, 30]].map(([x, y]) => {
+            const pixel = new Uint8Array(4);
+            gl.readPixels(Math.floor(canvas.width / 2 + x * scale), canvas.height - 1 - Math.floor(canvas.height / 2 + y * scale), 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, pixel);
+            return [...pixel];
+        });
+    });
+    await settle(page); const before = await icon();
+    await page.getByTestId('board').focus(); await page.keyboard.press('r'); await settle(page);
+    expect(await icon()).not.toEqual(before);
+    await expect(page.locator('.active-component-symbol .tool-glyph')).toHaveAttribute('style', /rotate\(90deg\)/);
+    await page.screenshot({ path: buildPath('LatchIconDirectionCapture.png') });
+    await page.getByTestId('board').focus(); await page.keyboard.press('Control+z'); await settle(page);
+    expect(await icon()).toEqual(before);
 });

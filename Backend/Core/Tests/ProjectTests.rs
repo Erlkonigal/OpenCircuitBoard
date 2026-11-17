@@ -395,31 +395,57 @@ fn compileCropsSparseBoardsAndRejectsOversizedOccupiedBounds() {
 }
 
 #[test]
-fn clockRisingEdgesAndPendingLatchUpdatesSurviveSnapshots() {
-    let mut clock = tile(-2, 0, "clock", 1);
-    clock.ClockHoldTicks = Some(2);
-    let b = board(vec![
-        clock,
-        tile(-1, 0, "trace", 2),
-        tile(0, 0, "latch", 3),
-        tile(1, 0, "traceRed", 4),
-    ]);
-    let (mut core, origin) = compile(&b);
-    core.advanceSilent(2);
-    assert_eq!(state(&mut core, origin, 1, 0), 0);
-    let pending = core.capture();
-    core.advanceSilent(1);
-    assert_eq!(state(&mut core, origin, 1, 0), 1);
-    core.advanceSilent(3);
-    assert_eq!(state(&mut core, origin, 1, 0), 1);
-    core.advanceSilent(1);
-    assert_eq!(state(&mut core, origin, 1, 0), 0);
-    core.restore(&pending).unwrap();
-    core.advanceSilent(1);
-    assert_eq!(state(&mut core, origin, 1, 0), 1);
-    let (mut other, _) = compile(&board(vec![tile(0, 0, "trace", 1)]));
-    assert_eq!(
-        other.restore(&pending).unwrap_err(),
-        "snapshot_topology_mismatch"
-    );
+fn latchOnlyDrivesItsRotatedOutputAndRetainsManualState() {
+    let neighbors = [(1, 0), (0, 1), (-1, 0), (0, -1)];
+    let colors = ["trace", "traceRed", "traceGreen", "traceBlue"];
+    for direction in 0..4 {
+        for initial in [false, true] {
+            let mut latch = tile(0, 0, "latch", 1);
+            latch.Direction = direction as i32;
+            latch.IsOn = initial;
+            let mut tiles = vec![latch];
+            for (side, &(dx, dy)) in neighbors.iter().enumerate() {
+                tiles.push(tile(dx, dy, colors[side], 10 + side as i32));
+                if side != direction {
+                    let mut clock = tile(dx * 2, dy * 2, "clock", 20 + side as i32);
+                    clock.Direction = ((side + 2) % 4) as i32;
+                    clock.ClockHoldTicks = Some(1 + side as i32);
+                    tiles.push(clock);
+                }
+            }
+            let (mut core, origin) = compile(&board(tiles));
+            let output = neighbors[direction];
+            for _ in 0..12 {
+                core.advanceSilent(1);
+                assert_eq!(state(&mut core, origin, 0, 0), initial as u8);
+                assert_eq!(state(&mut core, origin, output.0, output.1), initial as u8);
+            }
+            let latchCell = (-origin.1) as usize * core.Width + (-origin.0) as usize;
+            core.toggleLatch(latchCell).unwrap();
+            assert_eq!(
+                state(&mut core, origin, output.0, output.1),
+                (!initial) as u8
+            );
+            let snapshot = core.capture();
+            core.advanceSilent(7);
+            assert_eq!(
+                state(&mut core, origin, output.0, output.1),
+                (!initial) as u8
+            );
+            core.toggleLatch(latchCell).unwrap();
+            core.restore(&snapshot).unwrap();
+            core.advanceSilent(5);
+            assert_eq!(
+                state(&mut core, origin, output.0, output.1),
+                (!initial) as u8
+            );
+            core.resetSilent();
+            assert_eq!(state(&mut core, origin, output.0, output.1), initial as u8);
+            let (mut other, _) = compile(&board(vec![tile(0, 0, "trace", 1)]));
+            assert_eq!(
+                other.restore(&snapshot).unwrap_err(),
+                "snapshot_topology_mismatch"
+            );
+        }
+    }
 }

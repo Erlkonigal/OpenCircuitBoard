@@ -99,7 +99,6 @@ struct Device {
     Hold: i32,
     Output: usize,
     Inputs: Vec<usize>,
-    LastInputs: Vec<u8>,
     Terminals: [usize; 3],
 }
 #[derive(Default)]
@@ -364,7 +363,7 @@ impl SimulationCore {
                     } else if local == 0 && kind != 27 {
                         conductors.unite(devices[id].Output, trace);
                     } else if local != 0
-                        && kind != 26
+                        && !matches!(kind, 25 | 26)
                         && (!matches!(kind, 17 | 21 | 27) || local == 2)
                     {
                         pins[id].insert((side, input.ComponentIds[n]), trace);
@@ -388,7 +387,6 @@ impl SimulationCore {
             } else {
                 pins[id].values().map(|&a| mapping[a]).collect()
             };
-            device.LastInputs = vec![0; device.Inputs.len()];
             for &net in &device.Inputs {
                 unique(&mut networks[net].Watchers, id);
             }
@@ -509,7 +507,7 @@ impl SimulationCore {
         }
         self.Next[id] = Some(value);
     }
-    fn evaluate(&mut self, id: usize, suppressLatch: bool) {
+    fn evaluate(&mut self, id: usize) {
         let d = &self.Devices[id];
         let high = d
             .Inputs
@@ -525,32 +523,13 @@ impl SimulationCore {
             21 | 23 => (!any) as u8,
             22 => (!all) as u8,
             24 => (high % 2 == 0) as u8,
-            25 => {
-                let rising = d
-                    .Inputs
-                    .iter()
-                    .zip(&d.LastInputs)
-                    .filter(|(n, old)| self.Networks[**n].Value != 0 && **old == 0)
-                    .count();
-                if !suppressLatch && rising % 2 == 1 {
-                    1 - self.Next[id].unwrap_or(self.States[id])
-                } else {
-                    self.Next[id].unwrap_or(self.States[id])
-                }
-            }
             _ => self.States[id],
         };
-        let values: Vec<_> = self.Devices[id]
-            .Inputs
-            .iter()
-            .map(|&n| self.Networks[n].Value)
-            .collect();
-        self.Devices[id].LastInputs = values;
         if next != self.States[id] || self.Next[id].is_some() {
             self.schedule(id, next);
         }
     }
-    fn resolve(&mut self, suppressLatch: bool) {
+    fn resolve(&mut self) {
         let dirty: Vec<_> = self.DirtyDomains.drain().collect();
         let mut watchers = HashSet::new();
         for id in dirty {
@@ -598,7 +577,7 @@ impl SimulationCore {
             }
         }
         for id in watchers {
-            self.evaluate(id, suppressLatch);
+            self.evaluate(id);
         }
     }
     pub fn advanceSilent(&mut self, ticks: i32) {
@@ -620,7 +599,7 @@ impl SimulationCore {
                     self.markOutput(id, 1 - self.States[id]);
                 }
             }
-            self.resolve(false);
+            self.resolve();
             self.Tick = self.Tick.wrapping_add(1);
         }
     }
@@ -633,11 +612,8 @@ impl SimulationCore {
         if id == usize::MAX || self.Devices[id].Kind != 25 {
             return Err("not_latch".into());
         }
-        if let Some(value) = self.Next[id] {
-            self.Next[id] = Some(1 - value);
-        }
         self.markOutput(id, 1 - self.States[id]);
-        self.resolve(false);
+        self.resolve();
         Ok(())
     }
     pub fn resetSilent(&mut self) {
@@ -656,9 +632,9 @@ impl SimulationCore {
             }
         }
         self.DirtyDomains.extend(0..self.Domains.len());
-        self.resolve(true);
+        self.resolve();
         for id in 0..self.Devices.len() {
-            self.evaluate(id, true);
+            self.evaluate(id);
         }
         self.DirtyCells.extend(0..self.Visible.len());
         self.materialize();
@@ -719,7 +695,6 @@ impl SimulationCore {
             States: self.States.clone(),
             Phases: self.Phases.clone(),
             Next: self.Next.clone(),
-            Inputs: self.Devices.iter().map(|d| d.LastInputs.clone()).collect(),
         }
     }
     pub fn restore(&mut self, snapshot: &Snapshot) -> Result<(), String> {
@@ -742,12 +717,9 @@ impl SimulationCore {
         // Reconstruct networks without changing the captured pending device updates.
         let next = self.Next.clone();
         let scheduled = self.Scheduled.clone();
-        self.resolve(true);
+        self.resolve();
         self.Next = next;
         self.Scheduled = scheduled;
-        for (d, values) in self.Devices.iter_mut().zip(&snapshot.Inputs) {
-            d.LastInputs.clone_from(values);
-        }
         self.DirtyCells.extend(0..self.Visible.len());
         self.materialize();
         self.Reported.copy_from_slice(&self.Visible);
@@ -761,7 +733,6 @@ pub struct Snapshot {
     States: Vec<u8>,
     Phases: Vec<i32>,
     Next: Vec<Option<u8>>,
-    Inputs: Vec<Vec<u8>>,
 }
 impl Snapshot {
     pub fn byteCount(&self) -> usize {
@@ -769,7 +740,5 @@ impl Snapshot {
             + self.States.len()
             + self.Phases.len() * std::mem::size_of::<i32>()
             + self.Next.len() * std::mem::size_of::<Option<u8>>()
-            + self.Inputs.len() * std::mem::size_of::<Vec<u8>>()
-            + self.Inputs.iter().map(Vec::len).sum::<usize>()
     }
 }

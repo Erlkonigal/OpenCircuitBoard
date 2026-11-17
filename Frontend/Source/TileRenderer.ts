@@ -1,7 +1,6 @@
 import { AlphaFilter, Assets, BlurFilter, Container, FillGradient, Graphics, GraphicsContext, Matrix, Rectangle, RenderTexture, Sprite, type Renderer, type Texture } from 'pixi.js';
-import { cellKey, parseKey, hasGlyph, iconUrl, inkColor, type Tile, type RenderMode, type Grid } from './Model';
+import { cellKey, hasGlyph, iconUrl, inkColor, type Tile, type RenderMode, type Grid } from './Model';
 import { CellStore } from './CellStore';
-import { availablePins } from './ComponentPins';
 import { ColorCache } from './ColorCache';
 import { HighlightTint, HighlightStrength } from './HighlightStyle';
 import { colorKey, colorLevel, detailLevel } from './ColorPyramid';
@@ -137,7 +136,6 @@ class TileGroup {
     readonly Layer = new Container();
     private readonly Sides = new Container();
     private readonly Tops = new Container();
-    private readonly Pins = new Graphics();
     private readonly Visible = new Map<string, TileItem>();
     private readonly Shadow: TileShadow;
     private readonly Opacity?: AlphaFilter;
@@ -158,25 +156,19 @@ class TileGroup {
         this.Shadow = new TileShadow(Renderer);
         this.BatchedShadow = new TileShadow(Renderer);
         this.Colors = new ColorCache(redraw);
-        this.Layer.addChild(this.Shadow.Layer, this.BatchedShadow.Layer, this.RasterSides, this.Sides, this.Raster, this.Tops, this.Pins);
+        this.Layer.addChild(this.Shadow.Layer, this.BatchedShadow.Layer, this.RasterSides, this.Sides, this.Raster, this.Tops);
         if (alpha !== 1) {
             this.Opacity = new AlphaFilter({ alpha });
             this.Layer.filters = [this.Opacity];
         }
     }
-    private update(tiles: readonly Tile[], occupied: { has(key: string): boolean }, materialFor: (tile: Tile) => Material, tint: number, view: TileView, geometry: unknown, transient: unknown, mode: RenderMode, pinOccupied: { has(key: string): boolean }) {
+    private update(tiles: readonly Tile[], occupied: { has(key: string): boolean }, materialFor: (tile: Tile) => Material, tint: number, view: TileView, geometry: unknown, transient: unknown, mode: RenderMode) {
         this.Layer.visible = tiles.length > 0;
         if (this.Opacity) {
             // Pixi transforms this local rectangle into the render target's coordinates.
             this.Layer.filterArea = new Rectangle(view.x - view.width / (2 * view.zoom), view.y - view.height / (2 * view.zoom), view.width / view.zoom, view.height / view.zoom);
         }
         const desired = new Set<string>();
-        this.Pins.clear(); this.Pins.tint = tint;
-        const positions = [[CellSize - 3, CellSize / 2], [CellSize / 2, CellSize - 3], [3, CellSize / 2], [CellSize / 2, 3]];
-        for (const tile of tiles) for (const pin of availablePins(tile, pinOccupied)) {
-            const [x, y] = positions[pin.Side];
-            this.Pins.circle(tile.x * CellSize + x, tile.y * CellSize + y, 3).fill(pin.Kind === 'output' ? 0xe0e9ef : 0x516879);
-        }
         for (const tile of tiles) {
             const key = cellKey(tile), material = materialFor(tile), faces = mode === '2.5d' ? exposedFaces(tile, occupied) : 0;
             desired.add(key);
@@ -206,7 +198,7 @@ class TileGroup {
         else this.Shadow.Layer.visible = false;
     }
     prepareRuntime(runtime: RuntimeGrid | null) { if (this.Source && this.Lod === 'aggregate') this.Colors.prepare(this.Source, runtime); }
-    draw(source: CellStore, materialFor: (tile: Tile) => Material, view: TileView, mode: RenderMode, runtime: RuntimeGrid | null, tint = 0xffffff, highlightStamp = '', pinOccupied: { has(key: string): boolean } = source) {
+    draw(source: CellStore, materialFor: (tile: Tile) => Material, view: TileView, mode: RenderMode, runtime: RuntimeGrid | null, tint = 0xffffff, highlightStamp = '') {
         if (!source.size) { this.clear(); return; }
         this.Source = source; this.Layer.visible = true;
         this.Colors.sync(source, runtime);
@@ -216,15 +208,15 @@ class TileGroup {
             originY: Math.floor((view.y - view.height / (2 * view.zoom) - CellSize - ShadowMargin) / CellSize),
             width: Math.ceil(view.width / view.zoom / CellSize) + 6, height: Math.ceil(view.height / view.zoom / CellSize) + 6 };
         this.Raster.visible = this.RasterSides.visible = this.Lod !== 'detail';
-        this.Tops.visible = this.Sides.visible = this.Pins.visible = this.Lod === 'detail';
+        this.Tops.visible = this.Sides.visible = this.Lod === 'detail';
         this.BatchedShadow.Layer.visible = false;
         if (this.Lod === 'detail') {
             const tiles = [...source.query(bounds)];
-            this.update(tiles, source, materialFor, tint, view, source, null, mode, pinOccupied);
+            this.update(tiles, source, materialFor, tint, view, source, null, mode);
             this.Count = tiles.length;
             return;
         }
-        this.Shadow.Layer.visible = false; this.Pins.clear();
+        this.Shadow.Layer.visible = false;
         // Clear detailed objects when leaving their LOD; don't retain a second complete scene.
         for (const item of this.Visible.values()) { item.Top.destroy(); item.Sides.destroy(); }
         this.Visible.clear();
@@ -282,7 +274,7 @@ class TileGroup {
     }
     clear() {
         if (!this.Source && !this.Layer.visible) return;
-        this.Source = undefined; this.Layer.visible = false; this.Count = 0; this.Colors.clear(); this.Pins.clear();
+        this.Source = undefined; this.Layer.visible = false; this.Count = 0; this.Colors.clear();
         this.Shadow.clear(); this.BatchedShadow.clear(); this.ShadowSource = undefined; this.ShadowCamera = '';
         for (const item of this.Visible.values()) { item.Top.destroy(); item.Sides.destroy(); }
         this.Visible.clear();
@@ -398,24 +390,13 @@ export class TileRenderer {
             const on = scene.simulating && runtime && x >= 0 && x < runtime.width && y >= 0 && y < runtime.height ? !!runtime.states[y * runtime.width + x] : tile.isOn;
             return this.material(tile.toolId, on, highlighted.has(tile.componentId), tile.direction??0, tile.crossMask??0);
         };
-        const preview = scene.preview;
-        const solidPins = preview ? { has: (key: string) => {
-            if (this.SolidSource.has(key)) return true;
-            const point = parseKey(key);
-            return preview.Source.has(cellKey({ x: point.x - preview.Offset.x, y: point.y - preview.Offset.y }));
-        } } : this.SolidSource;
-        this.Solid.draw(this.SolidSource, materialFor, view, scene.mode, scene.simulating ? scene.runtime : null, 0xffffff, highlightStamp, solidPins);
-        if (moving) this.Moving.draw(moving, materialFor, view, scene.mode, null, 0xffffff, highlightStamp, scene.occupied); else this.Moving.clear();
+        this.Solid.draw(this.SolidSource, materialFor, view, scene.mode, scene.simulating ? scene.runtime : null, 0xffffff, highlightStamp);
+        if (moving) this.Moving.draw(moving, materialFor, view, scene.mode, null, 0xffffff, highlightStamp); else this.Moving.clear();
         if (scene.preview) {
             const offset = scene.preview.Offset;
             this.Preview.Layer.position.set(offset.x * CellSize, offset.y * CellSize);
             const previewView = { ...view, x: view.x - offset.x * CellSize, y: view.y - offset.y * CellSize };
-            const previewPins = { has: (key: string) => {
-                if (scene.preview!.Source.has(key)) return true;
-                const point = parseKey(key);
-                return this.SolidSource.has(cellKey({ x: point.x + offset.x, y: point.y + offset.y }));
-            } };
-            this.Preview.draw(scene.preview.Source, tile => this.material(tile.toolId, tile.isOn, false, tile.direction??0, tile.crossMask??0), previewView, scene.mode, null, scene.previewValid ? 0xffffff : 0xff657e, '', previewPins);
+            this.Preview.draw(scene.preview.Source, tile => this.material(tile.toolId, tile.isOn, false, tile.direction??0, tile.crossMask??0), previewView, scene.mode, null, scene.previewValid ? 0xffffff : 0xff657e);
         }
         else this.Preview.clear();
         for (const texture of this.Retired) texture.destroy(true);

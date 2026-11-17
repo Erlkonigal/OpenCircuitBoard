@@ -35,6 +35,25 @@ describe('Boolean Switch memory', () => {
         expect(result.channels).toEqual([1]);
     });
 
+    it('keeps Latch output independent of adjacent clock signals and preserves manual toggles', async () => {
+        const values = await browser.execute(async () => {
+            const invoke = (window as unknown as { __TAURI_INTERNALS__: { invoke: (command: string, args: unknown) => Promise<ArrayBuffer> } }).__TAURI_INTERNALS__.invoke;
+            const count = 4, bytes = new Uint8Array(24 + count * 32), data = new DataView(bytes.buffer);
+            [0x4f434249, 4, 4, 1, 0, 0].forEach((v, i) => data.setInt32(i * 4, v, true));
+            const arrays = Array.from({ length: 8 }, (_, i) => new Int32Array(bytes.buffer, 24 + count * i * 4, count));
+            arrays[0].set([26, 1, 25, 2]); arrays[2].fill(1); arrays[3].set([1, 2, 3, 4]); arrays[5].fill(-1);
+            let frame = await invoke('compileGrid', bytes);
+            const session = new DataView(frame).getUint32(8, true), values = [new Uint8Array(frame, 80)[3]];
+            for (const [action, value] of [['step', 2], ['toggle', 2], ['step', 7], ['reset', 0]] as const) {
+                frame = await invoke('simulationCommand', { action, session, value });
+                values.push(new Uint8Array(frame, 80)[3]);
+            }
+            await invoke('simulationCommand', { action: 'release', session, value: 0 });
+            return values;
+        });
+        expect(values).toEqual([0, 0, 1, 1, 0]);
+    });
+
     it('writes, reads, resets and restores the committed RAM through the shared eight bit lines', async () => {
         const file = path.join(WorkspaceRoot, 'Frontend/Assets/Examples/Ram16x8.ocb');
         const result = await browser.execute(async (file: string) => {
