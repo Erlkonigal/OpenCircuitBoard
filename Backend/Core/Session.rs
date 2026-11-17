@@ -225,7 +225,7 @@ impl Runtime {
             }
             Action::Toggle(id, cell) => {
                 self.check(id)?;
-                self.Core.toggleLatch(cell)?;
+                self.Core.toggleButton(cell)?;
                 if !self.Running {
                     while self.Timeline.back().is_some_and(|s| s.0 >= self.Core.Tick) {
                         self.Bytes -= self.Timeline.pop_back().unwrap().1.byteCount();

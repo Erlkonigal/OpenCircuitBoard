@@ -50,7 +50,7 @@ test('a million-cell rectangle preview stays lightweight and leaves an empty doc
     await page.addInitScript(() => {
         (window as unknown as { __TAURI_INTERNALS__: unknown }).__TAURI_INTERNALS__ = { invoke: async (command: string) => {
             if (command === 'recentProjects') return ['EmptyLarge.ocb']; if (command !== 'openProject') throw Error(command);
-            return { board: { circuitModel: 'booleanSwitch', selectedTool: 'trace', clockHoldTicks: 1, latchInitialState: true, grid: { originX: -1024, originY: -1024, width: 2048, height: 2048 }, tiles: [] }, blueprints: [] };
+            return { board: { circuitModel: 'booleanSwitch', selectedTool: 'trace', clockHoldTicks: 1, buttonInitialState: true, grid: { originX: -1024, originY: -1024, width: 2048, height: 2048 }, tiles: [] }, blueprints: [] };
         } };
     });
     await ready(page); const board = page.getByTestId('board');

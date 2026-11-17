@@ -7,9 +7,9 @@ import { snapshotTiles } from '../../Source/ComponentTopology';
 import { encodeBoard } from '../../Source/Native';
 import { SplitPath } from '../../Source/SplitPath';
 const state=()=>useEditor.getState();
-const tile=(x:number,y:number,id=1,toolId='latch'):Tile=>({x,y,componentId:id,toolId,isOn:false});
+const tile=(x:number,y:number,id=1,toolId='button'):Tile=>({x,y,componentId:id,toolId,isOn:false});
 const id=(x:number,y=0)=>state().Tiles.get(`${x},${y}`)!.componentId;
-function stroke(x:number,y:number,end:number,tool='latch') {state().selectTool(tool);state().paint(lineCells({x,y},{x:end,y}));state().commit();}
+function stroke(x:number,y:number,end:number,tool='button') {state().selectTool(tool);state().paint(lineCells({x,y},{x:end,y}));state().commit();}
 const select=(x:number,y:number,width:number,height=1)=>state().selectRegionComponents({originX:x,originY:y,width,height});
 beforeEach(()=>{useEditor.setState({Simulating:false});state().load(newBoard());});
 describe('Explicit component identity',()=>{
@@ -34,7 +34,7 @@ describe('Explicit component identity',()=>{
         state().load(newBoard());stroke(-3,0,3);const biggest=id(-3);stroke(-1,0,-1,'trace');expect(id(0)).toBe(biggest);expect(id(-3)).not.toBe(biggest);
     });
     it('normalizes diagonal pieces and never reunites contacts automatically',()=>{
-        state().selectTool('latch');state().paint([{x:0,y:0},{x:1,y:1}]);state().commit();expect(id(0)).not.toBe(id(1,1));
+        state().selectTool('button');state().paint([{x:0,y:0},{x:1,y:1}]);state().commit();expect(id(0)).not.toBe(id(1,1));
         stroke(0,1,1);expect(id(0,1)).not.toBe(id(0));expect(id(0,1)).toBe(id(1,1));
     });
     it('normalizes overwritten leftovers, while cut and delete operate on complete identities',()=>{
@@ -47,7 +47,7 @@ describe('Explicit component identity',()=>{
         state().paint([{x:0,y:0}],true);state().cancel();expect(state().export()).toEqual(before);
     });
     it('merges every entered compatible component into the starting identity in one reversible stroke',()=>{
-        for(const tool of ['latch','clock','traceRed']) {
+        for(const tool of ['button','clock','traceRed']) {
             state().load(newBoard());stroke(0,0,1,tool);stroke(4,0,6,tool);stroke(9,0,12,tool);
             const original=id(0),before=state().export(),history=state().Undo.length;
             stroke(1,0,9,tool);expect(state().Components.size).toBe(1);expect(id(12)).toBe(original);expect(state().Tiles.size).toBe(13);
@@ -62,7 +62,7 @@ describe('Explicit component identity',()=>{
         state().load(newBoard());stroke(4,0,6);const original=id(6);stroke(0,0,4);expect(id(0)).not.toBe(original);expect(id(5)).toBe(original);
     });
     it('keeps incompatible color and parameter targets separate while replacing only traversed cells',()=>{
-        for(const [source,target] of [['latch','latch'],['clock','clock'],['traceRed','traceBlue']]) {
+        for(const [source,target] of [['button','button'],['clock','clock'],['traceRed','traceBlue']]) {
             state().load(newBoard());state().configure({isOn:false,clockHoldTicks:3});stroke(0,0,1,source);
             state().configure({isOn:true,clockHoldTicks:7});stroke(4,0,7,target);const other=id(7);
             stroke(1,0,4,source);expect(id(4)).toBe(id(0));expect(id(5)).toBe(other);expect(id(0)).not.toBe(other);
@@ -87,8 +87,8 @@ describe('Explicit component identity',()=>{
         for(let y=0;y<3;y++)state().pickComponent({x:0,y});state().pickComponent({x:0,y:1});expect(state().MergeIds).toHaveLength(3);
         state().pickComponent({x:0,y:2});expect(state().MergeIds).toHaveLength(2);
     });
-    it('rejects different latch and clock settings when merging',()=>{
-        for(const tool of ['latch','clock']) {
+    it('rejects different button and clock settings when merging',()=>{
+        for(const tool of ['button','clock']) {
             state().load(newBoard());stroke(0,0,1,tool);state().configure({isOn:false,clockHoldTicks:9});stroke(0,1,1,tool);
             state().selectTool('merge');state().pickComponent({x:0,y:0});state().pickComponent({x:0,y:1});expect(state().MergeIds).toHaveLength(1);
         }
@@ -128,7 +128,7 @@ describe('Explicit component identity',()=>{
     });
     it('requires valid IDs and homogeneous connected regions, without changing a loaded document on error',()=>{
         stroke(0,0,1);const previous=state().export();
-        for(const tiles of [[{x:0,y:0,toolId:'latch',isOn:false}], [tile(0,0,0)], [tile(0,0),tile(2,0)], [tile(0,0),{...tile(1,0),isOn:true}], [tile(0,0,1,'mesh')]]) {
+        for(const tiles of [[{x:0,y:0,toolId:'button',isOn:false}], [tile(0,0,0)], [tile(0,0),tile(2,0)], [tile(0,0),{...tile(1,0),isOn:true}], [tile(0,0,1,'mesh')]]) {
             expect(()=>state().load(JSON.parse(JSON.stringify({...newBoard(),tiles})))).toThrow('ProjectBoardInvalid');expect(state().export()).toEqual(previous);
             expect(()=>validateProject({board:newBoard(),blueprints:[{id:'x',name:'x',width:4,height:4,tiles}]})).toThrow('ProjectBlueprintInvalid');
         }
@@ -136,7 +136,7 @@ describe('Explicit component identity',()=>{
     it('encodes compile v4 with zero for empty cells and preserves numeric ink IDs',()=>{
         const board={...newBoard(),tiles:[tile(-2,-1,17),tile(-1,0,23,'switch')]};const d=new DataView(encodeBoard(board).buffer);
         expect(d.getInt32(4,true)).toBe(4);expect([...new Int32Array(d.buffer,24+4*3*4,4)]).toEqual([17,0,0,23]);
-        expect(ToolKinds.switch).toBe(30);expect(ToolKinds.latch).toBe(25);expect(Object.values(ToolKinds)).not.toContain(14);
+        expect(ToolKinds.switch).toBe(30);expect(ToolKinds.button).toBe(25);expect(Object.values(ToolKinds)).not.toContain(14);
         expect(validateBoard(board).tiles[0].componentId).toBe(17);
     });
 });

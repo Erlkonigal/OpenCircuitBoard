@@ -75,13 +75,13 @@ describe('Boolean Switch memory', () => {
             [0x4f434249, 4, width, height, minX, minY].forEach((v, i) => data.setInt32(i * 4, v, true));
             const arrays = Array.from({ length: 8 }, (_, i) => new Int32Array(bytes.buffer, 24 + count * i * 4, count));
             arrays[2].fill(1); arrays[5].fill(-1);
-            const kinds: Record<string, number> = { trace: 1, traceRed: 2, traceGreen: 3, traceBlue: 4, traceCyan: 5, traceMagenta: 6, bus: 7, cross: 13, buffer: 17, and: 18, or: 19, xor: 20, not: 21, nand: 22, nor: 23, xnor: 24, latch: 25, clock: 26, led: 27, traceOrange: 28, traceWhite: 29, switch: 30 };
+            const kinds: Record<string, number> = { trace: 1, traceRed: 2, traceGreen: 3, traceBlue: 4, traceCyan: 5, traceMagenta: 6, bus: 7, cross: 13, buffer: 17, and: 18, or: 19, xor: 20, not: 21, nand: 22, nor: 23, xnor: 24, button: 25, clock: 26, led: 27, traceOrange: 28, traceWhite: 29, switch: 30 };
             const cell = (t: Tile) => (t.y - minY) * width + t.x - minX;
             const controls = new Map<number, number>();
             for (const t of tiles) {
                 const c = cell(t);
                 [kinds[t.toolId], Number(t.isOn), t.clockHoldTicks ?? 1, t.componentId, t.direction ?? 0, -1, 0, t.crossMask ?? 0].forEach((v, i) => { arrays[i][c] = v; });
-                if (t.toolId === 'latch' || t.toolId === 'led') controls.set(t.componentId - 1, c);
+                if (t.toolId === 'button' || t.toolId === 'led') controls.set(t.componentId - 1, c);
             }
             let frame = await invoke<ArrayBuffer>('compileGrid', bytes);
             const session = new DataView(frame).getUint32(8, true);

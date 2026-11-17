@@ -182,7 +182,7 @@ impl Layout {
         for node in nodes {
             let output = node.Output;
             match node.Kind {
-                "latch" | "clock" => {
+                "button" | "clock" => {
                     self.deviceFacing(node.Kind, (x, gateY), output, 0, node.On);
                     self.wire((x + 1, gateY), Wire::Trace(output));
                     columns.push((x + 1, output));
@@ -450,7 +450,7 @@ impl Layout {
                     Tile {
                         X: point.0,
                         Y: point.1,
-                        ToolId: "latch".into(),
+                        ToolId: "button".into(),
                         ComponentId: id,
                         IsOn: true,
                         Direction: direction,

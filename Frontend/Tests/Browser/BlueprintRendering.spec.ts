@@ -28,7 +28,7 @@ async function fixture(page: Page, kind: 'dense' | 'sparse' | 'thumbnail') {
         win.__TAURI_INTERNALS__ = { invoke: async command => {
             if (command === 'recentProjects') return ['Fixture.ocb'];
             if (command !== 'openProject') throw Error(`Unexpected test IPC: ${command}`);
-            const board = { circuitModel: 'booleanSwitch', selectedTool: 'or', clockHoldTicks: 1, latchInitialState: true,
+            const board = { circuitModel: 'booleanSwitch', selectedTool: 'or', clockHoldTicks: 1, buttonInitialState: true,
                 grid: kind === 'sparse' ? { originX: -1000000, originY: -1000000, width: 2000000, height: 2000000 }
                     : { originX: -512, originY: -512, width: 1024, height: 1024 }, tiles: [] as { x: number; y: number; toolId: string; componentId: number; isOn: boolean }[] };
             if (kind === 'dense') {

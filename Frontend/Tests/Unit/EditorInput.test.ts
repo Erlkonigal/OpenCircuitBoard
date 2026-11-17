@@ -8,13 +8,13 @@ const s=()=>useEditor.getState();
 const point=(x:number,y=0)=>({x:x*64+16,y:y*64+16});
 const pointer=(button=0,shiftKey=false,ctrlKey=false)=>({button,shiftKey,ctrlKey,metaKey:false});
 let input:EditorInput;
-let latch=vi.fn((point:Point)=>{});
+let button=vi.fn((point:Point)=>{});
 let camera:{x:number;y:number;zoom:number;width:number;height:number};
 function click(x:number,y=0,options=pointer()){input.down(options,point(x,y));input.up(options.button,point(x,y));}
-function stroke(x:number,y:number,end:number,tool='latch'){s().selectTool(tool);s().paint(lineCells({x,y},{x:end,y}));s().commit();s().selectTool('pointer');}
+function stroke(x:number,y:number,end:number,tool='button'){s().selectTool(tool);s().paint(lineCells({x,y},{x:end,y}));s().commit();s().selectTool('pointer');}
 beforeEach(()=>{
-    useEditor.setState({Simulating:false});s().load(newBoard());input=new EditorInput();latch=vi.fn((point:Point)=>{});camera={x:0,y:0,zoom:1,width:640,height:480};
-    input.connect({View:camera,world:p=>p,cell:p=>({x:Math.floor(p.x/64),y:Math.floor(p.y/64)}),redraw:()=>{},cursor:()=>{},latch:p=>latch(p)});
+    useEditor.setState({Simulating:false});s().load(newBoard());input=new EditorInput();button=vi.fn((point:Point)=>{});camera={x:0,y:0,zoom:1,width:640,height:480};
+    input.connect({View:camera,world:p=>p,cell:p=>({x:Math.floor(p.x/64),y:Math.floor(p.y/64)}),redraw:()=>{},cursor:()=>{},button:p=>button(p)});
 });
 describe('Pointer-first interaction state machine',()=>{
     it('inspects complete components without placing, and X deletes only the chosen identity',()=>{
@@ -24,7 +24,7 @@ describe('Pointer-first interaction state machine',()=>{
         s().undo();expect(s().Tiles.size).toBe(8);expect(selectionCount(s())).toBe(4);
     });
     it('does not capture neighboring cells or holes inside a component bounding box',()=>{
-        s().selectTool('latch');s().paint([{x:0,y:0},{x:1,y:0},{x:2,y:0},{x:0,y:1},{x:2,y:1},{x:0,y:2},{x:1,y:2},{x:2,y:2}]);s().commit();stroke(1,1,1,'clock');
+        s().selectTool('button');s().paint([{x:0,y:0},{x:1,y:0},{x:2,y:0},{x:0,y:1},{x:2,y:1},{x:0,y:2},{x:1,y:2},{x:2,y:2}]);s().commit();stroke(1,1,1,'clock');
         click(0);expect(selectionSource(s()).size).toBe(8);expect(selectionSource(s()).has('1,1')).toBe(false);
         click(1,1);expect(selectionCount(s())).toBe(1);
         click(8,8);expect(s().Selection).toBeNull();expect(s().Tiles.size).toBe(9);
@@ -96,9 +96,9 @@ describe('Pointer-first interaction state machine',()=>{
         s().selectTool('clock');input.space(true);input.down(pointer(),point(2));input.move(point(4,3));input.up(0,point(4,3));input.space(false);
         expect(camera.x).toBe(-128);expect(camera.y).toBe(-192);expect(s().EditTool).toBe('draw');expect(s().Tiles.size).toBe(0);expect(s().Undo).toHaveLength(0);
     });
-    it('treats undo of an unfinished stroke as cancellation, ignores mutations in simulation, and keeps latch clicks',()=>{
+    it('treats undo of an unfinished stroke as cancellation, ignores mutations in simulation, and keeps button clicks',()=>{
         stroke(0,0,2);s().selectTool('clock');input.down(pointer(),point(4));input.execute('undo',{x:0,y:0});input.up(0,point(4));expect(s().Tiles.size).toBe(3);expect(s().Undo).toHaveLength(1);
-        useEditor.setState({Simulating:true});click(0);input.execute('delete',{x:0,y:0});expect(latch).toHaveBeenCalledWith({x:0,y:0});expect(s().Tiles.size).toBe(3);
+        useEditor.setState({Simulating:true});click(0);input.execute('delete',{x:0,y:0});expect(button).toHaveBeenCalledWith({x:0,y:0});expect(s().Tiles.size).toBe(3);
     });
     it('cancels only an active cut on undo, then supports undo and redo while Split is idle',()=>{
         stroke(0,0,4);input.execute('split',{x:0,y:0});input.down(pointer(),{x:128,y:0});input.move({x:128,y:64});

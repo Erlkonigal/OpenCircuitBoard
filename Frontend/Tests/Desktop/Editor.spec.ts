@@ -95,7 +95,7 @@ describe('Native circuit workspace', () => {
         await browser.saveScreenshot(buildPath('DesktopRefreshSimulationCapture.png'));
         await $('button[aria-label="Pause simulation"]').click(); await $('button=Back to design').click();
     });
-    it('updates the rendered latch state through native simulation IPC', async () => {
+    it('updates the rendered button state through native simulation IPC', async () => {
         await $('.command-trigger').click();
         await $('input[aria-label="Search commands"]').setValue('new circuit');
         await $('.command-options button').click();
@@ -117,10 +117,10 @@ describe('Native circuit workspace', () => {
         const before = JSON.stringify(await pixel());
         await $('[data-testid="board"]').click();
         await browser.waitUntil(async () => JSON.stringify(await pixel()) !== before, { timeoutMsg: 'Button state did not change on the canvas' });
-        await browser.saveScreenshot(buildPath('DesktopLatchCapture.png'));
+        await browser.saveScreenshot(buildPath('DesktopButtonCapture.png'));
         await $('button=Back to design').click();
     });
-    it('keeps adjacent drawn lanes independent and merges complete latch regions through native simulation', async () => {
+    it('keeps adjacent drawn lanes independent and merges complete button regions through native simulation', async () => {
         await $('.command-trigger').click(); await $('input[aria-label="Search commands"]').setValue('new circuit'); await $('.command-options button').click();
         const center = await browser.execute(() => { const r = document.querySelector('[data-testid="board"]')!.getBoundingClientRect(); return {x:r.x+r.width/2,y:r.y+r.height/2}; });
         for (const [index, tool] of ['Button','Trace','Buffer'].entries()) {
@@ -155,7 +155,7 @@ describe('Native circuit workspace', () => {
     });
     it('round-trips v2 archives through real native IPC', async () => {
         const file = buildPath('DesktopProject.ocb');
-        const board = { circuitModel: 'booleanSwitch', selectedTool: 'clock', clockHoldTicks: 3, latchInitialState: false, grid: { originX: -20, originY: -14, width: 40, height: 28 }, tiles: [{ x: -2, y: 1, toolId: 'clock', componentId: 1, isOn: true, clockHoldTicks: 3 }, { x: 0, y: 1, toolId: 'latch', componentId: 2, isOn: false }] };
+        const board = { circuitModel: 'booleanSwitch', selectedTool: 'clock', clockHoldTicks: 3, buttonInitialState: false, grid: { originX: -20, originY: -14, width: 40, height: 28 }, tiles: [{ x: -2, y: 1, toolId: 'clock', componentId: 1, isOn: true, clockHoldTicks: 3 }, { x: 0, y: 1, toolId: 'button', componentId: 2, isOn: false }] };
         const result = await browser.execute(async (file: string, project: typeof board) => {
             try {
                 const invoke = (window as unknown as Window & {
@@ -220,7 +220,7 @@ describe('Native circuit workspace', () => {
             const tiles: { x: number; y: number; toolId: string; componentId: number; isOn: boolean; clockHoldTicks: number }[] = [];
             for (let y = 0; y < 64; y++) for (let x = 0; x < 64; x++) tiles.push({ x, y, toolId: 'clock', componentId: 1, isOn: true, clockHoldTicks: 1 });
             const invoke = (window as unknown as { __TAURI_INTERNALS__: { invoke: (command: string, args: unknown) => Promise<unknown> } }).__TAURI_INTERNALS__.invoke;
-            return invoke('saveProject', { path: file, project: { board: { circuitModel: 'booleanSwitch', selectedTool: 'clock', clockHoldTicks: 1, latchInitialState: true,
+            return invoke('saveProject', { path: file, project: { board: { circuitModel: 'booleanSwitch', selectedTool: 'clock', clockHoldTicks: 1, buttonInitialState: true,
                 grid: { originX: -512, originY: -512, width: 1024, height: 1024 }, tiles },
                 blueprints: [{ id: 'clocks', name: 'Clock array', width: 64, height: 64, tiles }] } });
         }, file);
@@ -275,7 +275,7 @@ describe('Native circuit workspace', () => {
         await browser.saveScreenshot(buildPath('DesktopPointerInteractionCapture.png'));
     });
 
-    it('draw-connects whole latches and keeps grid-edge split results independent in native simulation',async()=>{
+    it('draw-connects whole buttons and keeps grid-edge split results independent in native simulation',async()=>{
         await browser.refresh();await browser.waitUntil(async()=>await $('[data-testid="board"]').getAttribute('data-render-ready')==='true');
         await $('.command-trigger').click();await $('input[aria-label="Search commands"]').setValue('new circuit');await $('.command-options button').click();
         const c=await browser.execute(()=>{const r=document.querySelector('[data-testid="board"]')!.getBoundingClientRect();return {x:Math.round(r.x+r.width/2),y:Math.round(r.y+r.height/2)};});

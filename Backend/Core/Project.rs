@@ -39,7 +39,7 @@ pub fn toolKind(id: &str) -> Option<i32> {
         "nand" => 22,
         "nor" => 23,
         "xnor" => 24,
-        "latch" => 25,
+        "button" => 25,
         "clock" => 26,
         "led" => 27,
         "traceOrange" => 28,
@@ -91,7 +91,7 @@ pub struct Board {
     #[serde(default = "one")]
     pub ClockHoldTicks: i32,
     #[serde(default = "yes")]
-    pub LatchInitialState: bool,
+    pub ButtonInitialState: bool,
     #[serde(default)]
     pub Grid: Grid,
     #[serde(default)]
@@ -103,7 +103,7 @@ impl Default for Board {
             CircuitModel: "booleanSwitch".into(),
             SelectedTool: defaultTool(),
             ClockHoldTicks: 1,
-            LatchInitialState: true,
+            ButtonInitialState: true,
             Grid: Grid::default(),
             Tiles: vec![],
         }
@@ -244,7 +244,7 @@ fn validateComponents(tiles: &[Tile], defaultHold: i32, error: &str) -> Result<(
             if first.ToolId != tile.ToolId
                 || first.Direction != tile.Direction
                 || first.CrossMask != tile.CrossMask
-                || (tile.ToolId == "latch" && first.IsOn != tile.IsOn)
+                || (tile.ToolId == "button" && first.IsOn != tile.IsOn)
                 || (tile.ToolId == "clock"
                     && first.ClockHoldTicks.unwrap_or(defaultHold)
                         != tile.ClockHoldTicks.unwrap_or(defaultHold))

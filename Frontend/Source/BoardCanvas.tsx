@@ -15,7 +15,7 @@ export interface CameraCommand {
 interface Props {
     onZoom?: (zoom: number) => void;
     cameraCommand?: CameraCommand;
-    onLatch: (point: Point) => void;
+    onButton: (point: Point) => void;
     onCursor: (point: Point) => void;
 }
 interface View {
@@ -26,9 +26,9 @@ interface View {
     height: number;
 }
 export function minimumZoom(grid: Grid, width: number, height: number) { return Math.min(width / (grid.width * Size), height / (grid.height * Size), 1.25); }
-export function BoardCanvas({ onLatch, onCursor, onZoom, cameraCommand }: Props) {
+export function BoardCanvas({ onButton, onCursor, onZoom, cameraCommand }: Props) {
     const host = useRef<HTMLDivElement>(null), view = useRef<View>({ x: 0, y: 0, zoom: .5, width: 736, height: 658 });
-    const callbacks=useRef({onLatch,onCursor,onZoom});callbacks.current={onLatch,onCursor,onZoom};
+    const callbacks=useRef({onButton,onCursor,onZoom});callbacks.current={onButton,onCursor,onZoom};
     const requestDraw = useRef<(immediate?: boolean) => void>(() => {});
     const worldPoint=(p:Point)=>{const v=view.current;return {x:v.x+(p.x-v.width/2)/v.zoom,y:v.y+(p.y-v.height/2)/v.zoom};};
     const cellPoint=(p:Point)=>{const w=worldPoint(p);return {x:Math.floor(w.x/Size),y:Math.floor(w.y/Size)};};
@@ -43,7 +43,7 @@ export function BoardCanvas({ onLatch, onCursor, onZoom, cameraCommand }: Props)
         let patternTexture: Texture | undefined;
         let highlight: ComponentHighlight | undefined;
         const disconnect=editorInput.connect({View:view.current,world:worldPoint,cell:cellPoint,
-            redraw:()=>requestDraw.current(),cursor:p=>callbacks.current.onCursor(p),latch:p=>callbacks.current.onLatch(p)});
+            redraw:()=>requestDraw.current(),cursor:p=>callbacks.current.onCursor(p),button:p=>callbacks.current.onButton(p)});
         void (async () => {
             await app.init({ background: '#0c1219', antialias: true, resolution: window.devicePixelRatio || 1, autoDensity: true, autoStart: false, preference: 'webgl', preserveDrawingBuffer: true });
             if (disposed) {

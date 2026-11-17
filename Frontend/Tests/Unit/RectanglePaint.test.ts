@@ -14,7 +14,7 @@ beforeEach(() => {
     useEditor.setState({ Simulating: false }); state().load(newBoard()); state().selectTool('clock');
     input = new EditorInput();
     input.connect({ View: { x: 0, y: 0, zoom: 1, width: 640, height: 480 }, world: p => p,
-        cell: p => ({ x: Math.floor(p.x / 64), y: Math.floor(p.y / 64) }), redraw: () => {}, cursor: () => {}, latch: () => {} });
+        cell: p => ({ x: Math.floor(p.x / 64), y: Math.floor(p.y / 64) }), redraw: () => {}, cursor: () => {}, button: () => {} });
 });
 describe('Filled ink rectangles', () => {
     for (const end of [{ x: 3, y: 2 }, { x: -3, y: 2 }, { x: 3, y: -2 }, { x: -3, y: -2 }])
@@ -53,7 +53,7 @@ describe('Filled ink rectangles', () => {
     });
     it('replaces only covered incompatible cells and keeps untouched survivors independent', () => {
         state().paint([{ x: -2, y: 0 }, { x: -1, y: 0 }, { x: 0, y: 0 }, { x: 1, y: 0 }, { x: 2, y: 0 }]); state().commit();
-        const before = state().export(); state().selectTool('latch'); rectangle({ x: 0, y: -1 }, { x: 0, y: 1 });
+        const before = state().export(); state().selectTool('button'); rectangle({ x: 0, y: -1 }, { x: 0, y: 1 });
         expect(state().Tiles.size).toBe(7); expect(state().Components.size).toBe(3);
         expect(state().Tiles.get('-1,0')?.componentId).not.toBe(state().Tiles.get('1,0')?.componentId);
         state().undo(); expect(state().export().tiles).toEqual(before.tiles);

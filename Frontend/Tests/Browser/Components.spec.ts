@@ -84,9 +84,9 @@ test('whole-region highlights preserve holes and leave touching independent comp
     await page.addInitScript(()=>{
         (window as unknown as {__TAURI_INTERNALS__:unknown}).__TAURI_INTERNALS__={invoke:async(command:string)=>{
             if(command==='recentProjects')return ['Regions.ocb'];if(command!=='openProject')throw Error(command);
-            const tiles=[];for(let y=0;y<3;y++)for(let x=0;x<3;x++)if(x!==1||y!==1)tiles.push({x,y,toolId:'latch',componentId:1,isOn:true});
-            for(let y=0;y<3;y++)tiles.push({x:3,y,toolId:'latch',componentId:2,isOn:true});
-            return {board:{ circuitModel: 'booleanSwitch',selectedTool:'latch',clockHoldTicks:1,latchInitialState:true,grid:{originX:-20,originY:-14,width:40,height:28},tiles},blueprints:[]};
+            const tiles=[];for(let y=0;y<3;y++)for(let x=0;x<3;x++)if(x!==1||y!==1)tiles.push({x,y,toolId:'button',componentId:1,isOn:true});
+            for(let y=0;y<3;y++)tiles.push({x:3,y,toolId:'button',componentId:2,isOn:true});
+            return {board:{ circuitModel: 'booleanSwitch',selectedTool:'button',clockHoldTicks:1,buttonInitialState:true,grid:{originX:-20,originY:-14,width:40,height:28},tiles},blueprints:[]};
         }};
     });
     const c=await ready(page);await page.locator('.project-switcher').click();await page.getByRole('menuitem',{name:'Regions.ocb',exact:true}).click();

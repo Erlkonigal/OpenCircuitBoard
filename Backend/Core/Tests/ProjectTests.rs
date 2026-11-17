@@ -14,7 +14,7 @@ fn tile(x: i32, y: i32, kind: &str, id: i32) -> Tile {
     }
 }
 fn button(x: i32, y: i32, id: i32, on: bool, direction: i32) -> Tile {
-    let mut tile = tile(x, y, "latch", id);
+    let mut tile = tile(x, y, "button", id);
     tile.IsOn = on;
     tile.Direction = direction;
     tile
@@ -46,7 +46,7 @@ fn stableToolsAndRejectedArchives() {
         ("bus", 7),
         ("cross", 13),
         ("buffer", 17),
-        ("latch", 25),
+        ("button", 25),
         ("led", 27),
         ("traceOrange", 28),
         ("traceWhite", 29),
@@ -83,20 +83,20 @@ fn tracesDefaultLowAndButtonsDriveConstants() {
         tile(0, 0, "trace", 1),
     ]));
     assert_eq!(state(&mut core, origin, 0, 0), 0);
-    core.toggleLatch((0 - origin.1) as usize * core.Width + (-1 - origin.0) as usize)
+    core.toggleButton((0 - origin.1) as usize * core.Width + (-1 - origin.0) as usize)
         .unwrap();
     assert_eq!(state(&mut core, origin, 0, 0), 1);
 }
 #[test]
 fn busSourcesOrIndependentlyWithoutPortInks() {
     let mut tiles = vec![
-        tile(-2, 0, "latch", 1),
+        tile(-2, 0, "button", 1),
         tile(-1, 0, "traceRed", 2),
         tile(0, 0, "bus", 3),
         tile(0, 1, "bus", 3),
         tile(0, 2, "bus", 3),
         tile(1, 2, "traceRed", 4),
-        tile(2, 2, "latch", 5),
+        tile(2, 2, "button", 5),
         tile(1, 0, "traceGreen", 6),
     ];
     tiles[6].Direction = 2;
@@ -107,15 +107,15 @@ fn busSourcesOrIndependentlyWithoutPortInks() {
         core.inspect((0 - o.1) as usize * core.Width + (0 - o.0) as usize)[2],
         1
     );
-    core.toggleLatch((0 - o.1) as usize * core.Width + (-2 - o.0) as usize)
+    core.toggleButton((0 - o.1) as usize * core.Width + (-2 - o.0) as usize)
         .unwrap();
     assert_eq!(state(&mut core, o, 1, 2), 1);
-    core.toggleLatch((2 - o.1) as usize * core.Width + (2 - o.0) as usize)
+    core.toggleButton((2 - o.1) as usize * core.Width + (2 - o.0) as usize)
         .unwrap();
-    core.toggleLatch((0 - o.1) as usize * core.Width + (-2 - o.0) as usize)
+    core.toggleButton((0 - o.1) as usize * core.Width + (-2 - o.0) as usize)
         .unwrap();
     assert_eq!(state(&mut core, o, 1, 2), 1);
-    core.toggleLatch((2 - o.1) as usize * core.Width + (2 - o.0) as usize)
+    core.toggleButton((2 - o.1) as usize * core.Width + (2 - o.0) as usize)
         .unwrap();
     assert_eq!(state(&mut core, o, 1, 2), 0);
 }
@@ -152,14 +152,14 @@ fn switchDelayBidirectionalityAndSnapshots() {
     assert_eq!(state(&mut core, o, 1, 0), 0);
     let left = (0 - o.1) as usize * core.Width + (-2 - o.0) as usize;
     let control = (0 - o.1) as usize * core.Width + (0 - o.0) as usize + core.Width * 2;
-    core.toggleLatch(left).unwrap();
+    core.toggleButton(left).unwrap();
     assert_eq!(state(&mut core, o, 1, 0), 0);
-    core.toggleLatch(control).unwrap();
+    core.toggleButton(control).unwrap();
     assert_eq!(state(&mut core, o, 1, 0), 0);
     let pending = core.capture();
     core.advanceSilent(1);
     assert_eq!(state(&mut core, o, 1, 0), 1);
-    core.toggleLatch(control).unwrap();
+    core.toggleButton(control).unwrap();
     core.advanceSilent(1);
     assert_eq!(state(&mut core, o, 1, 0), 0);
     core.restore(&pending).unwrap();
@@ -177,7 +177,7 @@ fn switchDelayBidirectionalityAndSnapshots() {
     let (mut core, o) = compile(&b);
     assert_eq!(state(&mut core, o, -1, 0), 0);
     let control = (0 - o.1) as usize * core.Width + (0 - o.0) as usize + core.Width * 2;
-    core.toggleLatch(control).unwrap();
+    core.toggleButton(control).unwrap();
     core.advanceSilent(1);
     assert_eq!(state(&mut core, o, -1, 0), 1);
 }
@@ -339,7 +339,7 @@ fn switchCyclesReleaseWithdrawnDriversAndFanOutWithoutAddedDelay() {
         assert_eq!(state(&mut core, origin, 2, y), 1);
     }
     let connected = core.capture();
-    core.toggleLatch(source).unwrap();
+    core.toggleButton(source).unwrap();
     for y in [0, 2, 4] {
         assert_eq!(
             state(&mut core, origin, 2, y),
@@ -351,7 +351,7 @@ fn switchCyclesReleaseWithdrawnDriversAndFanOutWithoutAddedDelay() {
     for y in [0, 2, 4] {
         assert_eq!(state(&mut core, origin, 2, y), 1);
     }
-    core.toggleLatch(source).unwrap();
+    core.toggleButton(source).unwrap();
     for y in [0, 2, 4] {
         assert_eq!(state(&mut core, origin, 2, y), 0);
     }
@@ -364,7 +364,7 @@ fn retiredToolsAndInvalidSavesNeverReplaceValidArchives() {
         std::process::id()
     ));
     let mut project = ProjectDocument {
-        Board: board(vec![tile(0, 0, "latch", 1)]),
+        Board: board(vec![tile(0, 0, "button", 1)]),
         Blueprints: vec![],
     };
     Project::save(&path, &project).unwrap();
@@ -408,15 +408,15 @@ fn compileCropsSparseBoardsAndRejectsOversizedOccupiedBounds() {
 }
 
 #[test]
-fn latchOnlyDrivesItsRotatedOutputAndRetainsManualState() {
+fn buttonOnlyDrivesItsRotatedOutputAndRetainsManualState() {
     let neighbors = [(1, 0), (0, 1), (-1, 0), (0, -1)];
     let colors = ["trace", "traceRed", "traceGreen", "traceBlue"];
     for direction in 0..4 {
         for initial in [false, true] {
-            let mut latch = tile(0, 0, "latch", 1);
-            latch.Direction = direction as i32;
-            latch.IsOn = initial;
-            let mut tiles = vec![latch];
+            let mut button = tile(0, 0, "button", 1);
+            button.Direction = direction as i32;
+            button.IsOn = initial;
+            let mut tiles = vec![button];
             for (side, &(dx, dy)) in neighbors.iter().enumerate() {
                 tiles.push(tile(dx, dy, colors[side], 10 + side as i32));
                 if side != direction {
@@ -433,8 +433,8 @@ fn latchOnlyDrivesItsRotatedOutputAndRetainsManualState() {
                 assert_eq!(state(&mut core, origin, 0, 0), initial as u8);
                 assert_eq!(state(&mut core, origin, output.0, output.1), initial as u8);
             }
-            let latchCell = (-origin.1) as usize * core.Width + (-origin.0) as usize;
-            core.toggleLatch(latchCell).unwrap();
+            let buttonCell = (-origin.1) as usize * core.Width + (-origin.0) as usize;
+            core.toggleButton(buttonCell).unwrap();
             assert_eq!(
                 state(&mut core, origin, output.0, output.1),
                 (!initial) as u8
@@ -445,7 +445,7 @@ fn latchOnlyDrivesItsRotatedOutputAndRetainsManualState() {
                 state(&mut core, origin, output.0, output.1),
                 (!initial) as u8
             );
-            core.toggleLatch(latchCell).unwrap();
+            core.toggleButton(buttonCell).unwrap();
             core.restore(&snapshot).unwrap();
             core.advanceSilent(5);
             assert_eq!(

@@ -327,7 +327,7 @@ export const useEditor = create<State>((set, get) => ({
                 continue;
             if (!remove && !stroke) {
                 const existing = s.Tiles.get(cellKey(point)), id = s.Board.selectedTool, fromExisting = existing?.toolId === id;
-                const tile = fromExisting ? existing : { ...inkSettings(id,s.DrawSettings), ...point, toolId: id, componentId: allocate(s), isOn: id === 'latch' ? s.Board.latchInitialState : true, ...(id === 'clock' ? { clockHoldTicks: s.Board.clockHoldTicks } : {}) };
+                const tile = fromExisting ? existing : { ...inkSettings(id,s.DrawSettings), ...point, toolId: id, componentId: allocate(s), isOn: id === 'button' ? s.Board.buttonInitialState : true, ...(id === 'clock' ? { clockHoldTicks: s.Board.clockHoldTicks } : {}) };
                 stroke = { Tile: tile, FromExisting: fromExisting, Targets: new Set() };
                 set({ Stroke: stroke });
                 s = get();
@@ -378,7 +378,7 @@ export const useEditor = create<State>((set, get) => ({
         if (left > right || top > bottom) { set({ RectanglePaint: null }); return; }
         const anchor = { x: Math.max(left, Math.min(right, start.x)), y: Math.max(top, Math.min(bottom, start.y)) };
         const existing = s.Tiles.get(cellKey(anchor)), id = s.Board.selectedTool;
-        const material = existing?.toolId === id ? existing : { ...inkSettings(id,s.DrawSettings), toolId: id, isOn: id === 'latch' ? s.Board.latchInitialState : true, ...(id === 'clock' ? { clockHoldTicks: s.Board.clockHoldTicks } : {}) };
+        const material = existing?.toolId === id ? existing : { ...inkSettings(id,s.DrawSettings), toolId: id, isOn: id === 'button' ? s.Board.buttonInitialState : true, ...(id === 'clock' ? { clockHoldTicks: s.Board.clockHoldTicks } : {}) };
         set({ RectanglePaint: { Bounds: { originX: left, originY: top, width: right - left + 1, height: bottom - top + 1 }, Anchor: anchor, Material: material } });
     },
     paintRectangle: (start, end) => {
@@ -587,7 +587,7 @@ export const useEditor = create<State>((set, get) => ({
             get().commit();
         }
         else if (!selection)
-            set({ DrawSettings: {...s.DrawSettings,...Object.fromEntries(Object.entries(patch).filter(([key])=>['direction','crossMask'].includes(key)))}, Board: { ...s.Board, ...(patch.clockHoldTicks ? { clockHoldTicks: patch.clockHoldTicks } : {}), ...(patch.isOn !== undefined ? { latchInitialState: patch.isOn } : {}), ...(patch.toolId ? { selectedTool: patch.toolId } : {}) } });
+            set({ DrawSettings: {...s.DrawSettings,...Object.fromEntries(Object.entries(patch).filter(([key])=>['direction','crossMask'].includes(key)))}, Board: { ...s.Board, ...(patch.clockHoldTicks ? { clockHoldTicks: patch.clockHoldTicks } : {}), ...(patch.isOn !== undefined ? { buttonInitialState: patch.isOn } : {}), ...(patch.toolId ? { selectedTool: patch.toolId } : {}) } });
     },
     activateDock: (side, id) => { const s = get(), a = side === 'left' ? 'LeftDock' : 'RightDock', b = side === 'left' ? 'RightDock' : 'LeftDock'; set({ [a]: id, ...(s[b] === id ? { [b]: s[a] } : {}) }); },
     log: text => set(s => ({ Events: [...s.Events.slice(-999), `${new Date().toLocaleTimeString()}  ${text}`] })), setRuntime: states => set({ Runtime: states }),

@@ -17,7 +17,7 @@ interface Adapter {
     cell: (point: Point) => Point;
     redraw: () => void;
     cursor: (point: Point) => void;
-    latch: (point: Point) => void;
+    button: (point: Point) => void;
 }
 interface PointerInput {
     button: number;
@@ -126,7 +126,7 @@ export class EditorInput {
         if (event.button !== 0)
             return;
         if (s.Simulating) {
-            a.latch(cell);
+            a.button(cell);
             return;
         }
         if (s.Preview?.Kind === 'paste') {

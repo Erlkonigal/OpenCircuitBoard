@@ -4,8 +4,8 @@ import { useEditor } from '../../Source/EditorStore';
 import { encodeBoard } from '../../Source/Native';
 beforeEach(() => { useEditor.setState({ Simulating: false }); useEditor.getState().load(newBoard()); });
 it('exposes eight Trace colors and a single Bus with stable numeric kinds', () => {
-    expect(Inks.find(ink => ink.id === 'latch')?.title).toBe('Button');
-    expect(ToolKinds.latch).toBe(25);
+    expect(Inks.find(ink => ink.id === 'button')?.title).toBe('Button');
+    expect(ToolKinds.button).toBe(25);
     expect(TraceToolIds).toHaveLength(8);
     expect(Inks.find(ink => ink.id === 'trace')?.variants).toEqual(TraceToolIds);
     expect(Inks.find(ink => ink.id === 'bus')?.variants).toBeUndefined();

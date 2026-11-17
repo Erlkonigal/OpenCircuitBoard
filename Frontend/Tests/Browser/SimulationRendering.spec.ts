@@ -17,8 +17,8 @@ test('an immediately available runtime delta reaches the canvas within two displ
         };
         (window as unknown as { __TAURI_INTERNALS__: unknown }).__TAURI_INTERNALS__ = { invoke: async (command: string, args?: { action?: string }) => {
             if (command === 'recentProjects') return ['Runtime.ocb'];
-            if (command === 'openProject') return { board: { circuitModel: 'booleanSwitch', selectedTool: 'latch', clockHoldTicks: 1, latchInitialState: false,
-                grid: { originX: -20, originY: -14, width: 40, height: 28 }, tiles: [{ x: 0, y: 0, toolId: 'latch', componentId: 1, isOn: false }] }, blueprints: [] };
+            if (command === 'openProject') return { board: { circuitModel: 'booleanSwitch', selectedTool: 'button', clockHoldTicks: 1, buttonInitialState: false,
+                grid: { originX: -20, originY: -14, width: 40, height: 28 }, tiles: [{ x: 0, y: 0, toolId: 'button', componentId: 1, isOn: false }] }, blueprints: [] };
             if (command === 'compileGrid') return encode(true);
             if (command !== 'simulationCommand') throw Error(command);
             if (args?.action === 'release') return new ArrayBuffer(0);

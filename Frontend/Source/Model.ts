@@ -21,7 +21,7 @@ export interface Board {
     circuitModel: 'booleanSwitch';
     selectedTool: string;
     clockHoldTicks: number;
-    latchInitialState: boolean;
+    buttonInitialState: boolean;
     grid: Grid;
     tiles: Tile[];
 }
@@ -49,7 +49,7 @@ export interface Ink {
     icon: string;
     variants?: string[];
 }
-export const ToolKinds: Record<string, number> = {empty:0,trace:1,traceRed:2,traceGreen:3,traceBlue:4,traceCyan:5,traceMagenta:6,bus:7,cross:13,buffer:17,and:18,or:19,xor:20,not:21,nand:22,nor:23,xnor:24,latch:25,clock:26,led:27,traceOrange:28,traceWhite:29,switch:30};
+export const ToolKinds: Record<string, number> = {empty:0,trace:1,traceRed:2,traceGreen:3,traceBlue:4,traceCyan:5,traceMagenta:6,bus:7,cross:13,buffer:17,and:18,or:19,xor:20,not:21,nand:22,nor:23,xnor:24,button:25,clock:26,led:27,traceOrange:28,traceWhite:29,switch:30};
 export const ToolIds = Object.keys(ToolKinds);
 export const isDirectional = (id: string) => (ToolKinds[id] >= 17 && ToolKinds[id] <= 27) || id === 'switch';
 export type InkSettings = Pick<Tile, 'direction' | 'crossMask'>;
@@ -63,17 +63,16 @@ export const SelectableToolIds = ToolIds.filter(id => canonicalToolId(id) === id
 export const hasGlyph = (id: string) => paletteId(id) !== 'trace';
 const Icons = import.meta.glob('../Assets/Inks/*.svg', { eager: true, query: '?url', import: 'default' }) as Record<string, string>;
 // Base surfaces reserve brightness for the shared highlight (weighted RGB <= 160).
-const Colors: Record<string, string> = { cross: '#88a2c8', bus: '#2378f4', switch: '#4ca8ef', trace: '#b5a527', buffer: '#44bf75', and: '#c29c58', or: '#45b7c1', xor: '#a977ed', not: '#ef5b78', nand: '#e99532', nor: '#3cb9c5', xnor: '#bf58ee', latch: '#37c377', clock: '#f05b70', led: '#9ba0a7' };
-const Titles: Record<string, string> = { latch: 'Button' };
+const Colors: Record<string, string> = { cross: '#88a2c8', bus: '#2378f4', switch: '#4ca8ef', trace: '#b5a527', buffer: '#44bf75', and: '#c29c58', or: '#45b7c1', xor: '#a977ed', not: '#ef5b78', nand: '#e99532', nor: '#3cb9c5', xnor: '#bf58ee', button: '#37c377', clock: '#f05b70', led: '#9ba0a7' };
 const VariantColors: Record<string, string> = { Red: '#ff4d4d', Green: '#58bc54', Blue: '#2378f4', Cyan: '#45b7c1', Magenta: '#c66af6', Yellow: '#b5a527', Orange: '#df8f39', White: '#9f9f9f' };
 export const paletteId = (id: string) => id.startsWith('trace') ? 'trace' : id.startsWith('bus') ? 'bus' : id;
-export function iconUrl(id: string, on = true) { if (id.startsWith('trace') || id.startsWith('bus')) id = paletteId(id); const name = id === 'latch' ? (on ? 'LatchOn' : 'LatchOff') : id[0].toUpperCase() + id.slice(1); return Icons[`../Assets/Inks/${name}.svg`]; }
-export const Inks: Ink[] = ['cross', 'bus', 'switch', 'trace', 'buffer', 'and', 'or', 'xor', 'not', 'nand', 'nor', 'xnor', 'latch', 'clock', 'led'].map(id => ({ id, title: Titles[id] ?? id[0].toUpperCase() + id.slice(1), category: ['cross', 'bus'].includes(id) ? 'Space Optimization' : ['switch', 'trace'].includes(id) ? 'Trace' : ['latch', 'clock', 'led'].includes(id) ? 'General Components' : 'Gates', color: Colors[id], icon: iconUrl(id), variants: id === 'trace' ? TraceToolIds : undefined }));
+export function iconUrl(id: string, on = true) { if (id.startsWith('trace') || id.startsWith('bus')) id = paletteId(id); const name = id === 'button' ? (on ? 'ButtonOn' : 'ButtonOff') : id[0].toUpperCase() + id.slice(1); return Icons[`../Assets/Inks/${name}.svg`]; }
+export const Inks: Ink[] = ['cross', 'bus', 'switch', 'trace', 'buffer', 'and', 'or', 'xor', 'not', 'nand', 'nor', 'xnor', 'button', 'clock', 'led'].map(id => ({ id, title: id[0].toUpperCase() + id.slice(1), category: ['cross', 'bus'].includes(id) ? 'Space Optimization' : ['switch', 'trace'].includes(id) ? 'Trace' : ['button', 'clock', 'led'].includes(id) ? 'General Components' : 'Gates', color: Colors[id], icon: iconUrl(id), variants: id === 'trace' ? TraceToolIds : undefined }));
 export function inkColor(id: string) { if (paletteId(id) === 'bus') return Colors.bus; const suffix = id.slice(paletteId(id).length); return VariantColors[suffix] ?? Colors[id] ?? '#a0a0a0'; }
 export const cellKey = (point: Point) => `${point.x},${point.y}`;
 export const parseKey = (key: string): Point => { const [x, y] = key.split(',').map(Number); return { x, y }; };
 export const contains = (grid: Grid, point: Point) => point.x >= grid.originX && point.y >= grid.originY && point.x < grid.originX + grid.width && point.y < grid.originY + grid.height;
-export const newBoard = (): Board => ({ circuitModel: 'booleanSwitch', selectedTool: 'or', clockHoldTicks: 1, latchInitialState: true, grid: { originX: -20, originY: -14, width: 40, height: 28 }, tiles: [] });
+export const newBoard = (): Board => ({ circuitModel: 'booleanSwitch', selectedTool: 'or', clockHoldTicks: 1, buttonInitialState: true, grid: { originX: -20, originY: -14, width: 40, height: 28 }, tiles: [] });
 export function lineCells(start: Point, end: Point) { const result: Point[] = []; let { x, y } = start; const dx = Math.abs(end.x - x), dy = -Math.abs(end.y - y), sx = x < end.x ? 1 : -1, sy = y < end.y ? 1 : -1; let error = dx + dy; while (true) {
     result.push({ x, y });
     if (x === end.x && y === end.y)
@@ -93,7 +92,7 @@ export function validateBoard(value: unknown): Board {
     if (!board || board.circuitModel !== 'booleanSwitch' || !Array.isArray(board.tiles)) throw Error('ProjectBoardInvalid');
     const defaults = newBoard(), g = { ...defaults.grid, ...board.grid };
     const result: Board = { circuitModel: 'booleanSwitch', selectedTool: board.selectedTool ?? defaults.selectedTool, clockHoldTicks: board.clockHoldTicks ?? 1,
-        latchInitialState: board.latchInitialState ?? true, grid: g, tiles: [] };
+        buttonInitialState: board.buttonInitialState ?? true, grid: g, tiles: [] };
     if (![g.originX, g.originY, g.width, g.height].every(Number.isInteger) || g.originX < -2147483648 || g.originY < -2147483648
         || g.originX + g.width > 2147483647 || g.originY + g.height > 2147483647 || g.width < 4 || g.height < 4
         || !ToolIds.slice(1).includes(result.selectedTool) || !Number.isInteger(result.clockHoldTicks) || result.clockHoldTicks < 1 || result.clockHoldTicks > 2147483647)
@@ -104,7 +103,7 @@ export function validateBoard(value: unknown): Board {
             || !ToolIds.slice(1).includes(tile.toolId)) throw Error('ProjectBoardInvalid');
         cells.add(cellKey(tile));
         validateInkSettings(tile, 'ProjectBoardInvalid');
-        const normalized: Tile = { ...inkSettings(tile.toolId,tile), x: tile.x, y: tile.y, toolId: tile.toolId, componentId: tile.componentId, isOn: tile.isOn ?? (tile.toolId === 'latch' ? result.latchInitialState : true) };
+        const normalized: Tile = { ...inkSettings(tile.toolId,tile), x: tile.x, y: tile.y, toolId: tile.toolId, componentId: tile.componentId, isOn: tile.isOn ?? (tile.toolId === 'button' ? result.buttonInitialState : true) };
         if (tile.toolId === 'clock') {
             normalized.clockHoldTicks = tile.clockHoldTicks ?? result.clockHoldTicks;
             if (!Number.isInteger(normalized.clockHoldTicks) || normalized.clockHoldTicks < 1 || normalized.clockHoldTicks > 2147483647) throw Error('ProjectBoardInvalid');

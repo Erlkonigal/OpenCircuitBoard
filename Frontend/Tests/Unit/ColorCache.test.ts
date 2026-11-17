@@ -24,7 +24,7 @@ class TestWorker {
         this.onmessage?.({ data: { generation: job.generation, rasters: job.requests.map(request => this.Pyramid.raster(request)) } } as MessageEvent);
     }
 }
-const tile = (x: number, isOn = true): Tile => ({ x, y: 0, toolId: 'latch', componentId: 1, isOn });
+const tile = (x: number, isOn = true): Tile => ({ x, y: 0, toolId: 'button', componentId: 1, isOn });
 beforeEach(() => { Workers.length = 0; vi.stubGlobal('Worker', TestWorker); });
 afterEach(() => vi.unstubAllGlobals());
 describe('Asynchronous color cache', () => {

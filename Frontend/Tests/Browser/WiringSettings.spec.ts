@@ -112,7 +112,7 @@ test('joined devices use icons without input/output dots in either display mode'
 test('Button icons have no output stub and preserve rotation and the off initial state', async ({ page }) => {
     const center = await ready(page);
     await expect(page.getByRole('button', { name: 'Button', exact: true })).toBeVisible();
-    await expect(page.getByRole('button', { name: 'Latch', exact: true })).toHaveCount(0);
+    await expect(page.getByRole('button', { name: 'Button', exact: true })).toHaveCount(1);
     await page.getByRole('button', { name: 'Button', exact: true }).click();
     await page.getByText('Off', { exact: true }).click();
     await page.mouse.click(center.x + 12, center.y + 12);
@@ -132,7 +132,7 @@ test('Button icons have no output stub and preserve rotation and the off initial
     await page.getByTestId('board').focus(); await page.keyboard.press('r'); await settle(page);
     expect(await icon()).toEqual(before);
     await expect(page.locator('.active-component-symbol .tool-glyph')).toHaveAttribute('style', /rotate\(90deg\)/);
-    await page.screenshot({ path: buildPath('LatchIconDirectionCapture.png') });
+    await page.screenshot({ path: buildPath('ButtonIconDirectionCapture.png') });
     await page.getByTestId('board').focus(); await page.keyboard.press('Control+z'); await settle(page);
     expect(await icon()).toEqual(before);
     await page.getByText('On', { exact: true }).click(); await settle(page);

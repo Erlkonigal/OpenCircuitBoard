@@ -5,7 +5,7 @@ describe('Area weighted color LOD', () => {
     it('matches design and runtime colors across local and worker rasters while preserving holes', () => {
         const tiles: Tile[] = [
             { x: 0, y: 0, toolId: 'traceRed', componentId: 1, isOn: true },
-            { x: 3, y: 2, toolId: 'latch', componentId: 2, isOn: false },
+            { x: 3, y: 2, toolId: 'button', componentId: 2, isOn: false },
             { x: 63, y: 63, toolId: 'traceWhite', componentId: 3, isOn: true },
         ];
         const raster = new ColorRaster(new Map(tiles.map(tile => [tile.y * 64 + tile.x, tile])));
@@ -26,7 +26,7 @@ describe('Area weighted color LOD', () => {
         expect([...pyramid.raster({ level: 1, x: 0, y: 0 }).pixels.slice(4, 8)]).toEqual([0, 0, 0, 0]);
     });
     it('updates ancestors and handles negative quadrants, removal and runtime states', () => {
-        const pyramid = new ColorPyramid(), tile: Tile = { x: -1, y: -1, toolId: 'latch', componentId: 3, isOn: true };
+        const pyramid = new ColorPyramid(), tile: Tile = { x: -1, y: -1, toolId: 'button', componentId: 3, isOn: true };
         pyramid.update([{ x: -1, y: -1, tiles: [tile] }]);
         const request = { level: 1, x: -1, y: -1 };
         expect(pyramid.raster(request).pixels.at(-1)).toBe(64);

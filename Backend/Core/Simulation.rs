@@ -584,10 +584,10 @@ impl SimulationCore {
         self.advanceSilent(ticks);
         self.drain()
     }
-    pub fn toggleLatch(&mut self, cell: usize) -> Result<(), String> {
+    pub fn toggleButton(&mut self, cell: usize) -> Result<(), String> {
         let &id = self.CellDevices.get(cell).ok_or("cell_out_of_bounds")?;
         if id == usize::MAX || self.Devices[id].Kind != 25 {
-            return Err("not_latch".into());
+            return Err("not_button".into());
         }
         self.markOutput(id, 1 - self.States[id]);
         self.resolve();

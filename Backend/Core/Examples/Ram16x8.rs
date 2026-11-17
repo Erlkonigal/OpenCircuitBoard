@@ -99,7 +99,7 @@ pub fn buildProject() -> ProjectDocument {
     let mut controls = vec![];
     for net in 8..16 {
         controls.push(Node {
-            Kind: "latch",
+            Kind: "button",
             Output: net,
             Inputs: vec![],
             On: net == Reset,
@@ -138,7 +138,7 @@ pub fn buildProject() -> ProjectDocument {
     for bit in 0..8 {
         let x = left + bit as i32 * CellWidth;
         for (kind, point, signal) in [
-            ("latch", (x + 4, top - 12), 16 + bit),
+            ("button", (x + 4, top - 12), 16 + bit),
             ("switch", (x + 7, top - 12), 50_000 + bit),
             ("led", (x + 4, top - 8), 60_000 + bit),
             ("not", (x + 3, top - 4), InvertedData + bit),
@@ -261,7 +261,7 @@ pub fn set(
 ) {
     let c = cell(project, signal, origin, core.Width);
     if core.states()[c] != (on as u8) {
-        core.toggleLatch(c).unwrap();
+        core.toggleButton(c).unwrap();
     }
 }
 pub fn address(core: &mut SimulationCore, p: &ProjectDocument, o: (i32, i32), value: u8) {
