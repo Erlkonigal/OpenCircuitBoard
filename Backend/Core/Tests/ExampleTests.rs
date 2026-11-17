@@ -37,8 +37,23 @@ fn committedExampleMatchesGeneratorAndPlaysThreeCompleteLoops() {
         .map(|tile| tile.ComponentId)
         .collect();
     assert_eq!(leds.len(), 40);
-    assert!(project.Board.Tiles.len() < 50_310);
+    assert!(project.Board.Tiles.len() < 27_315);
     assert!(project.Board.Tiles.iter().any(|t| t.ToolId == "switch"));
+    let clocks: Vec<_> = project
+        .Board
+        .Tiles
+        .iter()
+        .filter(|tile| tile.ToolId == "clock")
+        .collect();
+    assert_eq!(clocks.len(), 1);
+    assert_eq!(clocks[0].ClockHoldTicks, Some(4));
+    assert!(
+        !project
+            .Board
+            .Tiles
+            .iter()
+            .any(|tile| matches!(tile.ToolId.as_str(), "xor" | "xnor"))
+    );
     assert!(
         !project
             .Board

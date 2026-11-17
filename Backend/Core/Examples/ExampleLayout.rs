@@ -148,6 +148,11 @@ impl Layout {
                     self.wire((x + 4, sy), Wire::Trace(n.Inputs[2]));
                 }
                 x += 6;
+            } else if n.Kind == "clock" {
+                columns.push((x + 2, n.Output));
+                self.device(n.Kind, [(x + 1, gateY)], n.Output as i32 + 1, n.On);
+                self.wire((x + 2, gateY), Wire::Trace(n.Output));
+                x += 4;
             } else if matches!(n.Kind, "buffer" | "not" | "led") {
                 columns.push((x, n.Inputs[0]));
                 self.wire((x, gateY), Wire::Trace(n.Inputs[0]));

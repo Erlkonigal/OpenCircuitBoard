@@ -8,8 +8,10 @@ pub const Message: &str = "Hello, World!";
 pub const DisplayOrigin: Point = (-22, -37);
 pub const PixelPitch: i32 = 10;
 pub const PixelSize: i32 = 4;
-pub const StartupTicks: usize = 5;
+pub const StartupTicks: usize = 13;
 pub const CharacterTicks: usize = 8;
+pub const AddressSignals: [usize; 4] = [16, 17, 18, 19];
+pub const WordSignals: usize = 40;
 pub fn glyph(character: char) -> [&'static str; 8] {
     match character {
         'H' => [
@@ -44,37 +46,154 @@ pub fn glyph(character: char) -> [&'static str; 8] {
     }
 }
 
+// Complementary clock phases select input or buffered feedback, preserving one bit.
+fn muxLatch(
+    nodes: &mut Vec<Node>,
+    data: usize,
+    output: usize,
+    input: usize,
+    sample: usize,
+    hold: usize,
+    switchIdBase: usize,
+) {
+    nodes.push(Node::gate(
+        "switch",
+        switchIdBase,
+        vec![data, input, sample],
+    ));
+    nodes.push(Node::gate(
+        "switch",
+        switchIdBase + 1,
+        vec![output, input, hold],
+    ));
+    nodes.push(Node::gate("buffer", output, vec![input]));
+}
+
 pub fn buildProject() -> ProjectDocument {
     let mut layout = Layout::new();
     let mut nodes = vec![];
-    for i in 0..104 {
-        nodes.push(Node::gate(
-            if i == 0 { "not" } else { "buffer" },
-            16 + i,
-            vec![16 + if i == 0 { 103 } else { i - 1 }],
-        ));
-    }
-    for i in 0..13 {
-        nodes.push(Node::gate(
-            if i == 12 { "xnor" } else { "xor" },
-            i,
-            vec![16 + i * 8, 16 + ((i + 1) % 13) * 8],
-        ));
-    }
+    let clock = 13;
+    let phaseA = 14;
+    let phaseB = 15;
     nodes.push(Node {
-        Kind: "latch",
-        Output: 13,
+        Kind: "clock",
+        Output: clock,
         Inputs: vec![],
-        On: true,
+        On: false,
     });
-    nodes.push(Node::gate("buffer", 120, vec![13]));
-    nodes.push(Node::gate("buffer", 121, vec![120]));
-    nodes.push(Node::gate("buffer", 122, vec![121]));
-    let (_, bottom) = layout.bank(&nodes, -300, -140, 2, 0);
+    nodes.push(Node::gate("buffer", phaseA, vec![clock]));
+    nodes.push(Node::gate("not", phaseB, vec![clock]));
+    nodes.push(Node::gate("nor", 30, (0..13).collect()));
+    nodes.push(Node::gate("or", 31, vec![12, 30]));
+    nodes.push(Node::gate("not", 32, vec![31]));
+    for stage in 0..13 {
+        let base = 1000 + stage * 4;
+        let data = if stage == 0 { 31 } else { stage - 1 };
+        let master = base;
+        let masterInput = base + 1;
+        let outputInput = base + 2;
+        let switchId = 100_000 + stage * 4;
+        muxLatch(
+            &mut nodes,
+            data,
+            master,
+            masterInput,
+            phaseB,
+            phaseA,
+            switchId,
+        );
+        muxLatch(
+            &mut nodes,
+            master,
+            stage,
+            outputInput,
+            phaseA,
+            phaseB,
+            switchId + 2,
+        );
+    }
+    for bit in 0..4 {
+        nodes.push(Node::gate(
+            "or",
+            AddressSignals[bit],
+            (0..13).filter(|stage| stage & (1 << bit) != 0).collect(),
+        ));
+    }
+    nodes.push(Node::gate("or", 20, (0..13).collect()));
+    nodes.push(Node::gate("buffer", 21, vec![20]));
+    nodes.push(Node::gate("buffer", 22, vec![21]));
+    nodes.push(Node::gate("buffer", 23, vec![22]));
+    let ringLeft = -300;
+    let ringTop = -145;
+    let (encoderRight, bottom) = layout.bank(&nodes, ringLeft, ringTop, 3, 0);
+    let clockTile = layout
+        .Tiles
+        .values_mut()
+        .find(|tile| tile.ToolId == "clock")
+        .unwrap();
+    clockTile.ClockHoldTicks = Some((CharacterTicks / 2) as i32);
     assert!(bottom < -75);
     // Thirteen word lines cross forty bit lines. Only stored zeroes get a switch.
     let romLeft = -250;
     let romTop = -75;
+    let decoderLeft = ringLeft;
+    let decoderTop = -102;
+    let mut decoder = vec![];
+    for bit in 0..4 {
+        decoder.push(Node::gate("buffer", 60 + bit, vec![AddressSignals[bit]]));
+        decoder.push(Node::gate("not", 64 + bit, vec![AddressSignals[bit]]));
+    }
+    for row in 0..13 {
+        decoder.push(Node::gate(
+            "and",
+            WordSignals + row,
+            (0..4)
+                .map(|bit| {
+                    if row & (1 << bit) != 0 {
+                        60 + bit
+                    } else {
+                        64 + bit
+                    }
+                })
+                .collect(),
+        ));
+    }
+    let (decoderRight, _) = layout.bank(&decoder, decoderLeft, decoderTop, 3, 1);
+    for group in 0..2 {
+        let lane = 3 + group;
+        let bus = 11_000 + lane;
+        let spine = decoderLeft - 3 * (2 - group) as i32;
+        let y = decoderTop + lane as i32 * 2;
+        for sy in y..=romTop + 50 {
+            layout.wire((spine, sy), Wire::Bus(bus));
+        }
+        for sx in spine + 1..decoderLeft {
+            layout.wire((sx, y), Wire::Bus(bus));
+        }
+    }
+    let addressBusY = decoderTop + 4;
+    let addressTrunkX = encoderRight + 2;
+    let ey = -85;
+    for sx in encoderRight + 1..=addressTrunkX {
+        layout.wire((sx, ringTop + 4), Wire::Bus(2));
+    }
+    for sy in ringTop + 4..=ey {
+        let endpoint = sy == ringTop + 4 || sy == addressBusY;
+        let crossesLane = sy % 2 == 0;
+        layout.wire(
+            (addressTrunkX, sy),
+            if endpoint {
+                Wire::Bus(2)
+            } else if crossesLane {
+                Wire::Cross
+            } else {
+                Wire::Bus(2)
+            },
+        );
+    }
+    for sx in decoderRight + 1..=addressTrunkX {
+        layout.wire((sx, addressBusY), Wire::Bus(2));
+    }
     let ground = 9999;
     layout.Fixed.insert(ground, false);
     for pixel in 0..40 {
@@ -101,16 +220,16 @@ pub fn buildProject() -> ProjectDocument {
     for (row, ch) in Message.chars().enumerate() {
         let y = romTop + row as i32 * 4;
         let group = row / 8;
-        let spine = -300 - 3 * (2 - group) as i32;
+        let spine = ringLeft - 3 * (2 - group) as i32;
         for x in spine + 1..romLeft + 40 * 5 {
             let isBit = x >= romLeft && (x - romLeft) % 5 == 0;
-            let spineCross = group == 0 && x == -303;
+            let spineCross = group == 0 && x == ringLeft - 3;
             layout.wire(
                 (x, y + 2),
                 if isBit || spineCross {
                     Wire::Cross
                 } else {
-                    Wire::Trace(row)
+                    Wire::Trace(WordSignals + row)
                 },
             );
         }
@@ -125,16 +244,15 @@ pub fn buildProject() -> ProjectDocument {
                 );
                 layout.wire((x + 1, y), Wire::Trace(200 + pixel));
                 layout.wire((x + 3, y), Wire::Trace(ground));
-                layout.wire((x + 2, y + 1), Wire::Trace(row));
+                layout.wire((x + 2, y + 1), Wire::Trace(WordSignals + row));
             }
         }
     }
-    // Extend the two global buses through the matrix; tap colors pick the word line.
-    layout.globals(-300, &[-140], 2, romTop + 50);
+    // Tap each decoded row from one of two local buses beside the ROM.
     for row in 0..13 {
         let y = romTop + row as i32 * 4 + 2;
         let group = row / 8;
-        let spine = -300 - 3 * (2 - group) as i32;
+        let spine = ringLeft - 3 * (2 - group) as i32;
         // The Trace immediately next to the bus selects its color.
         assert!(layout.Wires.contains_key(&(spine, y)));
     }
@@ -176,32 +294,24 @@ pub fn buildProject() -> ProjectDocument {
             layout.wire((px, py), Wire::Trace(500 + pixel));
         }
     }
-    // Startup enable is distributed in its own trace, with isolated crossings at display buses.
     let enableX = DisplayOrigin.0 - 6;
-    // Bring enable from its bank output using a separate local bus lane.
-    let enablePin = layout.point(122);
-    let tap = (enablePin.0 + 1, enablePin.1);
-    // The bank maps 122 to a local bus; route from its output below the bank instead.
-    let ey = -85;
-    for x in tap.0.min(enableX)..=tap.0.max(enableX) {
-        layout.wire((x, ey), Wire::Trace(122));
-    }
-    for y in tap.1 + 1..ey {
-        layout.wire((tap.0, y), Wire::Trace(122));
+    // Bus color 7 carries the settled nonempty-ring signal beside the address bits.
+    for x in enableX..addressTrunkX {
+        layout.wire((x, ey), Wire::Trace(23));
     }
     for y in ey..DisplayOrigin.1 + 71 {
-        layout.wire((enableX, y), Wire::Trace(122));
+        layout.wire((enableX, y), Wire::Trace(23));
     }
     for row in 0..8 {
         let py = DisplayOrigin.1 + row * PixelPitch;
         let sy = py - 2;
         for x in enableX + 1..=DisplayOrigin.0 + 4 * PixelPitch - 1 {
             let isBus = (0..5).any(|c| x == DisplayOrigin.0 + c * PixelPitch - 3);
-            layout.wire((x, sy), if isBus { Wire::Cross } else { Wire::Trace(122) });
+            layout.wire((x, sy), if isBus { Wire::Cross } else { Wire::Trace(23) });
         }
         for c in 0..5 {
             let px = DisplayOrigin.0 + c * PixelPitch;
-            layout.wire((px - 1, py - 1), Wire::Trace(122));
+            layout.wire((px - 1, py - 1), Wire::Trace(23));
         }
     }
     layout.finish()

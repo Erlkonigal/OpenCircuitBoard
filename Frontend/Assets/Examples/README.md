@@ -10,19 +10,21 @@ Open the `.ocb` archives in the desktop app with Ctrl+O. Both use formatVersion 
 2. Choose **2D**. Keep the pointer at the canvas center and scroll out to about **9%** (18 wheel steps from the initial 50%). All eight rows should be visible.
 3. Set **Ticks per second** to **16**, leave MAX off, and run.
 
-Each character lasts eight ticks: half a second at 16 TPS, with a 6.5-second loop. The first five ticks are blank; H appears at tick 5. Pause and step to inspect individual ticks. Reset restarts the sequence; Back to design restores editable cells.
+Each character lasts eight ticks: half a second at 16 TPS, with a 6.5-second loop. The first thirteen ticks are blank; H appears at tick 13 while the sequencer initializes and the address decoder settles. Pause and step to inspect individual ticks. Reset restarts the sequence; Back to design restores editable cells.
 
-The circuit contains a 104-stage Not/Buffer ring, thirteen XOR/XNOR phase outputs, a 13-word by 40-bit ROM matrix, startup masking and forty LEDs. Each ROM bit line defaults to 1. A stored zero places a Switch between the bit line and a Trace fixed at 0; the word line controls that Switch. Selecting a word grounds its zero bits. Stored ones need no switch. Fixed 0 suppresses an undriven default 1; switches do not add data delay after closing.
+The sequencer is a 13-stage one-hot shift ring. Each storage bit uses two phase-controlled Switches and a Buffer feedback path. Four OR gates encode the active stage as a four-bit address; one Bus carries those address bits and the valid signal to a decoder placed beside the ROM. The decoder's two local Buses select one of thirteen word lines. The valid signal masks the display while the ring starts. This replaces the long multi-signal sequencer-to-ROM route with a four-bit address Bus.
 
-Five output Buses each carry the eight rows of a display column. Colored Trace taps connect directly to the directional AND and LED pins. Cross keeps intersecting word and bit lines isolated. Pixel top-lefts are `(-21 + 10 * column, -37 + 10 * row)`, each a 4x4 LED component. One startup Latch and three Buffer stages mask propagation before the first glyph.
+The 13-word by 40-bit ROM matrix uses the same switch ROM layout. Each bit line defaults to 1. A stored zero places a Switch between the bit line and a Trace fixed at 0; the word line controls that Switch. Selecting a word grounds its zero bits. Stored ones need no switch. Fixed 0 suppresses an undriven default 1; switches do not add data delay after closing.
 
-| Layout metric | Previous circuit | Switch ROM |
-| --- | ---: | ---: |
-| Occupied cells | 50,310 | 27,315 |
-| Board rectangle | 538x188 | 525x237 |
-| Rectangle area | 101,144 | 124,425 |
+Five output Buses each carry the eight rows of a display column. Colored Trace taps connect directly to the directional AND and LED pins. Cross keeps intersecting word and bit lines isolated. Pixel top-lefts are `(-21 + 10 * column, -37 + 10 * row)`, each a 4x4 LED component. Three Buffer stages delay the valid signal until startup settles.
 
-Occupied cells decrease **45.7%**, while rectangle area increases **23.0%**. These measure different aspects of compression. Press F for the full overview and zoom into the rightmost display for readable glyphs.
+| Layout metric | Previous circuit | Switch ROM | Encoded ring |
+| --- | ---: | ---: | ---: |
+| Occupied cells | 50,310 | 27,315 | 25,151 |
+| Board rectangle | 538x188 | 525x237 | 575x242 |
+| Rectangle area | 101,144 | 124,425 | 139,150 |
+
+The shift-ring version uses **7.9% fewer occupied cells** than the earlier Switch ROM archive and **50.0% fewer** than the previous circuit. Its bounding rectangle is **11.8% larger** than the earlier Switch ROM layout, so the cell-count saving comes with a wider control bank. These measures describe different aspects of routing compression. Press F for the full overview and zoom into the rightmost display for readable glyphs.
 
 ## RAM 16x8
 
