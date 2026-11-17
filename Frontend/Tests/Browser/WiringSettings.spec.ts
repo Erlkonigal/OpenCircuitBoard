@@ -51,16 +51,14 @@ test('Switch icons rotate without pin dots and survive history, clipboard and bo
     await expect(direction.locator('input[value="0"]')).toBeChecked();
 });
 
-test('Trace sources and undriven defaults stay separate from Clock settings and Cross color joins', async ({ page }) => {
+test('Trace has no drive controls and Clock and Cross settings remain editable', async ({ page }) => {
     const center = await ready(page);
     await page.getByRole('button', { name: 'Trace', exact: true }).click();
-    await page.locator('[aria-label="Fixed drive"]').getByText('0', { exact: true }).click();
-    await page.locator('[aria-label="Undriven default"]').getByText('1', { exact: true }).click();
     await page.mouse.click(center.x + 12, center.y + 12);
     await page.keyboard.press('v'); await page.mouse.click(center.x + 12, center.y + 12);
-    await expect(page.locator('[aria-label="Fixed drive"] input[value="0"]')).toBeChecked();
-    await expect(page.locator('[aria-label="Undriven default"] input[value="1"]')).toBeChecked();
-    await page.screenshot({ path: buildPath('TraceSourceSettingsCapture.png') });
+    await expect(page.getByLabel('Fixed drive')).toHaveCount(0);
+    await expect(page.getByLabel('Undriven default')).toHaveCount(0);
+    await page.screenshot({ path: buildPath('PassiveTraceSettingsCapture.png') });
     await page.getByRole('button', { name: 'Clear selection' }).click();
     await page.getByRole('button', { name: 'Clock', exact: true }).click();
     await page.getByLabel('Clock hold', { exact: true }).fill('7');
@@ -111,9 +109,11 @@ test('joined devices use icons without input/output dots in either display mode'
     }
 });
 
-test('Latch rotates its output icon in the board and inspector while retaining the off initial state', async ({ page }) => {
+test('Button rotates its output icon in the board and inspector while retaining the off initial state', async ({ page }) => {
     const center = await ready(page);
-    await page.getByRole('button', { name: 'Latch', exact: true }).click();
+    await expect(page.getByRole('button', { name: 'Button', exact: true })).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Latch', exact: true })).toHaveCount(0);
+    await page.getByRole('button', { name: 'Button', exact: true }).click();
     await page.getByText('Off', { exact: true }).click();
     await page.mouse.click(center.x + 12, center.y + 12);
     await page.keyboard.press('v'); await page.mouse.click(center.x + 12, center.y + 12);

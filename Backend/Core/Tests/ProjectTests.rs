@@ -13,6 +13,12 @@ fn tile(x: i32, y: i32, kind: &str, id: i32) -> Tile {
         ..Default::default()
     }
 }
+fn button(x: i32, y: i32, id: i32, on: bool, direction: i32) -> Tile {
+    let mut tile = tile(x, y, "latch", id);
+    tile.IsOn = on;
+    tile.Direction = direction;
+    tile
+}
 fn board(tiles: Vec<Tile>) -> Board {
     Board {
         Grid: Grid {
@@ -68,19 +74,18 @@ fn stableToolsAndRejectedArchives() {
     std::fs::remove_file(file).unwrap();
 }
 #[test]
-fn fixedZeroOverridesDefaultsAndSeparateIdsStayIsolated() {
-    let mut source = tile(0, 0, "trace", 1);
-    source.FixedDrive = Some(false);
-    source.DefaultValue = true;
-    let mut neighbor = tile(1, 0, "trace", 2);
-    neighbor.DefaultValue = true;
-    let (mut core, origin) = compile(&board(vec![source.clone(), neighbor.clone()]));
+fn tracesDefaultLowAndButtonsDriveConstants() {
+    let (mut core, origin) = compile(&board(vec![tile(0, 0, "trace", 1)]));
     assert_eq!(state(&mut core, origin, 0, 0), 0);
-    assert_eq!(state(&mut core, origin, 1, 0), 1);
-    neighbor.ComponentId = 1;
-    neighbor.FixedDrive = Some(false);
-    let (mut core, origin) = compile(&board(vec![source, neighbor]));
-    assert_eq!(state(&mut core, origin, 1, 0), 0);
+
+    let (mut core, origin) = compile(&board(vec![
+        button(-1, 0, 2, false, 0),
+        tile(0, 0, "trace", 1),
+    ]));
+    assert_eq!(state(&mut core, origin, 0, 0), 0);
+    core.toggleLatch((0 - origin.1) as usize * core.Width + (-1 - origin.0) as usize)
+        .unwrap();
+    assert_eq!(state(&mut core, origin, 0, 0), 1);
 }
 #[test]
 fn busSourcesOrIndependentlyWithoutPortInks() {
@@ -95,7 +100,7 @@ fn busSourcesOrIndependentlyWithoutPortInks() {
         tile(1, 0, "traceGreen", 6),
     ];
     tiles[6].Direction = 2;
-    tiles[7].FixedDrive = Some(true);
+    tiles.push(button(2, 0, 7, true, 2));
     let b = board(tiles);
     let (mut core, o) = compile(&b);
     assert_eq!(
@@ -117,12 +122,12 @@ fn busSourcesOrIndependentlyWithoutPortInks() {
 #[test]
 fn crossJoinsOnlySelectedColors() {
     for mask in [0, 1] {
-        let mut source = tile(-1, 0, "trace", 1);
-        source.FixedDrive = Some(true);
+        let source = button(-2, 0, 6, true, 0);
         let mut cross = tile(0, 0, "cross", 2);
         cross.CrossMask = mask;
         let (mut core, o) = compile(&board(vec![
             source,
+            tile(-1, 0, "trace", 1),
             cross,
             tile(0, 1, "trace", 3),
             tile(1, 0, "trace", 4),
@@ -134,61 +139,62 @@ fn crossJoinsOnlySelectedColors() {
     }
 }
 #[test]
-fn switchDelayBidirectionalityDefaultsAndSnapshots() {
-    let mut left = tile(-1, 0, "trace", 1);
-    left.FixedDrive = Some(false);
-    let mut right = tile(1, 0, "traceRed", 3);
-    right.DefaultValue = true;
-    let mut control = tile(0, 2, "latch", 5);
-    control.Direction = 3;
+fn switchDelayBidirectionalityAndSnapshots() {
     let b = board(vec![
-        left,
-        tile(0, 0, "switch", 2),
-        right,
-        tile(0, 1, "traceBlue", 4),
-        control,
+        button(-2, 0, 1, false, 0),
+        tile(-1, 0, "trace", 2),
+        tile(0, 0, "switch", 3),
+        tile(1, 0, "traceRed", 4),
+        tile(0, 1, "traceBlue", 5),
+        button(0, 2, 6, false, 3),
     ]);
     let (mut core, o) = compile(&b);
-    assert_eq!(state(&mut core, o, 1, 0), 1);
-    let controlCell = (2 - o.1) as usize * core.Width + (0 - o.0) as usize;
-    core.toggleLatch(controlCell).unwrap();
-    assert_eq!(state(&mut core, o, 1, 0), 1);
+    assert_eq!(state(&mut core, o, 1, 0), 0);
+    let left = (0 - o.1) as usize * core.Width + (-2 - o.0) as usize;
+    let control = (0 - o.1) as usize * core.Width + (0 - o.0) as usize + core.Width * 2;
+    core.toggleLatch(left).unwrap();
+    assert_eq!(state(&mut core, o, 1, 0), 0);
+    core.toggleLatch(control).unwrap();
+    assert_eq!(state(&mut core, o, 1, 0), 0);
     let pending = core.capture();
     core.advanceSilent(1);
-    assert_eq!(state(&mut core, o, 1, 0), 0);
-    core.toggleLatch(controlCell).unwrap();
-    core.advanceSilent(1);
     assert_eq!(state(&mut core, o, 1, 0), 1);
+    core.toggleLatch(control).unwrap();
+    core.advanceSilent(1);
+    assert_eq!(state(&mut core, o, 1, 0), 0);
     core.restore(&pending).unwrap();
     core.advanceSilent(1);
-    assert_eq!(state(&mut core, o, 1, 0), 0);
-    // Drive from the right: a closed switch must carry the original source back to the left.
-    let mut b = b;
-    b.Tiles[0].FixedDrive = None;
-    b.Tiles[0].DefaultValue = false;
-    b.Tiles[2].FixedDrive = Some(true);
+    assert_eq!(state(&mut core, o, 1, 0), 1);
+
+    let b = board(vec![
+        tile(-1, 0, "trace", 1),
+        tile(0, 0, "switch", 2),
+        tile(1, 0, "traceRed", 3),
+        button(2, 0, 4, true, 2),
+        tile(0, 1, "traceBlue", 5),
+        button(0, 2, 6, false, 3),
+    ]);
     let (mut core, o) = compile(&b);
-    core.toggleLatch((2 - o.1) as usize * core.Width + (0 - o.0) as usize)
-        .unwrap();
+    assert_eq!(state(&mut core, o, -1, 0), 0);
+    let control = (0 - o.1) as usize * core.Width + (0 - o.0) as usize + core.Width * 2;
+    core.toggleLatch(control).unwrap();
     core.advanceSilent(1);
     assert_eq!(state(&mut core, o, -1, 0), 1);
-    core.toggleLatch((2 - o.1) as usize * core.Width + (0 - o.0) as usize)
-        .unwrap();
-    core.advanceSilent(1);
-    assert_eq!(state(&mut core, o, -1, 0), 0);
 }
 #[test]
 fn directionAndGateTruthTables() {
     for kind in ["and", "or", "xor", "nand", "nor", "xnor"] {
         for a in [false, true] {
             for b in [false, true] {
-                let mut left = tile(-1, 0, "trace", 1);
-                left.FixedDrive = Some(a);
-                let mut top = tile(0, -1, "traceRed", 2);
-                top.FixedDrive = Some(b);
+                let left = tile(-1, 0, "trace", 1);
+                let leftButton = button(-2, 0, 5, a, 0);
+                let top = tile(0, -1, "traceRed", 2);
+                let topButton = button(0, -2, 6, b, 1);
                 let (mut core, o) = compile(&board(vec![
                     left,
+                    leftButton,
                     top,
+                    topButton,
                     tile(0, 0, kind, 3),
                     tile(1, 0, "traceBlue", 4),
                 ]));
@@ -205,12 +211,12 @@ fn directionAndGateTruthTables() {
             }
         }
     }
-    let mut source = tile(0, -1, "trace", 1);
-    source.FixedDrive = Some(true);
+    let source = tile(0, -1, "trace", 1);
     let mut gate = tile(0, 0, "buffer", 2);
     gate.Direction = 1;
     let (mut core, o) = compile(&board(vec![
         source,
+        button(0, -2, 5, true, 1),
         gate,
         tile(0, 1, "trace", 3),
         tile(1, 0, "trace", 4),
@@ -221,9 +227,7 @@ fn directionAndGateTruthTables() {
 }
 #[test]
 fn archivesAndBlueprintsPreserveSettingsAndRejectMalformedComponents() {
-    let mut t = tile(0, 0, "traceWhite", 1);
-    t.FixedDrive = Some(false);
-    t.DefaultValue = true;
+    let t = tile(0, 0, "traceWhite", 1);
     let mut switch = tile(1, 0, "switch", 2);
     switch.Direction = 3;
     let project = ProjectDocument {
@@ -244,17 +248,46 @@ fn archivesAndBlueprintsPreserveSettingsAndRejectMalformedComponents() {
         let mut project = project.clone();
         match bad {
             0 => project.Board.Tiles[0].Direction = 4,
-            1 => project.Board.Tiles[1].FixedDrive = Some(true),
-            2 => project.Board.Tiles[1].CrossMask = 1,
-            _ => {
+            1 => project.Board.Tiles[1].CrossMask = 1,
+            2 => {
                 let mut extra = project.Board.Tiles[0].clone();
                 extra.X = 3;
                 project.Board.Tiles.push(extra);
             }
+            _ => project.Board.Tiles[0].ToolId = "missing".into(),
         }
         assert!(project.validate().is_err());
     }
 }
+#[test]
+fn archivesRejectUnknownTileFields() {
+    use std::io::Write;
+    let cases = [
+        (
+            "board",
+            "ProjectBoardInvalid",
+            r#"{"formatVersion":2,"board":{"circuitModel":"booleanSwitch","tiles":[{"x":0,"y":0,"toolId":"trace","componentId":1,"unexpected":false}]}}"#,
+        ),
+        (
+            "blueprint",
+            "ProjectBlueprintInvalid",
+            r#"{"formatVersion":2,"board":{"circuitModel":"booleanSwitch","tiles":[]},"blueprints":[{"id":"unknown","name":"Unknown","width":1,"height":1,"tiles":[{"x":0,"y":0,"toolId":"trace","componentId":1,"isOn":true,"unexpected":false}]}]}"#,
+        ),
+    ];
+    for (name, error, json) in cases {
+        let file =
+            std::env::temp_dir().join(format!("OcbUnknownTile-{name}-{}.ocb", std::process::id()));
+        let mut writer = zip::ZipWriter::new(std::fs::File::create(&file).unwrap());
+        writer
+            .start_file("project.json", zip::write::SimpleFileOptions::default())
+            .unwrap();
+        writer.write_all(json.as_bytes()).unwrap();
+        writer.finish().unwrap();
+        assert_eq!(Project::load(&file).unwrap_err(), error);
+        std::fs::remove_file(file).unwrap();
+    }
+}
+
 #[test]
 fn malformedCompileInputsAreRejected() {
     let mut input = CompileInput::empty(1, 1);
@@ -270,78 +303,58 @@ fn malformedCompileInputsAreRejected() {
         SimulationCore::compile(input).err().unwrap().ErrorReason,
         "array_size_mismatch"
     );
+
+    for (fixedDrive, defaultValue) in [(0, 0), (-1, 1)] {
+        let mut input = CompileInput::empty(1, 1);
+        input.Kinds[0] = 1;
+        input.ComponentIds[0] = 1;
+        input.FixedDrives[0] = fixedDrive;
+        input.DefaultValues[0] = defaultValue;
+        assert_eq!(
+            SimulationCore::compile(input).err().unwrap().ErrorReason,
+            "invalid_component_settings"
+        );
+    }
 }
 #[test]
 fn switchCyclesReleaseWithdrawnDriversAndFanOutWithoutAddedDelay() {
-    let mut tiles = vec![tile(-3, 0, "latch", 1), tile(-2, 0, "trace", 2)];
+    let mut tiles = vec![button(-3, 0, 1, true, 0)];
     for y in 0..5 {
-        tiles.push(tile(-1, y, "trace", 2));
-        tiles.push(tile(1, y, "traceRed", 3));
+        tiles.push(tile(-2, y, "trace", 2));
     }
     for (index, y) in [0, 2, 4].into_iter().enumerate() {
-        tiles.push(tile(0, y, "switch", 4 + index as i32 * 2));
-        let mut control = tile(0, y + 1, "traceGreen", 5 + index as i32 * 2);
-        control.FixedDrive = Some(true);
-        tiles.push(control);
+        let destination = 30 + index as i32;
+        let control = 10 + index as i32;
+        tiles.push(tile(-1, y, "trace", 2));
+        tiles.push(tile(0, y, "switch", 20 + index as i32));
+        tiles.push(tile(1, y, "traceRed", destination));
+        tiles.push(tile(2, y, "traceRed", destination));
+        tiles.push(tile(0, y + 1, "traceGreen", control));
+        tiles.push(button(1, y + 1, 40 + index as i32, true, 2));
     }
-    let (mut core, origin) = compile(&board(tiles.clone()));
+    let (mut core, origin) = compile(&board(tiles));
     core.advanceSilent(1);
     let source = (-origin.1) as usize * core.Width + (-3 - origin.0) as usize;
-    core.toggleLatch(source).unwrap();
-    assert_eq!(state(&mut core, origin, 1, 4), 1);
+    for y in [0, 2, 4] {
+        assert_eq!(state(&mut core, origin, 2, y), 1);
+    }
     let connected = core.capture();
     core.toggleLatch(source).unwrap();
-    assert_eq!(
-        state(&mut core, origin, 1, 4),
-        0,
-        "A switch cycle must not retain a removed high"
-    );
+    for y in [0, 2, 4] {
+        assert_eq!(
+            state(&mut core, origin, 2, y),
+            0,
+            "A switch cycle must not retain a removed high"
+        );
+    }
     core.restore(&connected).unwrap();
-    core.toggleLatch(source).unwrap();
-    assert_eq!(state(&mut core, origin, 1, 4), 0);
-    // Split the far side into three independent destinations supplied by one source.
-    tiles.retain(|t| !(t.X == 1 && t.Y % 2 == 1));
-    for t in tiles.iter_mut().filter(|t| t.X == 1) {
-        t.ComponentId = 20 + t.Y;
-    }
-    let (mut core, origin) = compile(&board(tiles));
-    core.advanceSilent(1);
-    let source = (-origin.1) as usize * core.Width + (-3 - origin.0) as usize;
-    core.toggleLatch(source).unwrap();
     for y in [0, 2, 4] {
-        assert_eq!(state(&mut core, origin, 1, y), 1);
+        assert_eq!(state(&mut core, origin, 2, y), 1);
     }
     core.toggleLatch(source).unwrap();
     for y in [0, 2, 4] {
-        assert_eq!(state(&mut core, origin, 1, y), 0);
+        assert_eq!(state(&mut core, origin, 2, y), 0);
     }
-}
-
-#[test]
-fn defaultsFollowConnectivityWithoutBecomingDrivers() {
-    let mut left = tile(-1, 0, "trace", 1);
-    left.DefaultValue = true;
-    let mut control = tile(0, 1, "traceGreen", 4);
-    control.FixedDrive = Some(true);
-    let mut tiles = vec![
-        left,
-        tile(0, 0, "switch", 2),
-        tile(1, 0, "traceRed", 3),
-        control,
-    ];
-    let (mut core, origin) = compile(&board(tiles.clone()));
-    assert_eq!(state(&mut core, origin, 1, 0), 0);
-    core.advanceSilent(1);
-    assert_eq!(state(&mut core, origin, 1, 0), 1);
-    tiles.push(tile(2, 0, "latch", 5));
-    tiles.last_mut().unwrap().Direction = 2;
-    let (mut core, origin) = compile(&board(tiles));
-    core.advanceSilent(1);
-    assert_eq!(
-        state(&mut core, origin, -1, 0),
-        0,
-        "A connected active zero suppresses defaults everywhere"
-    );
 }
 
 #[test]

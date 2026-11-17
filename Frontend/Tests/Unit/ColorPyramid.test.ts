@@ -1,7 +1,22 @@
 import { describe, expect, it } from 'vitest';
-import { ColorPyramid, colorLevel, detailLevel, tileColor } from '../../Source/ColorPyramid';
+import { ColorPyramid, ColorRaster, colorLevel, detailLevel, tileColor } from '../../Source/ColorPyramid';
 import type { Tile } from '../../Source/Model';
 describe('Area weighted color LOD', () => {
+    it('matches design and runtime colors across local and worker rasters while preserving holes', () => {
+        const tiles: Tile[] = [
+            { x: 0, y: 0, toolId: 'traceRed', componentId: 1, isOn: true },
+            { x: 3, y: 2, toolId: 'latch', componentId: 2, isOn: false },
+            { x: 63, y: 63, toolId: 'traceWhite', componentId: 3, isOn: true },
+        ];
+        const raster = new ColorRaster(new Map(tiles.map(tile => [tile.y * 64 + tile.x, tile])));
+        const pyramid = new ColorPyramid();
+        pyramid.update([{ x: 0, y: 0, tiles }]);
+        expect(raster.Pixels).toEqual(pyramid.raster({ level: 0, x: 0, y: 0 }).pixels);
+        raster.update(tile => !tile.isOn);
+        pyramid.updateStates([{ x: 0, y: 0, states: Uint8Array.from(tiles, tile => Number(!tile.isOn)) }]);
+        expect(raster.Pixels).toEqual(pyramid.raster({ level: 0, x: 0, y: 0 }).pixels);
+        expect([...raster.Pixels.slice(4, 8)]).toEqual([0, 0, 0, 0]);
+    });
     it('averages premultiplied color and preserves empty coverage', () => {
         const pyramid = new ColorPyramid();
         const tiles: Tile[] = [{ x: 0, y: 0, toolId: 'traceRed', componentId: 1, isOn: true }, { x: 1, y: 0, toolId: 'traceBlue', componentId: 2, isOn: true }];

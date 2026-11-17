@@ -39,8 +39,7 @@ pub struct Layout {
     pub Tiles: BTreeMap<Point, Tile>,
     pub Wires: BTreeMap<Point, Wire>,
     pub Colors: HashMap<usize, usize>,
-    pub Fixed: HashMap<usize, bool>,
-    pub Defaults: HashSet<usize>,
+    pub Sources: BTreeSet<usize>,
     pub NextId: i32,
 }
 impl Layout {
@@ -49,8 +48,7 @@ impl Layout {
             Tiles: BTreeMap::new(),
             Wires: BTreeMap::new(),
             Colors: HashMap::new(),
-            Fixed: HashMap::new(),
-            Defaults: HashSet::new(),
+            Sources: BTreeSet::new(),
             NextId: 1_000_000,
         }
     }
@@ -90,6 +88,9 @@ impl Layout {
                 }
             }
         }
+    }
+    pub fn source(&mut self, net: usize) {
+        self.Sources.insert(net);
     }
     pub fn point(&self, net: usize) -> Point {
         let tile = self
@@ -232,6 +233,53 @@ impl Layout {
         }
     }
     pub fn finish(mut self) -> ProjectDocument {
+        for net in self.Sources.iter().copied() {
+            let traceWire = Wire::Trace(net);
+            let mut remaining: BTreeSet<_> = self
+                .Wires
+                .iter()
+                .filter_map(|(&point, &wire)| (wire == traceWire).then_some(point))
+                .collect();
+            while let Some(seed) = remaining.pop_first() {
+                let mut queue = VecDeque::from([seed]);
+                let mut source = None;
+                while let Some(trace) = queue.pop_front() {
+                    for (direction, (dx, dy)) in
+                        [(1, 0), (0, 1), (-1, 0), (0, -1)].into_iter().enumerate()
+                    {
+                        let point = (trace.0 - dx, trace.1 - dy);
+                        if source.is_none()
+                            && !self.Wires.contains_key(&point)
+                            && !self.Tiles.contains_key(&point)
+                        {
+                            source = Some((point, direction as i32));
+                        }
+                        let neighbor = (trace.0 + dx, trace.1 + dy);
+                        if self.Wires.get(&neighbor) == Some(&traceWire)
+                            && remaining.remove(&neighbor)
+                        {
+                            queue.push_back(neighbor);
+                        }
+                    }
+                }
+                let (point, direction) =
+                    source.expect("Constant source must have an available trace endpoint");
+                let id = self.NextId;
+                self.NextId += 1;
+                self.Tiles.insert(
+                    point,
+                    Tile {
+                        X: point.0,
+                        Y: point.1,
+                        ToolId: "latch".into(),
+                        ComponentId: id,
+                        IsOn: true,
+                        Direction: direction,
+                        ..Default::default()
+                    },
+                );
+            }
+        }
         let mut remaining: HashSet<_> = self.Wires.keys().copied().collect();
         for (&seed, &wire) in &self.Wires {
             if !remaining.remove(&seed) {
@@ -241,13 +289,10 @@ impl Layout {
             self.NextId += 1;
             let mut queue = VecDeque::from([seed]);
             while let Some((x, y)) = queue.pop_front() {
-                let (kind, net) = match wire {
-                    Wire::Trace(n) => (
-                        TraceTools[*self.Colors.get(&n).unwrap_or(&(n % 8))],
-                        Some(n),
-                    ),
-                    Wire::Bus(_) => ("bus", None),
-                    Wire::Cross => ("cross", None),
+                let kind = match wire {
+                    Wire::Trace(n) => TraceTools[*self.Colors.get(&n).unwrap_or(&(n % 8))],
+                    Wire::Bus(_) => "bus",
+                    Wire::Cross => "cross",
                 };
                 self.Tiles.insert(
                     (x, y),
@@ -257,8 +302,6 @@ impl Layout {
                         ToolId: kind.into(),
                         ComponentId: id,
                         IsOn: false,
-                        FixedDrive: net.and_then(|n| self.Fixed.get(&n).copied()),
-                        DefaultValue: net.is_some_and(|n| self.Defaults.contains(&n)),
                         ..Default::default()
                     },
                 );

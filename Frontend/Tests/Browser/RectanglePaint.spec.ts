@@ -33,7 +33,7 @@ test('Draw rectangle previews shrink, commit once and remain independent before 
 test('rectangle previews cancel on undo, pointer cancellation, window blur and tool changes', async ({ page }) => {
     const c = await ready(page), board = page.getByTestId('board');
     for (const action of ['undo', 'pointercancel', 'blur', 'tool']) {
-        await page.getByRole('button', { name: 'Latch', exact: true }).click(); await page.keyboard.down('Shift');
+        await page.getByRole('button', { name: 'Button', exact: true }).click(); await page.keyboard.down('Shift');
         await page.mouse.move(c.x + 12, c.y + 12); await page.mouse.down(); await page.mouse.move(c.x + 108, c.y + 76);
         await expect(board).toHaveAttribute('data-rectangle-cells', '12');
         await page.keyboard.up('Shift'); // The gesture remains rectangular; Ctrl+Z must not become Ctrl+Shift+Z.

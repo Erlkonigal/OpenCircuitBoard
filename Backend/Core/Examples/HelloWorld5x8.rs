@@ -194,12 +194,11 @@ pub fn buildProject() -> ProjectDocument {
     for sx in decoderRight + 1..=addressTrunkX {
         layout.wire((sx, addressBusY), Wire::Bus(2));
     }
-    let ground = 9999;
-    layout.Fixed.insert(ground, false);
+    let high = 9999;
+    layout.source(high);
     for pixel in 0..40 {
         let net = 200 + pixel;
         layout.Colors.insert(net, pixel / 5);
-        layout.Defaults.insert(net);
         let x = romLeft + pixel as i32 * 5;
         for y in romTop - 1..=80 + (pixel % 5) as i32 * 2 {
             let rowCross = y >= romTop + 2 && y <= romTop + 50 && (y - romTop - 2) % 4 == 0;
@@ -234,7 +233,7 @@ pub fn buildProject() -> ProjectDocument {
             );
         }
         for pixel in 0..40 {
-            if glyph(ch)[pixel / 5].as_bytes()[pixel % 5] == b'.' {
+            if glyph(ch)[pixel / 5].as_bytes()[pixel % 5] == b'#' {
                 let x = romLeft + pixel as i32 * 5;
                 layout.device(
                     "switch",
@@ -243,7 +242,7 @@ pub fn buildProject() -> ProjectDocument {
                     false,
                 );
                 layout.wire((x + 1, y), Wire::Trace(200 + pixel));
-                layout.wire((x + 3, y), Wire::Trace(ground));
+                layout.wire((x + 3, y), Wire::Trace(high));
                 layout.wire((x + 2, y + 1), Wire::Trace(WordSignals + row));
             }
         }

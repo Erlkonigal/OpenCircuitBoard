@@ -132,11 +132,13 @@ export function BoardCanvas({ onLatch, onCursor, onZoom, cameraCommand }: Props)
                 callbacks.current.onZoom?.(v.zoom);
             };
             const render = () => {
+                const started = performance.now();
                 try { draw(); }
                 catch (error) {
                     frame = 0;
                     if (element.dataset.renderError !== String(error)) { element.dataset.renderError = String(error); useEditor.getState().log(String(error)); }
                 }
+                finally { element.dataset.renderDurationMs = String(performance.now() - started); }
             };
             requestDraw.current = (immediate = false) => {
                 if (immediate) {

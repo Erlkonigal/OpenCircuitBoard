@@ -31,6 +31,15 @@ export function tileColor(tile: Tile, state = tile.isOn): number[] {
     return color;
 }
 function packedColor(tile: Tile, on: boolean) { const [red, green, blue] = tileColor(tile, on); return red << 16 | green << 8 | blue; }
+const Palettes = new Map<string, readonly [number, number]>();
+function paletteFor(tile: Tile) {
+    let palette = Palettes.get(tile.toolId);
+    if (!palette) {
+        palette = [packedColor(tile, false), packedColor(tile, true)];
+        Palettes.set(tile.toolId, palette);
+    }
+    return palette;
+}
 function setColor(sums: ColorSums, index: number, color: number) {
     const red = color >> 16 & 255, green = color >> 8 & 255, blue = color & 255;
     if (sums instanceof Map) sums.set(index, [red, green, blue, 1]);
@@ -43,7 +52,12 @@ export class ColorRaster {
     private readonly Off = new Uint32Array(64 * 64);
     readonly Bytes = this.Pixels.byteLength + this.On.byteLength + this.Off.byteLength;
     constructor(private readonly Tiles: ReadonlyMap<number, Tile>) {
-        for (const [index, tile] of Tiles) { this.On[index] = packedColor(tile, true); this.Off[index] = packedColor(tile, false); this.Pixels[index * 4 + 3] = 255; }
+        for (const [index, tile] of Tiles) {
+            const [off, on] = paletteFor(tile), color = tile.isOn ? on : off, offset = index * 4;
+            this.On[index] = on; this.Off[index] = off;
+            this.Pixels[offset] = color >> 16 & 255; this.Pixels[offset + 1] = color >> 8 & 255;
+            this.Pixels[offset + 2] = color & 255; this.Pixels[offset + 3] = 255;
+        }
     }
     update(stateFor: (tile: Tile) => boolean) {
         let start = this.Pixels.length / 4, end = 0;
@@ -79,7 +93,8 @@ export class ColorPyramid {
             const source: ColorSource = { Indices: new Uint16Array(count), On: new Uint32Array(count), Off: new Uint32Array(count), States: new Uint8Array(count) };
             for (let i = 0; i < count; i++) {
                 const tile = chunk.tiles[i], index = (tile.y - chunk.y * 64) * 64 + tile.x - chunk.x * 64;
-                source.Indices[i] = index; source.On[i] = packedColor(tile, true); source.Off[i] = packedColor(tile, false);
+                const [off, on] = paletteFor(tile);
+                source.Indices[i] = index; source.On[i] = on; source.Off[i] = off;
                 source.States[i] = chunk.states ? chunk.states[i] : Number(tile.isOn);
                 setColor(sums, index, source.States[i] ? source.On[i] : source.Off[i]);
             }

@@ -99,7 +99,7 @@ describe('Native circuit workspace', () => {
         await $('.command-trigger').click();
         await $('input[aria-label="Search commands"]').setValue('new circuit');
         await $('.command-options button').click();
-        await $('button[aria-label="Latch"]').click();
+        await $('button[aria-label="Button"]').click();
         await $('[data-testid="board"]').click();
         await $('button=Run circuit').click();
         await expect($('.workspace-status')).toHaveText(expect.stringContaining('Simulating'));
@@ -116,16 +116,16 @@ describe('Native circuit workspace', () => {
         });
         const before = JSON.stringify(await pixel());
         await $('[data-testid="board"]').click();
-        await browser.waitUntil(async () => JSON.stringify(await pixel()) !== before, { timeoutMsg: 'Latch state did not change on the canvas' });
+        await browser.waitUntil(async () => JSON.stringify(await pixel()) !== before, { timeoutMsg: 'Button state did not change on the canvas' });
         await browser.saveScreenshot(buildPath('DesktopLatchCapture.png'));
         await $('button=Back to design').click();
     });
     it('keeps adjacent drawn lanes independent and merges complete latch regions through native simulation', async () => {
         await $('.command-trigger').click(); await $('input[aria-label="Search commands"]').setValue('new circuit'); await $('.command-options button').click();
         const center = await browser.execute(() => { const r = document.querySelector('[data-testid="board"]')!.getBoundingClientRect(); return {x:r.x+r.width/2,y:r.y+r.height/2}; });
-        for (const [index, tool] of ['Latch','Trace','Buffer'].entries()) {
+        for (const [index, tool] of ['Button','Trace','Buffer'].entries()) {
             await $(`button[aria-label="${tool}"]`).click();
-            if (tool === 'Latch') await $('label=Off').click();
+            if (tool === 'Button') await $('label=Off').click();
             for (const row of [0,1]) await browser.action('pointer').move({x:Math.round(center.x+index*32+12),y:Math.round(center.y+row*32+12)}).down().up().perform();
         }
         const pixels = () => browser.execute(() => {
@@ -280,7 +280,7 @@ describe('Native circuit workspace', () => {
         await $('.command-trigger').click();await $('input[aria-label="Search commands"]').setValue('new circuit');await $('.command-options button').click();
         const c=await browser.execute(()=>{const r=document.querySelector('[data-testid="board"]')!.getBoundingClientRect();return {x:Math.round(r.x+r.width/2),y:Math.round(r.y+r.height/2)};});
         const drag=async(x:number,y:number,tx:number,ty:number)=>browser.action('pointer').move({x:c.x+x,y:c.y+y}).down().move({x:c.x+tx,y:c.y+ty,duration:250}).up().perform();
-        const board=$('[data-testid="board"]');await $('button[aria-label="Latch"]').click();await $('label=Off').click();
+        const board=$('[data-testid="board"]');await $('button[aria-label="Button"]').click();await $('label=Off').click();
         await drag(12,12,76,12);await drag(12,44,76,44);await expect(board).toHaveAttribute('data-component-count','2');
         await drag(12,12,12,44);await expect(board).toHaveAttribute('data-component-count','1');await expect($('.workspace-status')).toHaveText(expect.stringContaining('6 cells'));
         const pixels=()=>browser.execute(()=>{

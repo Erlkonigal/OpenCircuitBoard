@@ -4,38 +4,40 @@ import { buildPath, WorkspaceRoot } from '../Paths';
 
 // Runs against the real Tauri binary and its simulation worker.
 describe('Boolean Switch memory', () => {
-    it('resolves a fixed zero through a delayed bidirectional switch without X or Z', async () => {
+    it('defaults an undriven Trace low and passes a Button source through a delayed Switch', async () => {
         const result = await browser.execute(async () => {
             const invoke = (window as unknown as { __TAURI_INTERNALS__: { invoke: (command: string, args: unknown) => Promise<ArrayBuffer> } }).__TAURI_INTERNALS__.invoke;
-            const width = 3, height = 3, count = width * height;
+            const width = 4, height = 3, count = width * height;
             const bytes = new Uint8Array(24 + count * 32), data = new DataView(bytes.buffer);
-            [0x4f434249, 4, width, height, -1, 0].forEach((v, i) => data.setInt32(i * 4, v, true));
+            [0x4f434249, 4, width, height, -2, 0].forEach((v, i) => data.setInt32(i * 4, v, true));
             const arrays = Array.from({ length: 8 }, (_, i) => new Int32Array(bytes.buffer, 24 + count * i * 4, count));
             arrays[2].fill(1); arrays[5].fill(-1);
-            // left fixed 0, center Switch, right default 1, bottom control Trace and up-facing Latch.
-            for (const [cell, kind, id] of [[0, 1, 1], [1, 30, 2], [2, 2, 3], [4, 4, 4], [7, 25, 5]]) {
-                arrays[0][cell] = kind; arrays[3][cell] = id;
-            }
-            arrays[5][0] = 0; arrays[6][2] = 1; arrays[4][7] = 3;
+            const cell = (x: number, y: number) => y * width + x + 2;
+            const put = (x: number, y: number, kind: number, id: number, on = true, direction = 0) => {
+                const i = cell(x, y); arrays[0][i] = kind; arrays[1][i] = Number(on); arrays[3][i] = id; arrays[4][i] = direction;
+            };
+            put(-2, 0, 25, 1, true); put(-1, 0, 1, 2); put(0, 0, 30, 3); put(1, 0, 2, 4);
+            put(0, 1, 4, 5); put(0, 2, 25, 6, false, 3);
             let frame = await invoke('compileGrid', bytes);
             const session = new DataView(frame).getUint32(8, true);
+            const output = cell(1, 0), control = cell(0, 2);
             const read = (buffer: ArrayBuffer) => {
                 if ([...new Uint8Array(buffer, 80)].some(v => v > 1)) throw Error('Non-boolean runtime signal');
-                return new Uint8Array(buffer, 80)[2];
+                return new Uint8Array(buffer, 80)[output];
             };
             const values = [read(frame)];
-            for (const [action, value] of [['toggle', 7], ['step', 1], ['toggle', 7], ['step', 1], ['seek', 0], ['step', 1], ['reset', 0]] as const) {
+            for (const [action, value] of [['toggle', control], ['step', 1], ['toggle', control], ['step', 1], ['reset', 0]] as const) {
                 frame = await invoke('simulationCommand', { action, session, value }); values.push(read(frame));
             }
-            const channels = JSON.parse(new TextDecoder().decode(await invoke('inspectCell', { session, cell: 2 })));
+            const channels = JSON.parse(new TextDecoder().decode(await invoke('inspectCell', { session, cell: output })));
             await invoke('simulationCommand', { action: 'release', session, value: 0 });
             return { values, channels };
         });
-        expect(result.values).toEqual([1, 1, 0, 0, 1, 1, 0, 1]);
-        expect(result.channels).toEqual([1]);
+        expect(result.values).toEqual([0, 0, 1, 1, 0, 0]);
+        expect(result.channels).toEqual([0]);
     });
 
-    it('keeps Latch output independent of adjacent clock signals and preserves manual toggles', async () => {
+    it('keeps Button output independent of adjacent clock signals and preserves manual toggles', async () => {
         const values = await browser.execute(async () => {
             const invoke = (window as unknown as { __TAURI_INTERNALS__: { invoke: (command: string, args: unknown) => Promise<ArrayBuffer> } }).__TAURI_INTERNALS__.invoke;
             const count = 4, bytes = new Uint8Array(24 + count * 32), data = new DataView(bytes.buffer);
@@ -57,7 +59,7 @@ describe('Boolean Switch memory', () => {
     it('writes, reads, resets and restores the committed RAM through the shared eight bit lines', async () => {
         const file = path.join(WorkspaceRoot, 'Frontend/Assets/Examples/Ram16x8.ocb');
         const result = await browser.execute(async (file: string) => {
-            type Tile = { x: number; y: number; toolId: string; componentId: number; isOn: boolean; direction?: number; clockHoldTicks?: number; fixedDrive?: boolean; defaultValue?: boolean; crossMask?: number };
+            type Tile = { x: number; y: number; toolId: string; componentId: number; isOn: boolean; direction?: number; clockHoldTicks?: number; crossMask?: number };
             const invoke = (window as unknown as { __TAURI_INTERNALS__: { invoke: <T>(command: string, args: unknown) => Promise<T> } }).__TAURI_INTERNALS__.invoke;
             const project = await invoke<{ board: { tiles: Tile[]; clockHoldTicks: number } }>('openProject', { path: file });
             const tiles = project.board.tiles;
@@ -76,7 +78,7 @@ describe('Boolean Switch memory', () => {
             const controls = new Map<number, number>();
             for (const t of tiles) {
                 const c = cell(t);
-                [kinds[t.toolId], Number(t.isOn), t.clockHoldTicks ?? 1, t.componentId, t.direction ?? 0, t.fixedDrive === undefined ? -1 : Number(t.fixedDrive), Number(t.defaultValue ?? false), t.crossMask ?? 0].forEach((v, i) => { arrays[i][c] = v; });
+                [kinds[t.toolId], Number(t.isOn), t.clockHoldTicks ?? 1, t.componentId, t.direction ?? 0, -1, 0, t.crossMask ?? 0].forEach((v, i) => { arrays[i][c] = v; });
                 if (t.toolId === 'latch' || t.toolId === 'led') controls.set(t.componentId - 1, c);
             }
             let frame = await invoke<ArrayBuffer>('compileGrid', bytes);

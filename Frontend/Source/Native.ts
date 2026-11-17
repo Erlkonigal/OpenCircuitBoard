@@ -51,7 +51,7 @@ export function encodeBoard(board: Board) { board = validateBoard(board); const 
     data.setInt32(24 + (count * 2 + i) * 4, 1, true); data.setInt32(24 + (count * 5 + i) * 4, -1, true);
 } for (const t of tiles) {
     const cell = (t.y - minY) * width + t.x - minX;
-    [ToolKinds[t.toolId], Number(t.isOn), t.clockHoldTicks ?? board.clockHoldTicks, t.componentId, t.direction ?? 0, t.fixedDrive === undefined ? -1 : Number(t.fixedDrive), Number(t.defaultValue ?? false), t.crossMask ?? 0].forEach((v, i) => data.setInt32(24 + (count * i + cell) * 4, v, true));
+    [ToolKinds[t.toolId], Number(t.isOn), t.clockHoldTicks ?? board.clockHoldTicks, t.componentId, t.direction ?? 0, -1, 0, t.crossMask ?? 0].forEach((v, i) => data.setInt32(24 + (count * i + cell) * 4, v, true));
 }
 return bytes; }
 export async function compile(board: Board) { if (!isDesktop())

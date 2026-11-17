@@ -118,7 +118,7 @@ export class ColorCache {
         if (!entry) {
             const raster = new ColorRaster(chunk.Tiles);
             const source = new BufferImageSource({ resource: raster.Pixels, width: 64, height: 64, format: 'rgba8unorm', alphaMode: 'premultiplied-alpha', scaleMode: 'nearest' });
-            entry = { Texture: new Texture({ source }), Pixels: raster.Pixels, Version: 0, Generation: this.Generation, Raster: raster };
+            entry = { Texture: new Texture({ source }), Pixels: raster.Pixels, Version: 0, Generation: this.Generation, Raster: raster, Source: chunk, Runtime: runtime === null ? null : undefined };
             this.Textures.set(key, entry);
         }
         if (entry.Source !== chunk || entry.Runtime !== stamp) {

@@ -40,7 +40,7 @@ export interface PlacementPreview {
 export interface RectanglePaintPreview {
     Bounds: Grid;
     Anchor: Point;
-    Material: Pick<Tile, 'toolId' | 'isOn' | 'clockHoldTicks' | 'direction' | 'fixedDrive' | 'defaultValue' | 'crossMask'>;
+    Material: Pick<Tile, 'toolId' | 'isOn' | 'clockHoldTicks' | 'direction' | 'crossMask'>;
 }
 interface State {
     DrawSettings: InkSettings;
@@ -587,7 +587,7 @@ export const useEditor = create<State>((set, get) => ({
             get().commit();
         }
         else if (!selection)
-            set({ DrawSettings: {...s.DrawSettings,...Object.fromEntries(Object.entries(patch).filter(([key])=>['direction','fixedDrive','defaultValue','crossMask'].includes(key))),...('fixedDrive' in patch ? {fixedDrive:patch.fixedDrive}:{})}, Board: { ...s.Board, ...(patch.clockHoldTicks ? { clockHoldTicks: patch.clockHoldTicks } : {}), ...(patch.isOn !== undefined ? { latchInitialState: patch.isOn } : {}), ...(patch.toolId ? { selectedTool: patch.toolId } : {}) } });
+            set({ DrawSettings: {...s.DrawSettings,...Object.fromEntries(Object.entries(patch).filter(([key])=>['direction','crossMask'].includes(key)))}, Board: { ...s.Board, ...(patch.clockHoldTicks ? { clockHoldTicks: patch.clockHoldTicks } : {}), ...(patch.isOn !== undefined ? { latchInitialState: patch.isOn } : {}), ...(patch.toolId ? { selectedTool: patch.toolId } : {}) } });
     },
     activateDock: (side, id) => { const s = get(), a = side === 'left' ? 'LeftDock' : 'RightDock', b = side === 'left' ? 'RightDock' : 'LeftDock'; set({ [a]: id, ...(s[b] === id ? { [b]: s[a] } : {}) }); },
     log: text => set(s => ({ Events: [...s.Events.slice(-999), `${new Date().toLocaleTimeString()}  ${text}`] })), setRuntime: states => set({ Runtime: states }),

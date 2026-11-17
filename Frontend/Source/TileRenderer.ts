@@ -1,11 +1,11 @@
-import { AlphaFilter, Assets, BlurFilter, Container, FillGradient, Graphics, GraphicsContext, Matrix, Rectangle, RenderTexture, Sprite, type Renderer, type Texture } from 'pixi.js';
-import { cellKey, hasGlyph, iconUrl, inkColor, type Tile, type RenderMode, type Grid } from './Model';
-import { CellStore } from './CellStore';
+import { AlphaFilter, Assets, BlurFilter, Container, FillGradient, Graphics, Matrix, Rectangle, RenderTexture, Sprite, type Renderer, type Texture } from 'pixi.js';
+import { cellKey, hasGlyph, iconUrl, inkColor, type Tile, type RenderMode } from './Model';
+import { CellStore, type CellChunk } from './CellStore';
 import { ColorCache } from './ColorCache';
 import { HighlightTint, HighlightStrength } from './HighlightStyle';
 import { colorKey, colorLevel, detailLevel } from './ColorPyramid';
 import type { RuntimeGrid } from './EditorStore';
-import { BottomFace, CellSize, exposedFaces, Extrusion, LeftFace, ShadowMargin } from './TileGeometry';
+import { BottomFace, CellSize, Extrusion, LeftFace, ShadowMargin } from './TileGeometry';
 
 export interface TileView {
     x: number;
@@ -32,16 +32,11 @@ function runtimeStamp(runtime: RuntimeGrid | null, x: number, y: number): unknow
 }
 interface Material {
     Top: Texture;
-    Sides: GraphicsContext[];
     Gradients: FillGradient[];
     Tool: string;
     On: boolean;
     Direction: number;
     CrossMask: number;
-}
-interface TileItem {
-    Top: Sprite;
-    Sides: Graphics;
 }
 const BoardColor = 0x101a23;
 function mixColor(from: number, to: number, amount: number): number {
@@ -54,7 +49,7 @@ function mixColor(from: number, to: number, amount: number): number {
 // Render an opaque union before reducing opacity. Adjacent cells never accumulate darkness.
 export class TileShadow {
     readonly Layer = new Container();
-    private readonly Mask = new Graphics();
+    private readonly ChunkMask = new Container();
     private readonly Source = new Sprite();
     private readonly Soft = new Sprite();
     private readonly Contact = new Sprite();
@@ -63,42 +58,36 @@ export class TileShadow {
     private MaskTexture?: RenderTexture;
     private SoftTexture?: RenderTexture;
     private ContactTexture?: RenderTexture;
-    private Geometry: unknown;
-    private Transient: unknown;
-    private Camera = '';
+    private readonly ChunkMasks = new Map<string, { Source: CellChunk; Graphics: Graphics; Used: number }>();
+    private Usage = 0;
+    private SourceGeometry?: CellStore;
+    private CacheZoom = 0;
+    private CacheBounds?: { Left: number; Top: number; Right: number; Bottom: number };
 
     constructor(private Renderer: Renderer) {
         this.Soft.alpha = .22;
         this.Contact.alpha = .14;
         this.Layer.addChild(this.Soft, this.Contact);
     }
-    update(tiles: readonly Tile[], geometry: unknown, transient: unknown, view: TileView, blocks?: readonly Grid[]) {
-        this.Layer.visible = tiles.length > 0 || !!blocks?.length;
-        if (!this.Layer.visible)
-            return;
-        const camera = `${view.x}:${view.y}:${view.zoom}:${view.width}:${view.height}`;
-        if (this.Geometry === geometry && this.Transient === transient && this.Camera === camera)
-            return;
-        this.Geometry = geometry;
-        this.Transient = transient;
-        this.Camera = camera;
-        const padding = Math.ceil(ShadowMargin * view.zoom) + 2;
-        const width = Math.ceil(view.width) + padding * 2, height = Math.ceil(view.height) + padding * 2;
-        const left = view.x - (view.width / 2 + padding) / view.zoom;
-        const top = view.y - (view.height / 2 + padding) / view.zoom;
+    private ensureTextures(width: number, height: number) {
         for (const name of ['MaskTexture', 'SoftTexture', 'ContactTexture'] as const) {
             if (!this[name])
                 this[name] = RenderTexture.create({ width, height, resolution: 1, antialias: false, dynamic: true });
             else if (this[name].width !== width || this[name].height !== height)
                 this[name].resize(width, height);
         }
-        this.Mask.clear();
-        for (const tile of tiles)
-            this.Mask.rect(tile.x * CellSize - Extrusion - left, tile.y * CellSize + Extrusion - top, CellSize, CellSize);
-        for (const block of blocks ?? []) this.Mask.rect(block.originX * CellSize - Extrusion - left, block.originY * CellSize + Extrusion - top, block.width * CellSize, block.height * CellSize);
-        this.Mask.fill(0x000000);
-        const transform = new Matrix(view.zoom, 0, 0, view.zoom, 0, 0);
-        this.Renderer.render({ container: this.Mask, target: this.MaskTexture, transform, clear: true, clearColor: [0, 0, 0, 0] });
+    }
+    private contains(view: TileView) {
+        const bounds = this.CacheBounds;
+        if (!bounds) return false;
+        const left = view.x - view.width / (2 * view.zoom), top = view.y - view.height / (2 * view.zoom);
+        return left >= bounds.Left && top >= bounds.Top
+            && left + view.width / view.zoom <= bounds.Right
+            && top + view.height / view.zoom <= bounds.Bottom;
+    }
+    private renderMask(mask: Container, transform: Matrix, view: TileView, left: number, top: number, width: number, height: number) {
+        this.ensureTextures(width, height);
+        this.Renderer.render({ container: mask, target: this.MaskTexture, transform, clear: true, clearColor: [0, 0, 0, 0] });
         this.Source.texture = this.MaskTexture!;
         this.Source.filterArea = new Rectangle(0, 0, width, height);
         this.SoftBlur.strength = 6 * view.zoom;
@@ -115,14 +104,77 @@ export class TileShadow {
             sprite.position.set(left, top);
             sprite.scale.set(1 / view.zoom);
         }
+        this.CacheBounds = { Left: left + ShadowMargin, Top: top + ShadowMargin,
+            Right: left + width / view.zoom - ShadowMargin, Bottom: top + height / view.zoom - ShadowMargin };
+    }
+    update(source: CellStore, view: TileView) {
+        this.Layer.visible = source.size > 0;
+        if (!this.Layer.visible) return;
+        const scale = view.zoom / this.CacheZoom;
+        if (this.SourceGeometry === source && scale >= .5 && scale <= 2 && this.contains(view)) return;
+        const padding = Math.ceil(Math.max(ShadowMargin * view.zoom, Math.max(view.width, view.height) * .12)) + 2;
+        const width = Math.ceil(view.width) + padding * 2, height = Math.ceil(view.height) + padding * 2;
+        const left = view.x - (view.width / 2 + padding) / view.zoom;
+        const top = view.y - (view.height / 2 + padding) / view.zoom;
+        const originX = Math.floor((left - ShadowMargin) / CellSize), originY = Math.floor((top - ShadowMargin) / CellSize);
+        const chunks = [...source.chunks({ originX, originY,
+            width: Math.ceil((left + width / view.zoom + ShadowMargin) / CellSize) - originX,
+            height: Math.ceil((top + height / view.zoom + ShadowMargin) / CellSize) - originY })];
+        this.Layer.visible = chunks.length > 0;
+        if (!this.Layer.visible) return;
+        const wanted = new Set<string>();
+        for (const chunk of chunks) {
+            const key = `${chunk.X},${chunk.Y}`;
+            wanted.add(key);
+            let entry = this.ChunkMasks.get(key);
+            if (!entry || entry.Source !== chunk) {
+                if (entry) {
+                    this.ChunkMask.removeChild(entry.Graphics);
+                    entry.Graphics.destroy();
+                }
+                const graphics = new Graphics();
+                graphics.position.set(chunk.X * 64 * CellSize, chunk.Y * 64 * CellSize);
+                if (chunk.Tiles.size === 4096)
+                    graphics.rect(-Extrusion, Extrusion, 64 * CellSize, 64 * CellSize);
+                else for (const index of chunk.Tiles.keys())
+                    graphics.rect((index % 64) * CellSize - Extrusion, Math.floor(index / 64) * CellSize + Extrusion, CellSize, CellSize);
+                graphics.fill(0x000000);
+                this.ChunkMask.addChild(graphics);
+                entry = { Source: chunk, Graphics: graphics, Used: 0 };
+                this.ChunkMasks.set(key, entry);
+            }
+            entry.Used = ++this.Usage;
+            entry.Graphics.visible = true;
+        }
+        for (const [key, entry] of this.ChunkMasks) {
+            if (!wanted.has(key) && entry.Graphics.visible) {
+                entry.Graphics.visible = false;
+            }
+        }
+        while (this.ChunkMasks.size > 64) {
+            const oldest = [...this.ChunkMasks].filter(([key]) => !wanted.has(key)).sort((a, b) => a[1].Used - b[1].Used)[0];
+            if (!oldest) break;
+            this.ChunkMask.removeChild(oldest[1].Graphics);
+            oldest[1].Graphics.destroy();
+            this.ChunkMasks.delete(oldest[0]);
+        }
+        const transform = new Matrix(view.zoom, 0, 0, view.zoom, -left * view.zoom, -top * view.zoom);
+        this.renderMask(this.ChunkMask, transform, view, left, top, width, height);
+        this.SourceGeometry = source;
+        this.CacheZoom = view.zoom;
     }
     clear() {
-        this.Geometry = undefined; this.Transient = undefined; this.Camera = '';
-        this.Layer.visible = false; this.Mask.clear();
+        this.SourceGeometry = undefined; this.CacheZoom = 0; this.CacheBounds = undefined;
+        this.Layer.visible = false;
+        for (const entry of this.ChunkMasks.values()) {
+            this.ChunkMask.removeChild(entry.Graphics);
+            entry.Graphics.destroy();
+        }
+        this.ChunkMasks.clear();
     }
     destroy() {
         this.Layer.destroy({ children: true });
-        this.Mask.destroy();
+        this.ChunkMask.destroy({ children: true });
         this.Source.destroy();
         this.SoftBlur.destroy();
         this.ContactBlur.destroy();
@@ -132,70 +184,110 @@ export class TileShadow {
     }
 }
 
+function chunkFaces(chunk: CellChunk, occupied: CellStore): { Tile: Tile; Mask: number }[] {
+    const left = occupied.chunk(chunk.X - 1, chunk.Y), bottom = occupied.chunk(chunk.X, chunk.Y + 1);
+    if (chunk.Tiles.size === 4096) {
+        const faces = new Map<number, number>();
+        for (let y = 0; y < 64; y++) {
+            if (!left?.Tiles.has(y * 64 + 63)) faces.set(y * 64, LeftFace);
+        }
+        for (let x = 0; x < 64; x++) {
+            if (!bottom?.Tiles.has(x)) {
+                const index = 63 * 64 + x;
+                faces.set(index, (faces.get(index) ?? 0) | BottomFace);
+            }
+        }
+        return [...faces].map(([index, mask]) => ({ Tile: chunk.Tiles.get(index)!, Mask: mask }));
+    }
+    const faces: { Tile: Tile; Mask: number }[] = [];
+    for (const [index, tile] of chunk.Tiles) {
+        const x = index % 64, y = Math.floor(index / 64);
+        const hasLeft = x ? chunk.Tiles.has(index - 1) : !!left?.Tiles.has(y * 64 + 63);
+        const hasBottom = y < 63 ? chunk.Tiles.has(index + 64) : !!bottom?.Tiles.has(x);
+        const mask = (hasLeft ? 0 : LeftFace) | (hasBottom ? 0 : BottomFace);
+        if (mask) faces.push({ Tile: tile, Mask: mask });
+    }
+    return faces;
+}
+
 class TileGroup {
     readonly Layer = new Container();
     private readonly Sides = new Container();
     private readonly Tops = new Container();
-    private readonly Visible = new Map<string, TileItem>();
+    private readonly Visible = new Map<string, Sprite>();
     private readonly Shadow: TileShadow;
     private readonly Opacity?: AlphaFilter;
     private readonly Raster = new Container();
-    private readonly RasterSides = new Container();
     private readonly Rasters = new Map<string, Sprite>();
-    private readonly BlockSides = new Map<string, { Source: unknown; Left: unknown; Bottom: unknown; Runtime: unknown; Highlight: string; Faces: { Tile: Tile; Mask: number }[]; Graphics: Graphics }>();
+    private readonly BlockSides = new Map<string, { Source: CellChunk; Left?: CellChunk; Bottom?: CellChunk; Runtime: unknown; Highlight: string; Faces: { Tile: Tile; Mask: number }[]; Graphics: Graphics }>();
     private readonly Colors: ColorCache;
-    private readonly BatchedShadow: TileShadow;
     Count = 0;
     Lod = 'detail';
     private Source?: CellStore;
-    private ShadowSource?: CellStore;
-    private ShadowCamera = '';
     get Ready() { return this.Lod === 'detail' || this.Colors.Ready; }
 
-    constructor(private readonly Renderer: Renderer, redraw: () => void, alpha = 1) {
-        this.Shadow = new TileShadow(Renderer);
-        this.BatchedShadow = new TileShadow(Renderer);
+    constructor(renderer: Renderer, redraw: () => void, alpha = 1) {
+        this.Shadow = new TileShadow(renderer);
         this.Colors = new ColorCache(redraw);
-        this.Layer.addChild(this.Shadow.Layer, this.BatchedShadow.Layer, this.RasterSides, this.Sides, this.Raster, this.Tops);
+        this.Layer.addChild(this.Shadow.Layer, this.Sides, this.Raster, this.Tops);
         if (alpha !== 1) {
             this.Opacity = new AlphaFilter({ alpha });
             this.Layer.filters = [this.Opacity];
         }
     }
-    private update(tiles: readonly Tile[], occupied: { has(key: string): boolean }, materialFor: (tile: Tile) => Material, tint: number, view: TileView, geometry: unknown, transient: unknown, mode: RenderMode) {
-        this.Layer.visible = tiles.length > 0;
-        if (this.Opacity) {
-            // Pixi transforms this local rectangle into the render target's coordinates.
-            this.Layer.filterArea = new Rectangle(view.x - view.width / (2 * view.zoom), view.y - view.height / (2 * view.zoom), view.width / view.zoom, view.height / view.zoom);
-        }
+    private update(tiles: readonly Tile[], materialFor: (tile: Tile) => Material, tint: number) {
         const desired = new Set<string>();
         for (const tile of tiles) {
-            const key = cellKey(tile), material = materialFor(tile), faces = mode === '2.5d' ? exposedFaces(tile, occupied) : 0;
+            const key = cellKey(tile), material = materialFor(tile);
             desired.add(key);
-            let item = this.Visible.get(key);
-            if (!item) {
-                item = { Top: new Sprite(material.Top), Sides: new Graphics({ context: material.Sides[faces] }) };
-                this.Tops.addChild(item.Top);
-                this.Sides.addChild(item.Sides);
-                this.Visible.set(key, item);
+            let sprite = this.Visible.get(key);
+            if (!sprite) {
+                sprite = new Sprite(material.Top);
+                this.Tops.addChild(sprite);
+                this.Visible.set(key, sprite);
             }
-            item.Top.texture = material.Top;
-            item.Sides.context = material.Sides[faces];
-            item.Sides.visible = faces !== 0;
-            item.Top.position.set(tile.x * CellSize, tile.y * CellSize);
-            item.Sides.position.copyFrom(item.Top.position);
-            item.Top.tint = tint;
-            item.Sides.tint = tint;
+            sprite.texture = material.Top;
+            sprite.position.set(tile.x * CellSize, tile.y * CellSize);
+            sprite.tint = tint;
         }
-        for (const [key, item] of this.Visible) {
-            if (!desired.has(key)) {
-                item.Top.destroy();
-                item.Sides.destroy();
-                this.Visible.delete(key);
+        for (const [key, sprite] of this.Visible) if (!desired.has(key)) {
+            sprite.destroy(); this.Visible.delete(key);
+        }
+    }
+    private updateSides(source: CellStore, chunks: Iterable<CellChunk>, materialFor: (tile: Tile) => Material, runtime: RuntimeGrid | null, tint: number, highlightStamp: string) {
+        const wanted = new Set<string>();
+        for (const chunk of chunks) {
+            const key = colorKey(0, chunk.X, chunk.Y); wanted.add(key);
+            const left = source.chunk(chunk.X - 1, chunk.Y), bottom = source.chunk(chunk.X, chunk.Y + 1);
+            let entry = this.BlockSides.get(key);
+            const runtimeKey = runtimeStamp(runtime, chunk.X, chunk.Y);
+            const geometryChanged = !entry || entry.Source !== chunk || entry.Left !== left || entry.Bottom !== bottom;
+            const faces = geometryChanged ? chunkFaces(chunk, source) : entry!.Faces;
+            if (geometryChanged || faces.length && (entry!.Runtime !== runtimeKey || entry!.Highlight !== highlightStamp)) {
+                entry?.Graphics.destroy();
+                const graphics = new Graphics();
+                graphics.position.set(chunk.X * 64 * CellSize, chunk.Y * 64 * CellSize);
+                for (const { Tile: tile, Mask: mask } of faces) {
+                    const material = materialFor(tile), x = (tile.x - chunk.X * 64) * CellSize, y = (tile.y - chunk.Y * 64) * CellSize;
+                    graphics.setTransform(new Matrix(1, 0, 0, 1, x, y));
+                    if (mask & LeftFace) graphics.poly([-Extrusion, Extrusion, 0, 0, 0, CellSize, -Extrusion, CellSize + Extrusion]).fill(material.Gradients[0]);
+                    if (mask & BottomFace) graphics.poly([-Extrusion, CellSize + Extrusion, 0, CellSize, CellSize, CellSize, CellSize - Extrusion, CellSize + Extrusion]).fill(material.Gradients[1]);
+                }
+                this.Sides.addChild(graphics);
+                entry = { Source: chunk, Left: left, Bottom: bottom, Runtime: runtimeKey, Highlight: highlightStamp, Faces: faces, Graphics: graphics };
+                this.BlockSides.set(key, entry);
             }
+            entry!.Runtime = runtimeKey; entry!.Highlight = highlightStamp; entry!.Graphics.tint = tint;
         }
-        if (mode === '2.5d') this.Shadow.update(tiles, geometry, transient, view);
-        else this.Shadow.Layer.visible = false;
+        for (const [key, entry] of this.BlockSides) if (!wanted.has(key)) {
+            entry.Graphics.destroy(); this.BlockSides.delete(key);
+        }
+    }
+    private clearDetail() {
+        // Detach once before destroying sprites so a LOD change remains linear.
+        this.Tops.removeChildren();
+        for (const sprite of this.Visible.values()) sprite.destroy();
+        this.Visible.clear();
     }
     prepareRuntime(runtime: RuntimeGrid | null) { if (this.Source && this.Lod === 'aggregate') this.Colors.prepare(this.Source, runtime); }
     draw(source: CellStore, materialFor: (tile: Tile) => Material, view: TileView, mode: RenderMode, runtime: RuntimeGrid | null, tint = 0xffffff, highlightStamp = '') {
@@ -207,24 +299,23 @@ class TileGroup {
         const bounds = { originX: Math.floor((view.x - view.width / (2 * view.zoom) - CellSize - ShadowMargin) / CellSize),
             originY: Math.floor((view.y - view.height / (2 * view.zoom) - CellSize - ShadowMargin) / CellSize),
             width: Math.ceil(view.width / view.zoom / CellSize) + 6, height: Math.ceil(view.height / view.zoom / CellSize) + 6 };
-        this.Raster.visible = this.RasterSides.visible = this.Lod !== 'detail';
-        this.Tops.visible = this.Sides.visible = this.Lod === 'detail';
-        this.BatchedShadow.Layer.visible = false;
+        this.Raster.visible = this.Lod !== 'detail';
+        this.Tops.visible = this.Lod === 'detail';
+        this.Sides.visible = this.Lod !== 'aggregate' && mode === '2.5d';
+        if (this.Opacity) this.Layer.filterArea = new Rectangle(view.x - view.width / (2 * view.zoom), view.y - view.height / (2 * view.zoom), view.width / view.zoom, view.height / view.zoom);
+        if (this.Sides.visible) {
+            this.Shadow.update(source, view);
+            this.updateSides(source, source.chunks(bounds), materialFor, runtime, tint, highlightStamp);
+        }
+        else this.Shadow.Layer.visible = false;
         if (this.Lod === 'detail') {
             const tiles = [...source.query(bounds)];
-            this.update(tiles, source, materialFor, tint, view, source, null, mode);
-            this.Count = tiles.length;
+            this.update(tiles, materialFor, tint);
+            this.Count = tiles.length + (this.Sides.visible ? this.BlockSides.size : 0);
             return;
         }
-        this.Shadow.Layer.visible = false;
-        // Clear detailed objects when leaving their LOD; don't retain a second complete scene.
-        for (const item of this.Visible.values()) { item.Top.destroy(); item.Sides.destroy(); }
-        this.Visible.clear();
-        if (this.Opacity) this.Layer.filterArea = new Rectangle(view.x - view.width / (2 * view.zoom), view.y - view.height / (2 * view.zoom), view.width / view.zoom, view.height / view.zoom);
-        const level = colorLevel(view.zoom * CellSize), wanted = new Set<string>(), sidesWanted = new Set<string>();
-        const shadowTiles: Tile[] = [], shadowBlocks: Grid[] = [];
-        const shadowCamera = `${view.x}:${view.y}:${view.zoom}:${view.width}:${view.height}`;
-        const updateShadow = this.ShadowSource !== source || this.ShadowCamera !== shadowCamera;
+        this.clearDetail();
+        const level = colorLevel(view.zoom * CellSize), wanted = new Set<string>();
         for (const block of source.blocks(bounds, level)) {
             const key = colorKey(level, block.x, block.y); wanted.add(key);
             const texture = this.Colors.texture(block);
@@ -235,61 +326,25 @@ class TileGroup {
                 sprite.scale.set(2 ** level * CellSize); sprite.tint = tint;
             }
             if (!texture && sprite) sprite.visible = false;
-            if (this.Lod === 'color' && mode === '2.5d') {
-                const chunk = source.chunk(block.x, block.y)!;
-                const left = source.chunk(block.x - 1, block.y), bottom = source.chunk(block.x, block.y + 1);
-                let entry = this.BlockSides.get(key);
-                const runtimeKey = runtimeStamp(runtime, block.x, block.y);
-                const geometryChanged = !entry || entry.Source !== chunk || entry.Left !== left || entry.Bottom !== bottom;
-                const faces = geometryChanged ? [...chunk.Tiles.values()].map(tile => ({ Tile: tile, Mask: exposedFaces(tile, source) })).filter(face => face.Mask !== 0) : entry!.Faces;
-                if (geometryChanged || faces.length && (entry!.Runtime !== runtimeKey || entry!.Highlight !== highlightStamp)) {
-                    if (entry) entry.Graphics.destroy();
-                    const graphics = new Graphics();
-                    graphics.position.set(block.x * 64 * CellSize, block.y * 64 * CellSize);
-                    for (const { Tile: tile, Mask: mask } of faces) {
-                        const material = materialFor(tile), x = (tile.x - block.x * 64) * CellSize, y = (tile.y - block.y * 64) * CellSize;
-                        graphics.setTransform(new Matrix(1, 0, 0, 1, x, y));
-                        if (mask & LeftFace) graphics.poly([-Extrusion, Extrusion, 0, 0, 0, CellSize, -Extrusion, CellSize + Extrusion]).fill(material.Gradients[0]);
-                        if (mask & BottomFace) graphics.poly([-Extrusion, CellSize + Extrusion, 0, CellSize, CellSize, CellSize, CellSize - Extrusion, CellSize + Extrusion]).fill(material.Gradients[1]);
-                    }
-                    this.RasterSides.addChild(graphics);
-                    entry = { Source: chunk, Left: left, Bottom: bottom, Runtime: runtimeKey, Highlight: highlightStamp, Faces: faces, Graphics: graphics };
-                    this.BlockSides.set(key, entry);
-                }
-                entry!.Runtime = runtimeKey; entry!.Highlight = highlightStamp; entry!.Graphics.tint = tint; sidesWanted.add(key);
-                if (updateShadow && chunk.Tiles.size === 4096) shadowBlocks.push({ originX: block.x * 64, originY: block.y * 64, width: 64, height: 64 });
-                else if (updateShadow) shadowTiles.push(...chunk.Tiles.values());
-            }
         }
         for (const [key, sprite] of this.Rasters) if (!wanted.has(key)) { sprite.destroy(); this.Rasters.delete(key); }
-        for (const [key, entry] of this.BlockSides) if (!sidesWanted.has(key)) { entry.Graphics.destroy(); this.BlockSides.delete(key); }
-        if (this.Lod === 'color' && mode === '2.5d') {
-            if (updateShadow) this.BatchedShadow.update(shadowTiles, source, null, view, shadowBlocks);
-            else this.BatchedShadow.Layer.visible = true;
-            this.ShadowSource = source; this.ShadowCamera = shadowCamera;
-        }
-        else this.ShadowSource = undefined;
-        this.Count = this.Rasters.size + this.BlockSides.size;
+        this.Count = this.Rasters.size + (this.Sides.visible ? this.BlockSides.size : 0);
         this.Colors.flush();
     }
     clear() {
         if (!this.Source && !this.Layer.visible) return;
         this.Source = undefined; this.Layer.visible = false; this.Count = 0; this.Colors.clear();
-        this.Shadow.clear(); this.BatchedShadow.clear(); this.ShadowSource = undefined; this.ShadowCamera = '';
-        for (const item of this.Visible.values()) { item.Top.destroy(); item.Sides.destroy(); }
-        this.Visible.clear();
+        this.Shadow.clear(); this.clearDetail();
         for (const sprite of this.Rasters.values()) sprite.destroy();
         this.Rasters.clear();
         for (const entry of this.BlockSides.values()) entry.Graphics.destroy();
         this.BlockSides.clear();
     }
     destroy() {
-        this.Shadow.destroy();
-        this.BatchedShadow.destroy();
-        this.Colors.destroy();
+        this.clear();
+        this.Shadow.destroy(); this.Colors.destroy();
         this.Layer.destroy({ children: true });
         this.Opacity?.destroy();
-        this.Visible.clear();
     }
 }
 
@@ -361,15 +416,7 @@ export class TileRenderer {
         };
         const left = new FillGradient({ type: 'linear', textureSpace: 'global', start: { x: 0, y: 0 }, end: { x: -Extrusion, y: 0 }, colorStops: [{ offset: 0, color: sideColor(.56) }, { offset: 1, color: sideColor(.36) }] });
         const bottom = new FillGradient({ type: 'linear', textureSpace: 'global', start: { x: 0, y: CellSize }, end: { x: 0, y: CellSize + Extrusion }, colorStops: [{ offset: 0, color: sideColor(.46) }, { offset: 1, color: sideColor(.28) }] });
-        const sides = Array.from({ length: 4 }, (_, mask) => {
-            const context = new GraphicsContext();
-            if (mask & LeftFace)
-                context.poly([-Extrusion, Extrusion, 0, 0, 0, CellSize, -Extrusion, CellSize + Extrusion]).fill(left);
-            if (mask & BottomFace)
-                context.poly([-Extrusion, CellSize + Extrusion, 0, CellSize, CellSize, CellSize, CellSize - Extrusion, CellSize + Extrusion]).fill(bottom);
-            return context;
-        });
-        material = { Top: this.makeTop(tool, on, direction, crossMask), Sides: sides, Gradients: [left, bottom], Tool: tool, On: on, Direction: direction, CrossMask: crossMask };
+        material = { Top: this.makeTop(tool, on, direction, crossMask), Gradients: [left, bottom], Tool: tool, On: on, Direction: direction, CrossMask: crossMask };
         this.Materials.set(id, material);
         return material;
     }
@@ -414,8 +461,6 @@ export class TileRenderer {
         this.Layer.destroy();
         for (const material of this.Materials.values()) {
             material.Top.destroy(true);
-            for (const context of material.Sides)
-                context.destroy();
             for (const gradient of material.Gradients)
                 gradient.destroy();
         }

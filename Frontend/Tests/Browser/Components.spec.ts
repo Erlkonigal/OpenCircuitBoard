@@ -17,7 +17,7 @@ async function select(page:Page,x:number,y:number,ex:number,ey:number) {
 async function settle(page:Page) {await page.evaluate(()=>new Promise<void>(resolve=>requestAnimationFrame(()=>requestAnimationFrame(()=>resolve()))));}
 
 test('adjacent strokes stay independent, highlight entire regions and merge by clicking with one undo',async({page})=>{
-    const c=await ready(page);await page.getByRole('button',{name:'Latch',exact:true}).click();
+    const c=await ready(page);await page.getByRole('button',{name:'Button',exact:true}).click();
     await drag(page,c.x+12,c.y+12,c.x+108,c.y+12);await drag(page,c.x+12,c.y+44,c.x+108,c.y+44);
     await expect(page.locator('.workspace-status')).toContainText('8 cells');
     const first=await hoverId(page,c.x+12,c.y+12,4),second=await hoverId(page,c.x+12,c.y+44,4);expect(first).not.toBe(second);
@@ -56,7 +56,7 @@ test('left paint overwrites, normalizes leftovers and grid-edge cuts allow indep
 });
 
 test('merge rejects distant and incompatible regions and leaves cancelled choices untouched',async({page})=>{
-    const c=await ready(page);await page.getByRole('button',{name:'Latch',exact:true}).click();
+    const c=await ready(page);await page.getByRole('button',{name:'Button',exact:true}).click();
     for(const y of [0,1,3])await drag(page,c.x+12,c.y+y*32+12,c.x+108,c.y+y*32+12);
     await page.getByRole('button',{name:'Clock',exact:true}).click();await page.mouse.click(c.x+140,c.y+44);
     await page.getByRole('button',{name:'Merge',exact:true}).click();await page.mouse.click(c.x+12,c.y+12);await page.mouse.click(c.x+12,c.y+108);
@@ -67,11 +67,11 @@ test('merge rejects distant and incompatible regions and leaves cancelled choice
 });
 
 test('blueprints paste fresh flat components even in direct contact with existing placements',async({page})=>{
-    const c=await ready(page);await page.getByRole('button',{name:'Latch',exact:true}).click();
+    const c=await ready(page);await page.getByRole('button',{name:'Button',exact:true}).click();
     await drag(page,c.x+12,c.y+12,c.x+108,c.y+12);await drag(page,c.x+12,c.y+44,c.x+108,c.y+44);
     await select(page,c.x+1,c.y+2,c.x+125,c.y+62);await page.getByRole('button',{name:'Save blueprint',exact:true}).click();
-    await page.getByRole('textbox',{name:'Blueprint name'}).fill('Latch pair');await page.getByRole('dialog').getByRole('button',{name:'Save blueprint',exact:true}).click();
-    await page.getByRole('button',{name:'Copy blueprint Latch pair'}).click();
+    await page.getByRole('textbox',{name:'Blueprint name'}).fill('Button pair');await page.getByRole('dialog').getByRole('button',{name:'Save blueprint',exact:true}).click();
+    await page.getByRole('button',{name:'Copy blueprint Button pair'}).click();
     for(const x of [4,8]) {await page.mouse.move(c.x+x*32+12,c.y+12);await page.keyboard.press('Control+v');await page.mouse.click(c.x+x*32+12,c.y+12);}
     await page.getByRole('button',{name:'Clear selection'}).click();
     const ids=[];for(const x of [0,4,8])for(const y of [0,1])ids.push(await hoverId(page,c.x+x*32+12,c.y+y*32+12,4));

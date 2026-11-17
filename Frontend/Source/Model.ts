@@ -15,8 +15,6 @@ export interface Tile extends Point {
     isOn: boolean;
     clockHoldTicks?: number;
     direction?: number;
-    fixedDrive?: boolean;
-    defaultValue?: boolean;
     crossMask?: number;
 }
 export interface Board {
@@ -54,10 +52,9 @@ export interface Ink {
 export const ToolKinds: Record<string, number> = {empty:0,trace:1,traceRed:2,traceGreen:3,traceBlue:4,traceCyan:5,traceMagenta:6,bus:7,cross:13,buffer:17,and:18,or:19,xor:20,not:21,nand:22,nor:23,xnor:24,latch:25,clock:26,led:27,traceOrange:28,traceWhite:29,switch:30};
 export const ToolIds = Object.keys(ToolKinds);
 export const isDirectional = (id: string) => (ToolKinds[id] >= 17 && ToolKinds[id] <= 27) || id === 'switch';
-export type InkSettings = Pick<Tile, 'direction' | 'fixedDrive' | 'defaultValue' | 'crossMask'>;
+export type InkSettings = Pick<Tile, 'direction' | 'crossMask'>;
 export function inkSettings(id: string, settings: InkSettings): InkSettings {
     return { ...(isDirectional(id) && settings.direction ? {direction:settings.direction}:{}),
-        ...(id.startsWith('trace') ? {...(settings.fixedDrive !== undefined ? {fixedDrive:settings.fixedDrive}:{}),...(settings.defaultValue ? {defaultValue:true}:{})}:{}),
         ...(id==='cross' && settings.crossMask ? {crossMask:settings.crossMask}:{}) };
 }
 export const TraceToolIds = ['trace', 'traceRed', 'traceGreen', 'traceBlue', 'traceCyan', 'traceMagenta', 'traceOrange', 'traceWhite'];
@@ -67,10 +64,11 @@ export const hasGlyph = (id: string) => paletteId(id) !== 'trace';
 const Icons = import.meta.glob('../Assets/Inks/*.svg', { eager: true, query: '?url', import: 'default' }) as Record<string, string>;
 // Base surfaces reserve brightness for the shared highlight (weighted RGB <= 160).
 const Colors: Record<string, string> = { cross: '#88a2c8', bus: '#2378f4', switch: '#4ca8ef', trace: '#b5a527', buffer: '#44bf75', and: '#c29c58', or: '#45b7c1', xor: '#a977ed', not: '#ef5b78', nand: '#e99532', nor: '#3cb9c5', xnor: '#bf58ee', latch: '#37c377', clock: '#f05b70', led: '#9ba0a7' };
+const Titles: Record<string, string> = { latch: 'Button' };
 const VariantColors: Record<string, string> = { Red: '#ff4d4d', Green: '#58bc54', Blue: '#2378f4', Cyan: '#45b7c1', Magenta: '#c66af6', Yellow: '#b5a527', Orange: '#df8f39', White: '#9f9f9f' };
 export const paletteId = (id: string) => id.startsWith('trace') ? 'trace' : id.startsWith('bus') ? 'bus' : id;
 export function iconUrl(id: string, on = true) { if (id.startsWith('trace') || id.startsWith('bus')) id = paletteId(id); const name = id === 'latch' ? (on ? 'LatchOn' : 'LatchOff') : id[0].toUpperCase() + id.slice(1); return Icons[`../Assets/Inks/${name}.svg`]; }
-export const Inks: Ink[] = ['cross', 'bus', 'switch', 'trace', 'buffer', 'and', 'or', 'xor', 'not', 'nand', 'nor', 'xnor', 'latch', 'clock', 'led'].map(id => ({ id, title: id[0].toUpperCase() + id.slice(1), category: ['cross', 'bus'].includes(id) ? 'Space Optimization' : ['switch', 'trace'].includes(id) ? 'Trace' : ['latch', 'clock', 'led'].includes(id) ? 'General Components' : 'Gates', color: Colors[id], icon: iconUrl(id), variants: id === 'trace' ? TraceToolIds : undefined }));
+export const Inks: Ink[] = ['cross', 'bus', 'switch', 'trace', 'buffer', 'and', 'or', 'xor', 'not', 'nand', 'nor', 'xnor', 'latch', 'clock', 'led'].map(id => ({ id, title: Titles[id] ?? id[0].toUpperCase() + id.slice(1), category: ['cross', 'bus'].includes(id) ? 'Space Optimization' : ['switch', 'trace'].includes(id) ? 'Trace' : ['latch', 'clock', 'led'].includes(id) ? 'General Components' : 'Gates', color: Colors[id], icon: iconUrl(id), variants: id === 'trace' ? TraceToolIds : undefined }));
 export function inkColor(id: string) { if (paletteId(id) === 'bus') return Colors.bus; const suffix = id.slice(paletteId(id).length); return VariantColors[suffix] ?? Colors[id] ?? '#a0a0a0'; }
 export const cellKey = (point: Point) => `${point.x},${point.y}`;
 export const parseKey = (key: string): Point => { const [x, y] = key.split(',').map(Number); return { x, y }; };
@@ -148,7 +146,5 @@ export function validateProject(value: unknown): ProjectDocument {
 
 export function validateInkSettings(tile: Tile, error: string): void {
     if ((tile.direction !== undefined && (!Number.isInteger(tile.direction) || tile.direction < 0 || tile.direction > 3))
-        || (tile.fixedDrive !== undefined && (typeof tile.fixedDrive !== 'boolean' || !tile.toolId.startsWith('trace')))
-        || (tile.defaultValue !== undefined && (typeof tile.defaultValue !== 'boolean' || (!tile.toolId.startsWith('trace') && tile.defaultValue)))
         || (tile.crossMask !== undefined && (!Number.isInteger(tile.crossMask) || tile.crossMask < 0 || tile.crossMask > 255 || (tile.toolId !== 'cross' && tile.crossMask !== 0)))) throw Error(error);
 }

@@ -111,9 +111,9 @@ test('rectangles, holes, turns and diagonal contacts render independently of dra
 
 test('mixed off materials and clipboard ghosts stay opaque within each group and join on placement', async ({ page }) => {
     await paint(page, [{ x: -2, y: 0 }], 'Clock');
-    await page.getByRole('button', { name: 'Latch', exact: true }).click();
+    await page.getByRole('button', { name: 'Button', exact: true }).click();
     await page.getByText('Off', { exact: true }).click();
-    await paint(page, [{ x: -1, y: 0 }, { x: 0, y: 0 }], 'Latch');
+    await paint(page, [{ x: -1, y: 0 }, { x: 0, y: 0 }], 'Button');
     expectUniform(await pixels(page, [-1, 0].flatMap(x => [8, 24, 48].map(offset => ({ x: x * 64 + offset, y: 74 })))));
     await page.screenshot({ path: buildPath('MixedTileStatesCapture.png') });
     const origin = await center(page);

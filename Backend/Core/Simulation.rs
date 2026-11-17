@@ -105,8 +105,6 @@ struct Device {
 struct Network {
     Drivers: usize,
     High: usize,
-    FixedHigh: usize,
-    Default: u8,
     Value: u8,
     Domain: usize,
     Local: usize,
@@ -120,7 +118,6 @@ struct Domain {
     Parents: Vec<usize>,
     Drivers: Vec<usize>,
     High: Vec<usize>,
-    Defaults: Vec<u8>,
 }
 /// Static conductors are compiled once. Only dirty potential-switch domains are resolved.
 #[derive(Default)]
@@ -205,7 +202,8 @@ impl SimulationCore {
             {
                 return Err(fail(Some(cell), "invalid_component_settings"));
             }
-            if (!isTrace(kind) && (input.FixedDrives[cell] != -1 || input.DefaultValues[cell] != 0))
+            if input.FixedDrives[cell] != -1
+                || input.DefaultValues[cell] != 0
                 || (kind != 13 && input.CrossMasks[cell] != 0)
                 || (kind == 26 && input.ClockHoldTicks[cell] < 1)
             {
@@ -226,8 +224,6 @@ impl SimulationCore {
             for &cell in cells {
                 if input.Kinds[cell] != input.Kinds[first]
                     || input.Directions[cell] != input.Directions[first]
-                    || input.FixedDrives[cell] != input.FixedDrives[first]
-                    || input.DefaultValues[cell] != input.DefaultValues[first]
                     || input.CrossMasks[cell] != input.CrossMasks[first]
                     || (input.Kinds[cell] == 25
                         && input.InitialStates[cell] != input.InitialStates[first])
@@ -394,18 +390,6 @@ impl SimulationCore {
                 networks[device.Output].Drivers += 1;
             }
         }
-        for (&id, cells) in &groups {
-            let first = cells[0];
-            if isTrace(input.Kinds[first]) {
-                let net = mapping[anchors[&id][0]];
-                networks[net].Default |= input.DefaultValues[first] as u8;
-                if input.FixedDrives[first] >= 0 {
-                    networks[net].Drivers += 1;
-                    networks[net].High += input.FixedDrives[first] as usize;
-                    networks[net].FixedHigh += input.FixedDrives[first] as usize;
-                }
-            }
-        }
         let mut cellNetworks = vec![vec![]; count];
         for cell in 0..count {
             let kind = input.Kinds[cell];
@@ -451,7 +435,6 @@ impl SimulationCore {
             domain.Parents = (0..n).collect();
             domain.Drivers = vec![0; n];
             domain.High = vec![0; n];
-            domain.Defaults = vec![0; n];
         }
         let clocks = devices
             .iter()
@@ -554,20 +537,14 @@ impl SimulationCore {
             }
             domain.Drivers.fill(0);
             domain.High.fill(0);
-            domain.Defaults.fill(0);
             for (local, &n) in domain.Nets.iter().enumerate() {
                 let r = root(&mut domain.Parents, local);
                 domain.Drivers[r] += self.Networks[n].Drivers;
                 domain.High[r] += self.Networks[n].High;
-                domain.Defaults[r] |= self.Networks[n].Default;
             }
             for (local, &n) in domain.Nets.iter().enumerate() {
                 let r = root(&mut domain.Parents, local);
-                let value = if domain.Drivers[r] > 0 {
-                    (domain.High[r] > 0) as u8
-                } else {
-                    domain.Defaults[r]
-                };
+                let value = (domain.Drivers[r] > 0 && domain.High[r] > 0) as u8;
                 let net = &mut self.Networks[n];
                 if value != net.Value {
                     net.Value = value;
@@ -622,7 +599,7 @@ impl SimulationCore {
         self.Scheduled.clear();
         self.Phases.fill(0);
         for net in &mut self.Networks {
-            net.High = net.FixedHigh;
+            net.High = 0;
             net.Value = 0;
         }
         for (id, d) in self.Devices.iter().enumerate() {

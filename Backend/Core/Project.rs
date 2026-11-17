@@ -12,9 +12,6 @@ fn one() -> i32 {
 fn zero(value: &i32) -> bool {
     *value == 0
 }
-fn no(value: &bool) -> bool {
-    !*value
-}
 fn noMask(value: &u8) -> bool {
     *value == 0
 }
@@ -70,7 +67,7 @@ impl Default for Grid {
     }
 }
 #[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct Tile {
     pub X: i32,
     pub Y: i32,
@@ -82,10 +79,6 @@ pub struct Tile {
     pub ClockHoldTicks: Option<i32>,
     #[serde(default, skip_serializing_if = "zero")]
     pub Direction: i32,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub FixedDrive: Option<bool>,
-    #[serde(default, skip_serializing_if = "no")]
-    pub DefaultValue: bool,
     #[serde(default, skip_serializing_if = "noMask")]
     pub CrossMask: u8,
 }
@@ -229,8 +222,6 @@ impl Board {
             input.Kinds[cell] = toolKind(&t.ToolId).unwrap();
             input.ComponentIds[cell] = t.ComponentId;
             input.Directions[cell] = t.Direction;
-            input.FixedDrives[cell] = t.FixedDrive.map_or(-1, |v| v as i32);
-            input.DefaultValues[cell] = t.DefaultValue as i32;
             input.CrossMasks[cell] = t.CrossMask as i32;
             input.InitialStates[cell] = t.IsOn as i32;
             input.ClockHoldTicks[cell] = t.ClockHoldTicks.unwrap_or(self.ClockHoldTicks);
@@ -245,8 +236,6 @@ fn validateComponents(tiles: &[Tile], defaultHold: i32, error: &str) -> Result<(
     for tile in tiles {
         if tile.ComponentId < 1
             || !(0..4).contains(&tile.Direction)
-            || (!tile.ToolId.starts_with("trace")
-                && (tile.FixedDrive.is_some() || tile.DefaultValue))
             || (tile.ToolId != "cross" && tile.CrossMask != 0)
         {
             return Err(error.into());
@@ -254,8 +243,6 @@ fn validateComponents(tiles: &[Tile], defaultHold: i32, error: &str) -> Result<(
         if let Some(first) = samples.get(&tile.ComponentId) {
             if first.ToolId != tile.ToolId
                 || first.Direction != tile.Direction
-                || first.FixedDrive != tile.FixedDrive
-                || first.DefaultValue != tile.DefaultValue
                 || first.CrossMask != tile.CrossMask
                 || (tile.ToolId == "latch" && first.IsOn != tile.IsOn)
                 || (tile.ToolId == "clock"

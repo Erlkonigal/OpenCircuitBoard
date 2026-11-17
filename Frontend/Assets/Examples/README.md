@@ -14,25 +14,25 @@ Each character lasts eight ticks: half a second at 16 TPS, with a 6.5-second loo
 
 The sequencer is a 13-stage one-hot shift ring. Each storage bit uses two phase-controlled Switches and a Buffer feedback path. Four OR gates encode the active stage as a four-bit address; one Bus carries those address bits and the valid signal to a decoder placed beside the ROM. The decoder's two local Buses select one of thirteen word lines. The valid signal masks the display while the ring starts. This replaces the long multi-signal sequencer-to-ROM route with a four-bit address Bus.
 
-The 13-word by 40-bit ROM matrix uses the same switch ROM layout. Each bit line defaults to 1. A stored zero places a Switch between the bit line and a Trace fixed at 0; the word line controls that Switch. Selecting a word grounds its zero bits. Stored ones need no switch. Fixed 0 suppresses an undriven default 1; switches do not add data delay after closing.
+The 13-word by 40-bit ROM matrix uses Switches to select high bits. Each undriven bit line is 0. A stored one places a Switch between the bit line and a Trace driven by an On Button; the word line controls that Switch. Selecting a word connects its high bits. Stored zeros need no Switch. Closed Switches add no data delay.
 
 Five output Buses each carry the eight rows of a display column. Colored Trace taps connect directly to the directional AND and LED pins. Cross keeps intersecting word and bit lines isolated. Pixel top-lefts are `(-21 + 10 * column, -37 + 10 * row)`, each a 4x4 LED component. Three Buffer stages delay the valid signal until startup settles.
 
 | Layout metric | Previous circuit | Switch ROM | Encoded ring |
 | --- | ---: | ---: | ---: |
-| Occupied cells | 50,310 | 27,315 | 25,151 |
+| Occupied cells | 50,310 | 27,315 | 24,313 |
 | Board rectangle | 538x188 | 525x237 | 575x242 |
 | Rectangle area | 101,144 | 124,425 | 139,150 |
 
-The shift-ring version uses **7.9% fewer occupied cells** than the earlier Switch ROM archive and **50.0% fewer** than the previous circuit. Its bounding rectangle is **11.8% larger** than the earlier Switch ROM layout, so the cell-count saving comes with a wider control bank. These measures describe different aspects of routing compression. Press F for the full overview and zoom into the rightmost display for readable glyphs.
+The shift-ring version uses **11.0% fewer occupied cells** than the earlier Switch ROM archive and **51.7% fewer** than the previous circuit. Its bounding rectangle is **11.8% larger** than the earlier Switch ROM layout, so the cell-count saving comes with a wider control bank. These measures describe different aspects of routing compression. Press F for the full overview and zoom into the rightmost display for readable glyphs.
 
 ## RAM 16x8
 
-[Ram16x8.ocb](Ram16x8.ocb) stores sixteen eight-bit words using pairs of NOR gates with feedback. Each row decodes a four-bit address. A read Switch connects each cell's Q output to its bit line; write gates set or clear the feedback cell from that same bit line. Eight external data Switches connect the input Latches to the shared bit lines when Drive is asserted. OE enables the selected read row; WE enables writes. Reset clears every cell and masks reads and writes while asserted.
+[Ram16x8.ocb](Ram16x8.ocb) stores sixteen eight-bit words using pairs of NOR gates with feedback. Each row decodes a four-bit address. A read Switch connects each cell's Q output to its bit line; write gates set or clear the feedback cell from that same bit line. Eight external data Switches connect the input Buttons to the shared bit lines when Drive is asserted. OE enables the selected read row; WE enables writes. Reset clears every cell and masks reads and writes while asserted.
 
 The board is **384x483**, with **98,916 occupied cells**. This example demonstrates shared read/write wiring; there is no previous RAM layout for a compression comparison.
 
-The top control bank is at **y = -212**. Latches are clickable during simulation. Bit 0 is the least significant bit.
+The top control bank is at **y = -212**. Buttons are clickable during simulation. Bit 0 is the least significant bit.
 
 | Control | Board x coordinate | Component ID | Initial state |
 | --- | --- | --- | --- |
@@ -44,9 +44,9 @@ The top control bank is at **y = -212**. Latches are clickable during simulation
 | Data input bits 0-7 | -268, -264, -260, -256, -252, -248, -244, -240 | 17-24 | 0 |
 | Read LEDs, bits 0-7 | -229, -219, -209, -199, -189, -179, -169, -159 | 60001-60008 | 0 |
 
-Bus colors 0-7 carry the shared data bit lines. A second Bus carries address, OE, WE, Reset and Drive; a third carries the eight data input Latches. Address decoding and storage use ordinary gates. No dedicated decoder, enable, diode, tri-state, or memory Ink is required.
+Bus colors 0-7 carry the shared data bit lines. A second Bus carries address, OE, WE, Reset and Drive; a third carries the eight data input Buttons. Address decoding and storage use ordinary gates. No dedicated decoder, enable, diode, tri-state, or memory Ink is required.
 
-Use **8 ticks per settling stage** for this circuit. Set Step length to 8 and pause between stages. The Reset Latch starts at 1 so the NOR feedback cells receive a definite clear before access.
+Use **8 ticks per settling stage** for this circuit. Set Step length to 8 and pause between stages. The Reset Button starts at 1 so the NOR feedback cells receive a definite clear before access.
 
 Initialization:
 

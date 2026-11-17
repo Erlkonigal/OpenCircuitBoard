@@ -6,7 +6,7 @@ async function ready(page:Page) {
 }
 async function drag(page:Page,x:number,y:number,tx:number,ty:number) {await page.mouse.move(x,y);await page.mouse.down();await page.mouse.move(tx,ty,{steps:8});await page.mouse.up();}
 async function additive(page:Page,x:number,y:number,tx:number,ty:number) {await page.keyboard.down('Shift');await drag(page,x,y,tx,ty);await page.keyboard.up('Shift');}
-async function stroke(page:Page,c:{x:number;y:number},row=0,tool='Latch') {
+async function stroke(page:Page,c:{x:number;y:number},row=0,tool='Button') {
     await page.getByRole('button',{name:tool,exact:true}).click();await drag(page,c.x+12,c.y+row*32+12,c.x+140,c.y+row*32+12);
 }
 async function count(page:Page,cells:number) {await expect(page.getByTestId('board')).toHaveAttribute('data-selection-cells',String(cells));}
@@ -95,7 +95,7 @@ test('Merge keeps its confirmation tool and Split cuts with a repeated grid-edge
 });
 
 test('drawing merges only entered compatible targets and cancelling restores complete target regions',async({page})=>{
-    const c=await ready(page),board=page.getByTestId('board');await page.getByRole('button',{name:'Latch',exact:true}).click();
+    const c=await ready(page),board=page.getByTestId('board');await page.getByRole('button',{name:'Button',exact:true}).click();
     for(const [start,end] of [[0,1],[4,6],[9,11]])await drag(page,c.x+start*32+12,c.y+12,c.x+end*32+12,c.y+12);
     await expect(board).toHaveAttribute('data-component-count','3');
     await page.mouse.move(c.x+44,c.y+12);await page.mouse.down();await page.mouse.move(c.x+140,c.y+12,{steps:6});await expect(board).toHaveAttribute('data-component-count','2');

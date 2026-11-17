@@ -38,10 +38,53 @@ for (const mode of ['2D', '2.5D']) for (const lod of ['detail', 'color', 'aggreg
     await page.goto('/'); await expect(page.getByTestId('board')).toHaveAttribute('data-render-ready', 'true');
     await page.locator('.project-switcher').click(); await page.getByRole('menuitem', { name: 'LodRuntime.ocb', exact: true }).click();
     await page.getByText(mode, { exact: true }).click();
-    if (lod === 'color') await page.getByTestId('board').evaluate(element => {
+    if (lod === 'color' && mode === '2D') await page.getByTestId('board').evaluate(element => {
         const box = element.getBoundingClientRect();
         for (let i = 0; i < 18; i++) element.dispatchEvent(new WheelEvent('wheel', { bubbles: true, cancelable: true, clientX: box.x + box.width / 2, clientY: box.y + box.height / 2, deltaY: 100 }));
     });
+    if (mode === '2.5D' && lod === 'color') {
+        const box = (await page.getByTestId('board').boundingBox())!;
+        const zoomFrames = await page.evaluate(async ({ x, y }) => {
+            const board = document.querySelector('[data-testid="board"]')!;
+            const frames: number[] = [];
+            const renderTimes: number[] = [];
+            let last = await new Promise<number>(resolve => requestAnimationFrame(resolve));
+            for (let i = 0; i < 18; i++) {
+                board.dispatchEvent(new WheelEvent('wheel', { bubbles: true, cancelable: true, clientX: x, clientY: y, deltaY: 100 }));
+                const now = await new Promise<number>(resolve => requestAnimationFrame(resolve));
+                frames.push(now - last); last = now;
+                renderTimes.push(Number((board as HTMLElement).dataset.renderDurationMs ?? 0));
+            }
+            return { frames, renderTimes };
+        }, { x: box.x + box.width / 2, y: box.y + box.height / 2 });
+        await expect(page.getByTestId('board')).toHaveAttribute('data-lod', 'color');
+        await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+        await page.mouse.down({ button: 'middle' });
+        const pan = await page.evaluate(async ({ x, y }) => {
+            const board = document.querySelector('[data-testid="board"]')!;
+            const frames: number[] = [];
+            const renderTimes: number[] = [];
+            let last = await new Promise<number>(resolve => requestAnimationFrame(resolve));
+            for (let i = 1; i <= 16; i++) {
+                const distance = i <= 8 ? i : 16 - i;
+                board.dispatchEvent(new PointerEvent('pointermove', { bubbles: true, pointerId: 1, button: -1, buttons: 4, clientX: x + distance * 12, clientY: y + distance * 6 }));
+                const now = await new Promise<number>(resolve => requestAnimationFrame(resolve));
+                frames.push(now - last); last = now;
+                renderTimes.push(Number((board as HTMLElement).dataset.renderDurationMs ?? 0));
+            }
+            return { frames, renderTimes, gesture: (board as HTMLElement).dataset.gesture };
+        }, { x: box.x + box.width / 2, y: box.y + box.height / 2 });
+        expect(pan.gesture).toBe('pan');
+        await page.mouse.up({ button: 'middle' });
+        const cameraFrames = [...zoomFrames.frames, ...pan.frames];
+        const renderTimes = [...zoomFrames.renderTimes, ...pan.renderTimes];
+        const cameraP95 = [...cameraFrames].sort((a, b) => a - b)[Math.floor(cameraFrames.length * .95)];
+        await writeFile(buildPath('LodRefresh-2.5D-camera.json'), JSON.stringify({ frames: cameraFrames, renderTimes, p95: cameraP95 }, null, 2));
+        expect(cameraP95).toBeLessThanOrEqual(33);
+        expect(Math.max(...renderTimes)).toBeLessThanOrEqual(33);
+        await expect(page.getByTestId('board')).not.toHaveAttribute('data-render-error');
+        await page.screenshot({ path: buildPath('LodRefresh-2.5D-cameraCapture.png') });
+    }
     if (lod === 'aggregate') await page.getByRole('button', { name: 'Fit board in view' }).click();
     await expect(page.getByTestId('board')).toHaveAttribute('data-lod', lod);
     await page.getByRole('button', { name: 'Run circuit', exact: true }).click(); await page.mouse.move(100, 25);
