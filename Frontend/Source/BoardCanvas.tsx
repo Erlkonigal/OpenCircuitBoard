@@ -29,7 +29,7 @@ export function minimumZoom(grid: Grid, width: number, height: number) { return 
 export function BoardCanvas({ onLatch, onCursor, onZoom, cameraCommand }: Props) {
     const host = useRef<HTMLDivElement>(null), view = useRef<View>({ x: 0, y: 0, zoom: .5, width: 736, height: 658 });
     const callbacks=useRef({onLatch,onCursor,onZoom});callbacks.current={onLatch,onCursor,onZoom};
-    const requestDraw = useRef<() => void>(() => {});
+    const requestDraw = useRef<(immediate?: boolean) => void>(() => {});
     const worldPoint=(p:Point)=>{const v=view.current;return {x:v.x+(p.x-v.width/2)/v.zoom,y:v.y+(p.y-v.height/2)/v.zoom};};
     const cellPoint=(p:Point)=>{const w=worldPoint(p);return {x:Math.floor(w.x/Size),y:Math.floor(w.y/Size)};};
     useEffect(() => {
@@ -53,7 +53,9 @@ export function BoardCanvas({ onLatch, onCursor, onZoom, cameraCommand }: Props)
             element.appendChild(app.canvas);
             app.canvas.setAttribute('aria-label', 'Circuit board');
             const world = new Container(), board = new Graphics(), overlay = new Graphics();
-            tileRenderer = new TileRenderer(app.renderer, () => requestDraw.current());
+            // Worker results arrive between display callbacks. Present the completed
+            // overview now instead of adding another animation-frame boundary.
+            tileRenderer = new TileRenderer(app.renderer, () => requestDraw.current(tileRenderer?.Lod === 'aggregate'));
             highlight = new ComponentHighlight();
             app.stage.addChild(world);
             const motif = new Graphics().poly([0, 64, 96, 8, 192, 64, 192, 176, 96, 232, 0, 176]).stroke({ color: '#304638', alpha: .15, width: 2 });
@@ -129,13 +131,20 @@ export function BoardCanvas({ onLatch, onCursor, onZoom, cameraCommand }: Props)
                 app.render();
                 callbacks.current.onZoom?.(v.zoom);
             };
-            requestDraw.current = () => { if (!frame) frame = requestAnimationFrame(() => {
+            const render = () => {
                 try { draw(); }
                 catch (error) {
                     frame = 0;
                     if (element.dataset.renderError !== String(error)) { element.dataset.renderError = String(error); useEditor.getState().log(String(error)); }
                 }
-            }); };
+            };
+            requestDraw.current = (immediate = false) => {
+                if (immediate) {
+                    cancelAnimationFrame(frame);
+                    render();
+                }
+                else if (!frame) frame = requestAnimationFrame(render);
+            };
             unsubscribe = useEditor.subscribe((next, previous) => {
                 if (next.RuntimeGrid !== previous.RuntimeGrid) tileRenderer?.prepareRuntime(next.Simulating ? next.RuntimeGrid : null);
                 if (next.Tiles !== previous.Tiles || next.Preview !== previous.Preview || next.RenderMode !== previous.RenderMode || next.RuntimeGrid !== previous.RuntimeGrid)
