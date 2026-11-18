@@ -6,10 +6,20 @@ if ($TargetPlatform -ne 'windows' -or $env:OS -ne 'Windows_NT') {
 if ($env:MSYSTEM -or $env:WSL_DISTRO_NAME) {
     throw 'Run Windows targets from native PowerShell.'
 }
-foreach ($ocbTool in @('node.exe', 'npm.cmd', 'cargo.exe', 'rustc.exe')) {
-    $ocbResolved = Get-Command $ocbTool -CommandType Application -TotalCount 1 -ErrorAction Stop
+$ocbNode = Get-Command node.exe -CommandType Application -TotalCount 1 -ErrorAction Stop
+# Ignore the extensionless Unix launcher shipped with Windows Node.js.
+$ocbNpm = Get-Command npm -CommandType Application -All -ErrorAction SilentlyContinue |
+    Where-Object { $_.Extension -in '.exe', '.cmd' } |
+    Select-Object -First 1
+if (-not $ocbNpm) { throw 'Put npm.cmd or npm.exe from a Windows Node.js installation on PATH.' }
+foreach ($ocbResolved in @(
+    $ocbNode
+    $ocbNpm
+    Get-Command cargo.exe -CommandType Application -TotalCount 1 -ErrorAction Stop
+    Get-Command rustc.exe -CommandType Application -TotalCount 1 -ErrorAction Stop
+)) {
     if ($ocbResolved.Source -match '(?i)[\\/](msys\d*|mingw\d*|ucrt64|cygwin\d*)[\\/]') {
-        throw "$ocbTool must come from a native Windows installation: $($ocbResolved.Source)"
+        throw "$($ocbResolved.Name) must come from a native Windows installation: $($ocbResolved.Source)"
     }
 }
 $ocbVsWhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio/Installer/vswhere.exe'
@@ -35,5 +45,5 @@ $ocbRustVersion = & rustc.exe -vV
 if ($LASTEXITCODE -ne 0 -or -not ($ocbRustVersion -contains 'host: x86_64-pc-windows-msvc')) {
     throw 'Install Rust with rustup toolchain install stable-x86_64-pc-windows-msvc.'
 }
-& node.exe -e "if(process.platform!=='win32' || process.arch!=='x64' || process.config.variables.shlib_suffix==='dll.a' || process.config.variables.node_target_type==='shared_library') process.exit(1)"
+& $ocbNode.Source -e "if(process.platform!=='win32' || process.arch!=='x64' || process.config.variables.shlib_suffix==='dll.a' || process.config.variables.node_target_type==='shared_library') process.exit(1)"
 if ($LASTEXITCODE -ne 0) { throw 'Install standard x64 Windows Node.js.' }

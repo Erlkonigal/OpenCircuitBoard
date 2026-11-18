@@ -78,7 +78,8 @@ Use **make on both Windows and Linux**, from the repository root. The default ta
 
 Windows prerequisites:
 
-- A compatible GNU Make, such as `mingw32-make` from MSYS2 UCRT64, plus standard x64 Windows Node.js and Rust with `stable-x86_64-pc-windows-msvc`.
+- A compatible GNU Make, such as `mingw32-make` from MSYS2 UCRT64, and Rust with `stable-x86_64-pc-windows-msvc`.
+- Standard x64 Windows Node.js and npm on `PATH`. Both `npm.cmd` and `npm.exe` (nvm shim mode) are supported.
 - Visual Studio Build Tools with **Desktop development with C++** and a Windows SDK. The helper loads the actual x64 Developer PowerShell environment automatically; a full IDE is unnecessary.
 - Edge WebView2 for the desktop runtime, and Edge for browser tests.
 

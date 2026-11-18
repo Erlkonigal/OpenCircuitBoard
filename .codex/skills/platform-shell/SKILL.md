@@ -19,7 +19,7 @@ make build TARGET_PLATFORM=windows BUILD_TYPE=Release
 
 Windows recipes dispatch to `scripts/Command.ps1`, which loads `scripts/Platform.ps1`. The helper discovers Visual Studio Build Tools with `vswhere`, imports its real x64 Developer PowerShell environment, and validates:
 
-- Standard x64 Windows Node.js and `npm.cmd`.
+- Standard x64 Windows Node.js and a Windows npm launcher on `PATH` (`npm.cmd` or `npm.exe`, including nvm shims).
 - `cl.exe` and `link.exe` from the selected Visual Studio installation, with `rc.exe` from its Windows SDK.
 - Rust `stable-x86_64-pc-windows-msvc` and the `x86_64-pc-windows-msvc` host.
 

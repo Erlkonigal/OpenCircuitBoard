@@ -14,7 +14,7 @@ function invokeChecked([string]$executable, [string[]]$arguments) {
 }
 function invokeFrontend([string[]]$arguments) {
     Push-Location -LiteralPath (Join-Path $ocbRoot 'Frontend')
-    try { invokeChecked 'npm.cmd' $arguments }
+    try { invokeChecked $ocbNpm.Source $arguments }
     finally { Pop-Location }
 }
 function invokeCargo([string[]]$arguments) {
@@ -24,7 +24,7 @@ function invokeCargo([string[]]$arguments) {
 }
 function invokeTauri([string[]]$arguments) {
     Push-Location -LiteralPath (Join-Path $ocbRoot 'Backend/Desktop')
-    try { invokeChecked 'node.exe' (@((Join-Path $ocbRoot 'build/Dependencies/node_modules/@tauri-apps/cli/tauri.js')) + $arguments) }
+    try { invokeChecked $ocbNode.Source (@((Join-Path $ocbRoot 'build/Dependencies/node_modules/@tauri-apps/cli/tauri.js')) + $arguments) }
     finally { Pop-Location }
 }
 function splitArguments([string]$value) {
@@ -35,9 +35,12 @@ if ($BuildType -eq 'Debug') { $ocbBuildArgs += '--debug' }
 switch ($Action) {
     'check-platform' {
         Write-Output "Platform: windows / native PowerShell / MSVC x64"
-        foreach ($ocbTool in @('cl.exe', 'link.exe', 'rc.exe', 'node.exe', 'cargo.exe')) {
+        foreach ($ocbTool in @('cl.exe', 'link.exe', 'rc.exe', 'cargo.exe')) {
             Write-Output "$ocbTool : $((Get-Command $ocbTool).Source)"
         }
+        Write-Output "$($ocbNode.Name) : $($ocbNode.Source)"
+        Write-Output "$($ocbNpm.Name) : $($ocbNpm.Source)"
+        invokeFrontend @('--version')
         invokeChecked 'rustc.exe' @('-vV')
     }
     'format' { invokeCargo @('fmt', '--all') }
