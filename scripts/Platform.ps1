@@ -7,7 +7,7 @@ if ($env:MSYSTEM -or $env:WSL_DISTRO_NAME) {
     throw 'Run Windows targets from native PowerShell.'
 }
 foreach ($ocbTool in @('node.exe', 'npm.cmd', 'cargo.exe', 'rustc.exe')) {
-    $ocbResolved = Get-Command $ocbTool -CommandType Application -ErrorAction Stop
+    $ocbResolved = Get-Command $ocbTool -CommandType Application -TotalCount 1 -ErrorAction Stop
     if ($ocbResolved.Source -match '(?i)[\\/](msys\d*|mingw\d*|ucrt64|cygwin\d*)[\\/]') {
         throw "$ocbTool must come from a native Windows installation: $($ocbResolved.Source)"
     }
@@ -21,12 +21,12 @@ if (-not $ocbVsPath) { throw 'Visual Studio x64 C++ build tools were not found.'
 Import-Module (Join-Path $ocbVsPath 'Common7/Tools/Microsoft.VisualStudio.DevShell.dll')
 Enter-VsDevShell -VsInstallPath $ocbVsPath -SkipAutomaticLocation -DevCmdArguments '-arch=x64 -host_arch=x64' | Out-Null
 foreach ($ocbTool in @('cl.exe', 'link.exe')) {
-    $ocbResolved = Get-Command $ocbTool -CommandType Application -ErrorAction Stop
+    $ocbResolved = Get-Command $ocbTool -CommandType Application -TotalCount 1 -ErrorAction Stop
     if (-not $ocbResolved.Source.StartsWith($ocbVsPath, [StringComparison]::OrdinalIgnoreCase)) {
         throw "$ocbTool must belong to the selected Visual Studio installation."
     }
 }
-$ocbRc = Get-Command rc.exe -CommandType Application -ErrorAction Stop
+$ocbRc = Get-Command rc.exe -CommandType Application -TotalCount 1 -ErrorAction Stop
 if (-not $env:WindowsSdkDir -or -not $ocbRc.Source.StartsWith($env:WindowsSdkDir, [StringComparison]::OrdinalIgnoreCase)) {
     throw 'A matching Windows SDK resource compiler is required.'
 }
