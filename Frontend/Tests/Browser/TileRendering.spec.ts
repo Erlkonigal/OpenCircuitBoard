@@ -20,21 +20,21 @@ async function paint(page: Page, cells: Point[], tool = 'Or') {
         await page.mouse.click(origin.x + cell.x * 32 + 12, origin.y + cell.y * 32 + 12);
     await cleanCursor(page);
 }
-async function pixels(page: Page, points: Point[]) {
+async function pixels(page: Page, points: Point[], zoom = .5) {
     await settle(page);
-    return page.locator('canvas[aria-label="Circuit board"]').evaluate((element, points) => {
+    return page.locator('canvas[aria-label="Circuit board"]').evaluate((element, { points, zoom }) => {
         const canvas = element as HTMLCanvasElement;
         const gl = canvas.getContext('webgl2') || canvas.getContext('webgl');
         if (!gl) throw Error('WebGL context unavailable');
         const scale = canvas.width / canvas.getBoundingClientRect().width;
         return points.map(point => {
             const data = new Uint8Array(4);
-            const x = Math.floor(canvas.width / 2 + point.x * .5 * scale);
-            const y = canvas.height - 1 - Math.floor(canvas.height / 2 + point.y * .5 * scale);
+            const x = Math.floor(canvas.width / 2 + point.x * zoom * scale);
+            const y = canvas.height - 1 - Math.floor(canvas.height / 2 + point.y * zoom * scale);
             gl.readPixels(x, y, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, data);
             return [...data].slice(0, 3);
         });
-    }, points);
+    }, { points, zoom });
 }
 const brightness = (rgb: number[]) => rgb.reduce((sum, channel) => sum + channel, 0);
 function expectUniform(samples: number[][], tolerance = 3) {
@@ -57,6 +57,81 @@ test.beforeEach(async ({ page }) => {
     await expect(page.getByTestId('board')).toHaveAttribute('data-render-ready', 'true');
 });
 test.afterEach(async ({ page }) => { expect(PageErrors.get(page)).toEqual([]); });
+
+test('same-color boundaries distinguish idle components, follow edits and fade with zoom', async ({ page }) => {
+    await page.addInitScript(() => {
+        (window as unknown as { __TAURI_INTERNALS__: unknown }).__TAURI_INTERNALS__ = { invoke: async (command: string) => {
+            if (command === 'recentProjects') return ['Boundaries.ocb'];
+            if (command !== 'openProject') throw Error(command);
+            const tiles = [];
+            for (let y = 0; y < 2; y++) for (let x = -3; x < 3; x++)
+                tiles.push({ x, y, toolId: x < 2 ? 'traceCyan' : 'traceRed', componentId: x < 0 ? 1 : x < 2 ? 2 : 3, isOn: true });
+            for (let y = -3; y < 2; y++) for (let x = 4; x < 6; x++)
+                tiles.push({ x, y, toolId: y < 0 ? 'traceBlue' : 'bus', componentId: y < 0 ? 4 : 5, isOn: false });
+            return { board: { circuitModel: 'booleanSwitch', selectedTool: 'traceCyan', clockHoldTicks: 1, buttonInitialState: true,
+                grid: { originX: -96, originY: -96, width: 192, height: 192 }, tiles }, blueprints: [] };
+        } };
+    });
+    await page.reload();
+    const board = page.getByTestId('board');
+    await expect(board).toHaveAttribute('data-render-ready', 'true');
+    await page.locator('.project-switcher').click();
+    await page.getByRole('menuitem', { name: 'Boundaries.ocb', exact: true }).click();
+    await expect(board).toHaveAttribute('data-component-count', '5');
+    const bright = [{ x: -32, y: 32 }, { x: 0, y: 32 }];
+    let fullContrast = 0;
+    for (const mode of ['2D', '2.5D']) {
+        await page.getByText(mode, { exact: true }).click();
+        await cleanCursor(page);
+        await expect(board).toHaveAttribute('data-highlight-cells', '0');
+        const [face, edge, internal, redEdge, redFace, darkFace, darkEdge] = await pixels(page, [
+            ...bright, { x: -64, y: 32 }, { x: 129, y: 32 }, { x: 160, y: 32 }, { x: 264, y: -12 }, { x: 264, y: 0 }
+        ]);
+        fullContrast = brightness(face) - brightness(edge);
+        expect(fullContrast).toBeGreaterThan(60);
+        expectUniform([face, internal]);
+        expectUniform([redEdge, redFace]);
+        expect(brightness(darkFace) - brightness(darkEdge)).toBeGreaterThan(24);
+        await page.screenshot({ path: buildPath(mode === '2D' ? 'ComponentBoundariesFlatCapture.png' : 'ComponentBoundariesDepthCapture.png') });
+    }
+
+    const origin = await center(page);
+    const assertBoundary = async (count: number, present: boolean) => {
+        await board.focus();
+        await page.keyboard.press('Control+d');
+        await cleanCursor(page);
+        await expect(board).toHaveAttribute('data-component-count', String(count));
+        const samples = await pixels(page, bright);
+        if (present) expect(brightness(samples[0]) - brightness(samples[1])).toBeGreaterThan(60);
+        else expectUniform(samples);
+    };
+    await page.getByRole('button', { name: 'Merge', exact: true }).click();
+    await page.mouse.click(origin.x - 16, origin.y + 16);
+    await page.mouse.click(origin.x + 16, origin.y + 16);
+    await page.getByRole('button', { name: 'Confirm merge' }).click();
+    await assertBoundary(4, false);
+    await page.getByRole('button', { name: 'Split', exact: true }).click();
+    await page.mouse.move(origin.x, origin.y);
+    await page.mouse.down();
+    await page.mouse.move(origin.x, origin.y + 64, { steps: 5 });
+    await page.mouse.up();
+    await assertBoundary(5, true);
+    await page.keyboard.press('Control+z');
+    await assertBoundary(4, false);
+    await page.keyboard.press('Control+z');
+    await assertBoundary(5, true);
+
+    const zoomOut = page.getByRole('button', { name: 'Zoom out', exact: true });
+    for (let i = 0; i < 12; i++) await zoomOut.click();
+    await expect(board).toHaveAttribute('data-lod', 'color');
+    await expect(board).toHaveAttribute('data-color-ready', 'true');
+    const [face, faded] = await pixels(page, bright, .5 / 1.1 ** 12);
+    expect(brightness(face) - brightness(faded)).toBeGreaterThan(12);
+    expect(brightness(face) - brightness(faded)).toBeLessThan(fullContrast * .8);
+    for (let i = 0; i < 3; i++) await zoomOut.click();
+    await expect(board).toHaveAttribute('data-color-ready', 'true');
+    expectUniform(await pixels(page, bright, .5 / 1.1 ** 15));
+});
 
 test('continuous horizontal sides and directional shadows have no per-cell seams', async ({ page }) => {
     const shadowPoints = [90, 98, 112].map(y => ({ x: 16, y }));

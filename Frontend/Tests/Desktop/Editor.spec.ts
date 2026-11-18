@@ -191,7 +191,8 @@ describe('Native circuit workspace', () => {
             const gl = canvas.getContext('webgl2') || canvas.getContext('webgl');
             if (!gl) throw Error('WebGL context unavailable');
             const scale = canvas.width / canvas.getBoundingClientRect().width;
-            return [[8, 138], [24, 138], [48, 138], [72, 138], [88, 138], [112, 138], [16, 132], [16, 146]].map(([x, y]) => {
+            return [[8, 138], [24, 138], [48, 138], [72, 138], [88, 138], [112, 138], [16, 132], [16, 146],
+                [56, 8], [64, 8], [72, 8]].map(([x, y]) => {
                 const data = new Uint8Array(4);
                 gl.readPixels(Math.floor(canvas.width / 2 + x * .5 * scale), canvas.height - 1 - Math.floor(canvas.height / 2 + y * .5 * scale), 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, data);
                 return [...data].slice(0, 3);
@@ -203,6 +204,7 @@ describe('Native circuit workspace', () => {
         }
         const sum = (color: number[]) => color.reduce((total, value) => total + value, 0);
         expect(sum(colors[6]) - sum(colors[7])).toBeGreaterThan(15);
+        expect(Math.min(sum(colors[8]), sum(colors[10])) - sum(colors[9])).toBeGreaterThan(60);
         await browser.saveScreenshot(buildPath('DesktopJoinedTilesCapture.png'));
     });
 

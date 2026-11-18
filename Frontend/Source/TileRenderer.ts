@@ -2,6 +2,7 @@ import { AlphaFilter, Assets, BlurFilter, Container, FillGradient, Graphics, Mat
 import { cellKey, hasGlyph, iconUrl, inkColor, type Tile, type RenderMode } from './Model';
 import { CellStore, type CellChunk } from './CellStore';
 import { ColorCache } from './ColorCache';
+import { ComponentBoundaries } from './ComponentBoundaries';
 import { HighlightTint, HighlightStrength } from './HighlightStyle';
 import { colorKey, colorLevel, detailLevel } from './ColorPyramid';
 import type { RuntimeGrid } from './EditorStore';
@@ -214,6 +215,7 @@ class TileGroup {
     readonly Layer = new Container();
     private readonly Sides = new Container();
     private readonly Tops = new Container();
+    private readonly Boundaries = new ComponentBoundaries();
     private readonly Visible = new Map<string, Sprite>();
     private readonly Shadow: TileShadow;
     private readonly Opacity?: AlphaFilter;
@@ -229,7 +231,7 @@ class TileGroup {
     constructor(renderer: Renderer, redraw: () => void, alpha = 1) {
         this.Shadow = new TileShadow(renderer);
         this.Colors = new ColorCache(redraw);
-        this.Layer.addChild(this.Shadow.Layer, this.Sides, this.Raster, this.Tops);
+        this.Layer.addChild(this.Shadow.Layer, this.Sides, this.Raster, this.Tops, this.Boundaries.Layer);
         if (alpha !== 1) {
             this.Opacity = new AlphaFilter({ alpha });
             this.Layer.filters = [this.Opacity];
@@ -308,10 +310,12 @@ class TileGroup {
             this.updateSides(source, source.chunks(bounds), materialFor, runtime, tint, highlightStamp);
         }
         else this.Shadow.Layer.visible = false;
+        this.Boundaries.draw(source, bounds, view.zoom);
+        const surfaceCount = this.Boundaries.Count + (this.Sides.visible ? this.BlockSides.size : 0);
         if (this.Lod === 'detail') {
             const tiles = [...source.query(bounds)];
             this.update(tiles, materialFor, tint);
-            this.Count = tiles.length + (this.Sides.visible ? this.BlockSides.size : 0);
+            this.Count = tiles.length + surfaceCount;
             return;
         }
         this.clearDetail();
@@ -328,13 +332,14 @@ class TileGroup {
             if (!texture && sprite) sprite.visible = false;
         }
         for (const [key, sprite] of this.Rasters) if (!wanted.has(key)) { sprite.destroy(); this.Rasters.delete(key); }
-        this.Count = this.Rasters.size + (this.Sides.visible ? this.BlockSides.size : 0);
+        this.Count = this.Rasters.size + surfaceCount;
         this.Colors.flush();
     }
     clear() {
         if (!this.Source && !this.Layer.visible) return;
         this.Source = undefined; this.Layer.visible = false; this.Count = 0; this.Colors.clear();
         this.Shadow.clear(); this.clearDetail();
+        this.Boundaries.clear();
         for (const sprite of this.Rasters.values()) sprite.destroy();
         this.Rasters.clear();
         for (const entry of this.BlockSides.values()) entry.Graphics.destroy();
