@@ -9,7 +9,7 @@ Select the native environment from `TARGET_PLATFORM`. The root `Makefile` defaul
 
 ## Windows
 
-Use native Windows PowerShell from the repository root:
+Use native Windows PowerShell from the repository root with a compatible GNU Make. If the executable is named `mingw32-make`, use that command in place of `make`.
 
 ```powershell
 make check-platform TARGET_PLATFORM=windows
@@ -17,13 +17,13 @@ make init TARGET_PLATFORM=windows
 make build TARGET_PLATFORM=windows BUILD_TYPE=Release
 ```
 
-Native `make.exe` dispatches to `scripts/Command.ps1`, which loads `scripts/Platform.ps1`. The helper discovers Visual Studio Build Tools with `vswhere`, imports its real x64 Developer PowerShell environment, and validates:
+Windows recipes dispatch to `scripts/Command.ps1`, which loads `scripts/Platform.ps1`. The helper discovers Visual Studio Build Tools with `vswhere`, imports its real x64 Developer PowerShell environment, and validates:
 
-- Native Windows `make.exe`, standard x64 Windows Node.js, and `npm.cmd`.
+- Standard x64 Windows Node.js and `npm.cmd`.
 - `cl.exe` and `link.exe` from the selected Visual Studio installation, with `rc.exe` from its Windows SDK.
 - Rust `stable-x86_64-pc-windows-msvc` and the `x86_64-pc-windows-msvc` host.
 
-Visual Studio Build Tools with Desktop development with C++ and a Windows SDK are sufficient; a full IDE is unnecessary. Keep Windows builds, core tests, benchmarks, and packaging on MSVC. Do not bootstrap MSYS2, UCRT64, MinGW, Git Bash, WSL, or fabricated platform variables.
+Visual Studio Build Tools with Desktop development with C++ and a Windows SDK are sufficient. Keep Windows builds, core tests, benchmarks, and packaging on MSVC.
 
 For a one-off native command, load the same environment in that PowerShell process first:
 

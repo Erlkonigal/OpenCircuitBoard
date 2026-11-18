@@ -4,9 +4,9 @@ if ($TargetPlatform -ne 'windows' -or $env:OS -ne 'Windows_NT') {
     throw 'Windows targets require native Windows PowerShell. Use native Linux Bash for Linux targets.'
 }
 if ($env:MSYSTEM -or $env:WSL_DISTRO_NAME) {
-    throw 'Run Windows make from native PowerShell, outside MSYS2, Git Bash, or WSL.'
+    throw 'Run Windows targets from native PowerShell.'
 }
-foreach ($ocbTool in @('make.exe', 'node.exe', 'npm.cmd', 'cargo.exe', 'rustc.exe')) {
+foreach ($ocbTool in @('node.exe', 'npm.cmd', 'cargo.exe', 'rustc.exe')) {
     $ocbResolved = Get-Command $ocbTool -CommandType Application -ErrorAction Stop
     if ($ocbResolved.Source -match '(?i)[\\/](msys\d*|mingw\d*|ucrt64|cygwin\d*)[\\/]') {
         throw "$ocbTool must come from a native Windows installation: $($ocbResolved.Source)"

@@ -78,7 +78,7 @@ Use **make on both Windows and Linux**, from the repository root. The default ta
 
 Windows prerequisites:
 
-- Native Windows GNU Make (`make.exe`), standard x64 Node.js, and Rust with `stable-x86_64-pc-windows-msvc`.
+- A compatible GNU Make, such as `mingw32-make` from MSYS2 UCRT64, plus standard x64 Windows Node.js and Rust with `stable-x86_64-pc-windows-msvc`.
 - Visual Studio Build Tools with **Desktop development with C++** and a Windows SDK. The helper loads the actual x64 Developer PowerShell environment automatically; a full IDE is unnecessary.
 - Edge WebView2 for the desktop runtime, and Edge for browser tests.
 
@@ -94,7 +94,7 @@ make package
 
 The app sets `app.security.csp` to `null` in `Backend/Desktop/tauri.conf.json` and uses the standard PixiJS renderer.
 
-Windows uses `make -> PowerShell -> MSVC`. It does not require MSYS2, UCRT64, MinGW, Git Bash, or WSL.
+Windows uses `make -> PowerShell -> MSVC`. If your distribution names the executable `mingw32-make`, use that name in the commands above.
 
 Linux requires native Bash, GNU Make, Node.js, Rust, a linker, and Tauri's WebKitGTK 4.1 development libraries. On Debian/Ubuntu these include `build-essential`, `pkg-config`, `libwebkit2gtk-4.1-dev`, `libayatana-appindicator3-dev`, `librsvg2-dev`, `patchelf`, and `libssl-dev`.
 

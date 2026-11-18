@@ -21,7 +21,7 @@
 ## Shell And Platform
 
 - Select the native execution environment from `TARGET_PLATFORM`; make defaults to the native host platform.
-- Run Windows targets from native PowerShell using native Windows `make.exe`, standard Windows Node.js, and `x86_64-pc-windows-msvc` Rust. `scripts/Platform.ps1` loads the real x64 Visual Studio Developer PowerShell environment and checks MSVC and Windows SDK paths.
-- Windows make recipes dispatch to `scripts/Command.ps1`. Do not use MSYS2, UCRT64, MinGW, Git Bash, WSL, or fabricated platform environment variables for Windows work.
+- Run Windows targets from native PowerShell with a compatible GNU Make, standard Windows Node.js, and `x86_64-pc-windows-msvc` Rust. GNU Make can come from distributions such as MSYS2 or MinGW.
+- Windows make recipes dispatch to `scripts/Command.ps1`. Use the actual host environment. `scripts/Platform.ps1` loads the real x64 Visual Studio Developer PowerShell environment and checks MSVC and Windows SDK paths.
 - Run Linux targets in native Linux Bash. `scripts/Platform.sh` verifies `uname -o` is `GNU/Linux` and checks the Linux Rust and Node hosts; make recipes dispatch to `scripts/Command.sh`.
 - Keep scripts compatible with the native platform. Use native Windows paths in PowerShell and POSIX paths in Linux Bash.

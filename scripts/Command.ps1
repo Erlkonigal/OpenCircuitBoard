@@ -35,7 +35,7 @@ if ($BuildType -eq 'Debug') { $ocbBuildArgs += '--debug' }
 switch ($Action) {
     'check-platform' {
         Write-Output "Platform: windows / native PowerShell / MSVC x64"
-        foreach ($ocbTool in @('make.exe', 'cl.exe', 'link.exe', 'rc.exe', 'node.exe', 'cargo.exe')) {
+        foreach ($ocbTool in @('cl.exe', 'link.exe', 'rc.exe', 'node.exe', 'cargo.exe')) {
             Write-Output "$ocbTool : $((Get-Command $ocbTool).Source)"
         }
         invokeChecked 'rustc.exe' @('-vV')
