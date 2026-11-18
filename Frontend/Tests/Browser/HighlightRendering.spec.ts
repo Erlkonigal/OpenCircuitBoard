@@ -16,19 +16,19 @@ async function pixels(page: Page, points: number[][]) {
     }, points);
 }
 for (const lod of ['detail', 'color', 'aggregate'] as const) for (const isOn of [true, false]) {
-    test(`${lod} whole-surface highlights preserve holes, neighbors and chunk seams on ${isOn ? 'bright' : 'dark'} cyan`, async ({ page }) => {
+    test(`${lod} whole-surface highlights preserve holes, neighbors and chunk seams on ${isOn ? 'bright Trace' : 'an off Button'}`, async ({ page }) => {
         const extent = lod === 'detail' ? 40 : lod === 'color' ? 256 : 2048;
         const size = lod === 'detail' ? 8 : lod === 'color' ? 48 : 256;
         await page.addInitScript(({ extent, size, isOn }) => {
             (window as unknown as { __TAURI_INTERNALS__: unknown }).__TAURI_INTERNALS__ = { invoke: async (command: string) => {
                 if (command === 'recentProjects') return ['Highlight.ocb'];
                 if (command !== 'openProject') throw Error(command);
-                const tiles = [], half = size / 2, quarter = size / 4;
+                const tiles = [], half = size / 2, quarter = size / 4, toolId = isOn ? 'traceCyan' : 'button';
                 for (let y = -half; y < half; y++) for (let x = -half; x < half + quarter; x++) {
                     if (x >= -quarter && x < quarter && y >= -quarter && y < quarter) continue;
-                    tiles.push({ x, y, toolId: 'traceCyan', componentId: x < half ? 1 : 2, isOn });
+                    tiles.push({ x, y, toolId, componentId: x < half ? 1 : 2, isOn });
                 }
-                return { board: { circuitModel: 'booleanSwitch', selectedTool: 'traceCyan', clockHoldTicks: 1, buttonInitialState: true,
+                return { board: { circuitModel: 'booleanSwitch', selectedTool: toolId, clockHoldTicks: 1, buttonInitialState: true,
                     grid: { originX: -extent / 2, originY: -extent / 2, width: extent, height: extent }, tiles }, blueprints: [] };
             } };
         }, { extent, size, isOn });
@@ -74,7 +74,7 @@ for (const lod of ['detail', 'color', 'aggregate'] as const) for (const isOn of 
 
 const PaletteInks = ['traceOrange', 'traceWhite', 'trace', 'traceRed', 'traceGreen', 'traceBlue', 'traceCyan', 'traceMagenta', 'bus', 'cross', 'switch', 'buffer', 'and', 'or', 'xor', 'not', 'nand', 'nor', 'xnor', 'button', 'clock', 'led'];
 const brightness = (pixel: number[]) => pixel[0] * .2126 + pixel[1] * .7152 + pixel[2] * .0722;
-for (const isOn of [true, false]) test(`every ink reserves visible highlight headroom on ${isOn ? 'active' : 'inactive'} surfaces`, async ({ page }) => {
+for (const isOn of [true, false]) test(`design colors and highlights are correct when saved states are ${isOn ? 'on' : 'off'}`, async ({ page }) => {
     await page.addInitScript(({ inks, isOn }) => {
         (window as unknown as { __TAURI_INTERNALS__: unknown }).__TAURI_INTERNALS__ = { invoke: async (command: string) => {
             if (command === 'recentProjects') return ['Palette.ocb'];
@@ -93,6 +93,8 @@ for (const isOn of [true, false]) test(`every ink reserves visible highlight hea
         await page.getByText(mode, { exact: true }).click(); await board.focus(); await page.keyboard.press('Control+d'); await page.mouse.move(100, 25);
         await expect(board).toHaveAttribute('data-color-ready', 'true');
         const before = await pixels(page, points), individual: number[][] = [];
+        expect(before[PaletteInks.indexOf('traceCyan')].slice(0, 3)).toEqual([69, 183, 193]);
+        expect(before[PaletteInks.indexOf('button')].slice(0, 3)).toEqual(isOn ? [55, 195, 119] : [27, 73, 59]);
         for (let i = 0; i < PaletteInks.length; i++) {
             expect(brightness(before[i])).toBeLessThanOrEqual(160);
             await page.mouse.move(center.x + points[i][0], center.y + points[i][1]);
@@ -102,29 +104,29 @@ for (const isOn of [true, false]) test(`every ink reserves visible highlight hea
             individual.push(hovered[i]);
             for (let other = 0; other < PaletteInks.length; other++) if (i !== other) expect(hovered[other]).toEqual(before[other]);
         }
-        await page.screenshot({ path: buildPath(`HighlightPalette${mode === '2D' ? 'Flat' : 'Depth'}${isOn ? 'Active' : 'Inactive'}HoverCapture.png`) });
+        await page.screenshot({ path: buildPath(`HighlightPalette${mode === '2D' ? 'Flat' : 'Depth'}${isOn ? 'SavedOn' : 'SavedOff'}HoverCapture.png`) });
         await board.focus(); await page.keyboard.press('Control+a'); await page.mouse.move(100, 25);
         const selected = await pixels(page, points);
         expect(selected).toEqual(individual);
         await page.mouse.move(center.x + points[0][0], center.y + points[0][1]);
         expect(await pixels(page, points)).toEqual(selected);
-        await page.screenshot({ path: buildPath(`HighlightPalette${mode === '2D' ? 'Flat' : 'Depth'}${isOn ? 'Active' : 'Inactive'}SelectedCapture.png`) });
+        await page.screenshot({ path: buildPath(`HighlightPalette${mode === '2D' ? 'Flat' : 'Depth'}${isOn ? 'SavedOn' : 'SavedOff'}SelectedCapture.png`) });
     }
 });
 
 for (const lod of ['detail', 'color'] as const) for (const isOn of [true, false])
-    test(`${lod} highlights both depth faces with correct diagonal occlusion on ${isOn ? 'active' : 'inactive'} ink`, async ({ page }) => {
+    test(`${lod} highlights both depth faces with correct diagonal occlusion on ${isOn ? 'bright Trace' : 'an off Button'}`, async ({ page }) => {
         const extent = lod === 'detail' ? 40 : 96;
         await page.addInitScript(({ extent, isOn }) => {
             (window as unknown as { __TAURI_INTERNALS__: unknown }).__TAURI_INTERNALS__ = { invoke: async (command: string) => {
                 if (command === 'recentProjects') return ['DepthHighlight.ocb']; if (command !== 'openProject') throw Error(command);
-                const tiles = [];
+                const tiles = [], toolId = isOn ? 'traceCyan' : 'button';
                 for (let y = -4; y < 4; y++) for (let x = -4; x < 5; x++) {
                     if (x >= -2 && x < 2 && y >= -2 && y < 2) continue;
-                    tiles.push({ x, y, toolId: 'traceCyan', componentId: x < 4 ? 1 : 2, isOn });
+                    tiles.push({ x, y, toolId, componentId: x < 4 ? 1 : 2, isOn });
                 }
                 tiles.push({ x: -5, y: 4, toolId: 'traceRed', componentId: 3, isOn });
-                return { board: { circuitModel: 'booleanSwitch', selectedTool: 'traceCyan', clockHoldTicks: 1, buttonInitialState: true,
+                return { board: { circuitModel: 'booleanSwitch', selectedTool: toolId, clockHoldTicks: 1, buttonInitialState: true,
                     grid: { originX: -extent / 2, originY: -extent / 2, width: extent, height: extent }, tiles }, blueprints: [] };
             } };
         }, { extent, isOn });

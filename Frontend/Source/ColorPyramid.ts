@@ -1,4 +1,4 @@
-import { inkColor, type Point, type Tile } from './Model';
+import { inkColor, inkDisplayState, type Point, type Tile } from './Model';
 export const ColorSize = 64;
 export const MaximumColorLevel = 25;
 export interface ColorChunk { x: number; y: number; tiles: Tile[]; states?: Uint8Array }
@@ -20,7 +20,7 @@ function compactSums(sums: Float64Array): ColorSums {
     return sparse;
 }
 const Colors = new Map<string, number[]>();
-export function tileColor(tile: Tile, state = tile.isOn): number[] {
+export function tileColor(tile: Tile, state = inkDisplayState(tile)): number[] {
     const id = `${tile.toolId}:${state}`;
     let color = Colors.get(id);
     if (!color) {
@@ -53,7 +53,7 @@ export class ColorRaster {
     readonly Bytes = this.Pixels.byteLength + this.On.byteLength + this.Off.byteLength;
     constructor(private readonly Tiles: ReadonlyMap<number, Tile>) {
         for (const [index, tile] of Tiles) {
-            const [off, on] = paletteFor(tile), color = tile.isOn ? on : off, offset = index * 4;
+            const [off, on] = paletteFor(tile), color = inkDisplayState(tile) ? on : off, offset = index * 4;
             this.On[index] = on; this.Off[index] = off;
             this.Pixels[offset] = color >> 16 & 255; this.Pixels[offset + 1] = color >> 8 & 255;
             this.Pixels[offset + 2] = color & 255; this.Pixels[offset + 3] = 255;
@@ -95,7 +95,7 @@ export class ColorPyramid {
                 const tile = chunk.tiles[i], index = (tile.y - chunk.y * 64) * 64 + tile.x - chunk.x * 64;
                 const [off, on] = paletteFor(tile);
                 source.Indices[i] = index; source.On[i] = on; source.Off[i] = off;
-                source.States[i] = chunk.states ? chunk.states[i] : Number(tile.isOn);
+                source.States[i] = chunk.states ? chunk.states[i] : Number(inkDisplayState(tile));
                 setColor(sums, index, source.States[i] ? source.On[i] : source.Off[i]);
             }
             this.Sources.set(key, source); this.Nodes.set(key, { Sums: sums, Version: ++this.Version });

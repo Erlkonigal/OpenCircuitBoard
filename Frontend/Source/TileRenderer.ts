@@ -1,5 +1,5 @@
 import { AlphaFilter, Assets, BlurFilter, Container, FillGradient, Graphics, Matrix, Rectangle, RenderTexture, Sprite, type Renderer, type Texture } from 'pixi.js';
-import { cellKey, hasGlyph, iconUrl, inkColor, type Tile, type RenderMode } from './Model';
+import { cellKey, hasGlyph, iconUrl, inkColor, inkDisplayState, type Tile, type RenderMode } from './Model';
 import { CellStore, type CellChunk } from './CellStore';
 import { ColorCache } from './ColorCache';
 import { ComponentBoundaries } from './ComponentBoundaries';
@@ -436,19 +436,18 @@ export class TileRenderer {
             this.BoardSource = scene.occupied; this.MovingSource = moving;
         }
         const highlighted = new Set(scene.highlighted ?? []), highlightStamp = [...highlighted].sort((a,b)=>a-b).join(',');
+        const runtime = scene.simulating ? scene.runtime : null;
         const materialFor = (tile: Tile) => {
-            const runtime = scene.runtime;
-            const x = runtime ? tile.x - runtime.originX : -1, y = runtime ? tile.y - runtime.originY : -1;
-            const on = scene.simulating && runtime && x >= 0 && x < runtime.width && y >= 0 && y < runtime.height ? !!runtime.states[y * runtime.width + x] : tile.isOn;
+            const on = inkDisplayState(tile, runtime);
             return this.material(tile.toolId, on, highlighted.has(tile.componentId), tile.direction??0, tile.crossMask??0);
         };
-        this.Solid.draw(this.SolidSource, materialFor, view, scene.mode, scene.simulating ? scene.runtime : null, 0xffffff, highlightStamp);
+        this.Solid.draw(this.SolidSource, materialFor, view, scene.mode, runtime, 0xffffff, highlightStamp);
         if (moving) this.Moving.draw(moving, materialFor, view, scene.mode, null, 0xffffff, highlightStamp); else this.Moving.clear();
         if (scene.preview) {
             const offset = scene.preview.Offset;
             this.Preview.Layer.position.set(offset.x * CellSize, offset.y * CellSize);
             const previewView = { ...view, x: view.x - offset.x * CellSize, y: view.y - offset.y * CellSize };
-            this.Preview.draw(scene.preview.Source, tile => this.material(tile.toolId, tile.isOn, false, tile.direction??0, tile.crossMask??0), previewView, scene.mode, null, scene.previewValid ? 0xffffff : 0xff657e);
+            this.Preview.draw(scene.preview.Source, tile => this.material(tile.toolId, inkDisplayState(tile), false, tile.direction??0, tile.crossMask??0), previewView, scene.mode, null, scene.previewValid ? 0xffffff : 0xff657e);
         }
         else this.Preview.clear();
         for (const texture of this.Retired) texture.destroy(true);

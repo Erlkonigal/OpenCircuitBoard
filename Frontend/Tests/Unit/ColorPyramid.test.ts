@@ -4,17 +4,23 @@ import type { Tile } from '../../Source/Model';
 describe('Area weighted color LOD', () => {
     it('matches design and runtime colors across local and worker rasters while preserving holes', () => {
         const tiles: Tile[] = [
-            { x: 0, y: 0, toolId: 'traceRed', componentId: 1, isOn: true },
+            { x: 0, y: 0, toolId: 'traceRed', componentId: 1, isOn: false },
             { x: 3, y: 2, toolId: 'button', componentId: 2, isOn: false },
             { x: 63, y: 63, toolId: 'traceWhite', componentId: 3, isOn: true },
         ];
         const raster = new ColorRaster(new Map(tiles.map(tile => [tile.y * 64 + tile.x, tile])));
         const pyramid = new ColorPyramid();
         pyramid.update([{ x: 0, y: 0, tiles }]);
+        const design = pyramid.raster({ level: 0, x: 0, y: 0 }).pixels;
+        expect(raster.Pixels).toEqual(design);
+        expect([...design.slice(0, 4)]).toEqual([...tileColor(tiles[0], true), 255]);
+        const buttonOffset = (2 * 64 + 3) * 4;
+        expect([...design.slice(buttonOffset, buttonOffset + 4)]).toEqual([...tileColor(tiles[1], false), 255]);
+        expect(tileColor(tiles[0])).toEqual(tileColor(tiles[0], true));
+        raster.update(tile => tile.toolId === 'button');
+        pyramid.updateStates([{ x: 0, y: 0, states: new Uint8Array([0, 1, 0]) }]);
         expect(raster.Pixels).toEqual(pyramid.raster({ level: 0, x: 0, y: 0 }).pixels);
-        raster.update(tile => !tile.isOn);
-        pyramid.updateStates([{ x: 0, y: 0, states: Uint8Array.from(tiles, tile => Number(!tile.isOn)) }]);
-        expect(raster.Pixels).toEqual(pyramid.raster({ level: 0, x: 0, y: 0 }).pixels);
+        expect([...raster.Pixels.slice(0, 4)]).toEqual([...tileColor(tiles[0], false), 255]);
         expect([...raster.Pixels.slice(4, 8)]).toEqual([0, 0, 0, 0]);
     });
     it('averages premultiplied color and preserves empty coverage', () => {

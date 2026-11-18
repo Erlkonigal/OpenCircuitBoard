@@ -52,6 +52,7 @@ export interface Ink {
 export const ToolKinds: Record<string, number> = {empty:0,trace:1,traceRed:2,traceGreen:3,traceBlue:4,traceCyan:5,traceMagenta:6,bus:7,cross:13,buffer:17,and:18,or:19,xor:20,not:21,nand:22,nor:23,xnor:24,button:25,clock:26,led:27,traceOrange:28,traceWhite:29,switch:30};
 export const ToolIds = Object.keys(ToolKinds);
 export const isDirectional = (id: string) => (ToolKinds[id] >= 17 && ToolKinds[id] <= 27) || id === 'switch';
+export const hasInitialStateSetting = (id: string) => id === 'button';
 export type InkSettings = Pick<Tile, 'direction' | 'crossMask'>;
 export function inkSettings(id: string, settings: InkSettings): InkSettings {
     return { ...(isDirectional(id) && settings.direction ? {direction:settings.direction}:{}),
@@ -72,6 +73,13 @@ export function inkColor(id: string) { if (paletteId(id) === 'bus') return Color
 export const cellKey = (point: Point) => `${point.x},${point.y}`;
 export const parseKey = (key: string): Point => { const [x, y] = key.split(',').map(Number); return { x, y }; };
 export const contains = (grid: Grid, point: Point) => point.x >= grid.originX && point.y >= grid.originY && point.x < grid.originX + grid.width && point.y < grid.originY + grid.height;
+export function inkDisplayState(tile: Tile, runtime?: (Grid & { states: Uint8Array }) | null): boolean {
+    if (runtime && contains(runtime, tile)) {
+        const x = tile.x - runtime.originX, y = tile.y - runtime.originY;
+        return !!runtime.states[y * runtime.width + x];
+    }
+    return !hasInitialStateSetting(tile.toolId) || tile.isOn;
+}
 export const newBoard = (): Board => ({ circuitModel: 'booleanSwitch', selectedTool: 'or', clockHoldTicks: 1, buttonInitialState: true, grid: { originX: -20, originY: -14, width: 40, height: 28 }, tiles: [] });
 export function lineCells(start: Point, end: Point) { const result: Point[] = []; let { x, y } = start; const dx = Math.abs(end.x - x), dy = -Math.abs(end.y - y), sx = x < end.x ? 1 : -1, sy = y < end.y ? 1 : -1; let error = dx + dy; while (true) {
     result.push({ x, y });

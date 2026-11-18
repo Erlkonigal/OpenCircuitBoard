@@ -3,7 +3,7 @@ import { CellStore, type CellChunk } from './CellStore';
 import { ColorRaster, colorKey, type ColorChunk, type ColorStateChunk, type ColorRequest } from './ColorPyramid';
 import type { ColorJob, ColorResult } from './ColorWorker';
 import type { RuntimeGrid } from './EditorStore';
-import type { Point } from './Model';
+import { inkDisplayState, type Point } from './Model';
 const CacheBudget = 64 * 1024 * 1024;
 interface CachedTexture { Texture: Texture; Pixels: Uint8Array; Version: number; Generation: number; Raster?: ColorRaster; Source?: CellChunk; Runtime?: unknown }
 /** Shared LRU includes offscreen thumbnails and all live source rasters. */
@@ -124,10 +124,7 @@ export class ColorCache {
         if (entry.Source !== chunk || entry.Runtime !== stamp) {
             if (entry.Source && entry.Source !== chunk) entry.Raster = new ColorRaster(chunk.Tiles);
             const raster = entry.Raster!;
-            const change = raster.update(tile => {
-                const x = runtime ? tile.x - runtime.originX : -1, y = runtime ? tile.y - runtime.originY : -1;
-                return runtime && x >= 0 && x < runtime.width && y >= 0 && y < runtime.height ? !!runtime.states[y * runtime.width + x] : tile.isOn;
-            });
+            const change = raster.update(tile => inkDisplayState(tile, runtime));
             if (entry.Pixels !== raster.Pixels) {
                 entry.Pixels = raster.Pixels; (entry.Texture.source as BufferImageSource).resource = raster.Pixels;
                 entry.Texture.source.update();
@@ -162,10 +159,7 @@ export class ColorCache {
             const source = this.Store.chunk(x, y);
             const tiles = source?.Tiles.values() ?? [];
             const runtime = this.Runtime;
-            const states = runtime ? Uint8Array.from(tiles, tile => {
-                const tx = tile.x - runtime.originX, ty = tile.y - runtime.originY;
-                return tx >= 0 && tx < runtime.width && ty >= 0 && ty < runtime.height ? runtime.states[ty * runtime.width + tx] : Number(tile.isOn);
-            }) : Uint8Array.from(source?.Tiles.values() ?? [], tile => Number(tile.isOn));
+            const states = Uint8Array.from(tiles, tile => Number(inkDisplayState(tile, runtime)));
             if (!source || this.SentChunks.get(key) !== source) {
                 chunks.push({ x, y, tiles: [...(source?.Tiles.values() ?? [])], states });
                 if (source) this.SentChunks.set(key, source); else this.SentChunks.delete(key);

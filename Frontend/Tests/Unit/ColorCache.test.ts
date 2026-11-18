@@ -73,17 +73,21 @@ describe('Asynchronous color cache', () => {
     });
 
     it('reuses geometry across simulation resets and restores editable colors after runtime', () => {
-        const source = CellStore.from([tile(0)]), cache = new ColorCache(() => {}), worker = Workers[0], request = { x: 0, y: 0, level: 1 };
-        cache.sync(source, null); cache.texture(request); cache.flush(); worker.finish();
+        const source = CellStore.from([{ ...tile(0, false), toolId: 'traceRed' }, { ...tile(1, false), componentId: 2 }]);
+        const cache = new ColorCache(() => {}), worker = Workers[0], request = { x: 0, y: 0, level: 1 };
+        cache.sync(source, null); cache.texture(request); cache.flush();
+        expect(worker.Jobs[0].chunks[0].states).toEqual(new Uint8Array([1, 0]));
+        worker.finish();
         const design = new Uint8Array(cache.texture(request)!.source.resource as Uint8Array);
-        const frame = { session: 1, sequence: 1, tick: 0, width: 1, height: 1, originX: 0, originY: 0, full: true, running: false, tps: 0, capacity: 10, first: 0, last: 0, data: new Uint8Array([0]) };
+        const frame = { session: 1, sequence: 1, tick: 0, width: 2, height: 1, originX: 0, originY: 0, full: true, running: false, tps: 0, capacity: 10, first: 0, last: 0, data: new Uint8Array([0, 1]) };
         for (let i = 0; i < 2; i++) {
             applyFrame(frame); cache.sync(source, useEditor.getState().RuntimeGrid); cache.texture(request); cache.flush();
             expect(worker.Jobs[0].chunks).toHaveLength(0); expect(worker.Jobs[0].stateChunks).toHaveLength(1);
+            expect(worker.Jobs[0].stateChunks[0].states).toEqual(frame.data);
             worker.finish(); expect(cache.texture(request)!.source.resource).not.toEqual(design);
         }
         cache.sync(source, null); cache.texture(request); cache.flush();
-        expect(worker.Jobs[0].chunks).toHaveLength(0); expect(worker.Jobs[0].stateChunks[0].states[0]).toBe(1);
+        expect(worker.Jobs[0].chunks).toHaveLength(0); expect(worker.Jobs[0].stateChunks[0].states).toEqual(new Uint8Array([1, 0]));
         worker.finish(); expect(cache.texture(request)!.source.resource).toEqual(design);
         cache.destroy();
     });

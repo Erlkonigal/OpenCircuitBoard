@@ -84,14 +84,15 @@ test('same-color boundaries distinguish idle components, follow edits and fade w
         await page.getByText(mode, { exact: true }).click();
         await cleanCursor(page);
         await expect(board).toHaveAttribute('data-highlight-cells', '0');
-        const [face, edge, internal, redEdge, redFace, darkFace, darkEdge] = await pixels(page, [
+        const [face, edge, internal, redEdge, redFace, blueFace, blueEdge] = await pixels(page, [
             ...bright, { x: -64, y: 32 }, { x: 129, y: 32 }, { x: 160, y: 32 }, { x: 264, y: -12 }, { x: 264, y: 0 }
         ]);
         fullContrast = brightness(face) - brightness(edge);
         expect(fullContrast).toBeGreaterThan(60);
         expectUniform([face, internal]);
         expectUniform([redEdge, redFace]);
-        expect(brightness(darkFace) - brightness(darkEdge)).toBeGreaterThan(24);
+        expectUniform([blueFace, [35, 120, 244]]);
+        expect(brightness(blueFace) - brightness(blueEdge)).toBeGreaterThan(24);
         await page.screenshot({ path: buildPath(mode === '2D' ? 'ComponentBoundariesFlatCapture.png' : 'ComponentBoundariesDepthCapture.png') });
     }
 

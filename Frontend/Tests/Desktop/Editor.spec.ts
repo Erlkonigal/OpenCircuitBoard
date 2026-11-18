@@ -220,7 +220,7 @@ describe('Native circuit workspace', () => {
         const file = buildPath('DesktopLodProject.ocb');
         const result = await browser.execute(async (file: string) => {
             const tiles: { x: number; y: number; toolId: string; componentId: number; isOn: boolean; clockHoldTicks: number }[] = [];
-            for (let y = 0; y < 64; y++) for (let x = 0; x < 64; x++) tiles.push({ x, y, toolId: 'clock', componentId: 1, isOn: true, clockHoldTicks: 1 });
+            for (let y = 0; y < 64; y++) for (let x = 0; x < 64; x++) tiles.push({ x, y, toolId: 'clock', componentId: 1, isOn: false, clockHoldTicks: 1 });
             const invoke = (window as unknown as { __TAURI_INTERNALS__: { invoke: (command: string, args: unknown) => Promise<unknown> } }).__TAURI_INTERNALS__.invoke;
             return invoke('saveProject', { path: file, project: { board: { circuitModel: 'booleanSwitch', selectedTool: 'clock', clockHoldTicks: 1, buttonInitialState: true,
                 grid: { originX: -512, originY: -512, width: 1024, height: 1024 }, tiles },
@@ -242,6 +242,7 @@ describe('Native circuit workspace', () => {
             return [...data];
         });
         const design = await pixel();
+        expect(design.slice(0, 3)).toEqual([240, 91, 112]);
         await $('button=Run circuit').click(); await $('button[aria-label="Pause simulation"]').click();
         await $('button[aria-label="Reset simulation"]').click();
         await browser.waitUntil(async () => await $('[data-testid="board"]').getAttribute('data-color-ready') === 'true');
